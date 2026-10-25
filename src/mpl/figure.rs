@@ -42,6 +42,8 @@ pub struct Figure {
     pub gridspecs: Vec<Shared<GridSpec>>,
     pub layout: LayoutEngine,
     pub visible: bool,
+    /// `transFigure._boxout` override (bbox_inches adjustment)
+    pub boxout: Option<Bbox>,
 }
 
 impl Figure {
@@ -82,6 +84,7 @@ impl Figure {
             gridspecs: Vec::new(),
             layout,
             visible: true,
+            boxout: None,
         }
     }
 
@@ -93,7 +96,8 @@ impl Figure {
     pub fn ctx(&self) -> FigCtx {
         let dpi_scale = Transform::Affine(Affine2D::identity().scale(self.dpi, self.dpi).0);
         let fig_bbox = self.fig_bbox();
-        FigCtx { dpi: self.dpi, trans_figure: Transform::bbox_to(&fig_bbox), dpi_scale, fig_bbox }
+        let tf = Transform::bbox_to(self.boxout.as_ref().unwrap_or(&fig_bbox));
+        FigCtx { dpi: self.dpi, trans_figure: tf, dpi_scale, fig_bbox }
     }
 
     pub fn trans_ctx(&self) -> TransCtx {
@@ -380,6 +384,63 @@ impl Figure {
         r.clear();
         self.draw(&mut r);
         r
+    }
+
+    /// Draw with drawing disabled (`print_figure`'s pre-draw that runs the
+    /// layout engine and updates artist state).
+    pub fn draw_disabled(&mut self) {
+        let (w, h) = self.canvas_size();
+        let mut r = Renderer::metrics_only(w as f64, h as f64, self.dpi);
+        self.draw(&mut r);
+    }
+
+    /// Render with `savefig`'s semantics: optional tight/explicit bbox (in
+    /// inches) via `_tight_bbox.adjust_bbox`.
+    pub fn render_for_save(&mut self, bbox_inches: Option<Bbox>, tight: Option<f64>) -> Renderer {
+        let had_layout = self.layout != LayoutEngine::None;
+        let mut bbox = bbox_inches;
+        if had_layout || tight.is_some() {
+            let (w, h) = self.canvas_size();
+            let mut r = Renderer::metrics_only(w as f64, h as f64, self.dpi);
+            self.draw(&mut r);
+            if let Some(pad) = tight {
+                let b = self.get_tightbbox(&mut r);
+                bbox = Some(Bbox::new(b.x0 - pad, b.y0 - pad, b.x1 + pad, b.y1 + pad));
+            }
+        }
+        let old_layout = std::mem::replace(&mut self.layout, LayoutEngine::None);
+        let out = match bbox {
+            None => self.render(),
+            Some(b) => {
+                let fig = self.ctx();
+                let saved: Vec<(Bbox, bool)> = self.axes.iter().map(|a| (a.position, a.aspect_frozen)).collect();
+                for a in self.axes.iter_mut() {
+                    a.apply_aspect(None, &fig);
+                    a.aspect_frozen = true;
+                }
+                let old_size = self.figsize;
+                let old_patch = self.patch.clone();
+                let tr = Transform::Affine(Affine2D::identity().scale(self.dpi, self.dpi).0);
+                let (x0, y0) = tr.transform_point(b.x0, b.y0);
+                let ob = self.fig_bbox();
+                let (w1, h1) = (ob.width(), ob.height());
+                self.boxout = Some(Bbox::from_bounds(-x0, -y0, w1, h1));
+                self.figsize = (b.width(), b.height());
+                let nb = self.fig_bbox();
+                self.patch.set_bounds(x0 / w1, y0 / h1, nb.width() / w1, nb.height() / h1);
+                let r = self.render();
+                self.boxout = None;
+                self.figsize = old_size;
+                self.patch = old_patch;
+                for (a, (p, f)) in self.axes.iter_mut().zip(saved) {
+                    a.position = p;
+                    a.aspect_frozen = f;
+                }
+                r
+            }
+        };
+        self.layout = old_layout;
+        out
     }
 
     /// `Figure.get_tightbbox(renderer)` in inches.

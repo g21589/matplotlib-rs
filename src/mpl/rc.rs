@@ -36,6 +36,23 @@ impl Rc {
         }
     }
 
+    /// A font size entry, resolving named sizes ('large', ...) against
+    /// `font.size` like `FontProperties.set_size`.
+    pub fn font_size(&self, key: &str) -> f64 {
+        match self.map.get(key) {
+            Some(RcValue::Num(v)) => *v,
+            Some(RcValue::Str(s)) => super::fonts::font_scaling(s).unwrap_or(1.0) * self.num("font.size"),
+            _ => {
+                let d = default_num(key);
+                if d.is_nan() {
+                    self.num("font.size")
+                } else {
+                    d
+                }
+            }
+        }
+    }
+
     pub fn opt_num(&self, key: &str) -> Option<f64> {
         match self.map.get(key) {
             Some(RcValue::Num(v)) => Some(*v),
@@ -322,9 +339,7 @@ pub fn rc_version() -> u64 {
 /// Update rcParams (copy-on-write).
 pub fn rc_update<F: FnOnce(&mut Rc)>(f: F) {
     let mut guard = RC.write().unwrap();
-    let mut new = (**guard).clone();
-    f(&mut new);
-    *guard = std::sync::Arc::new(new);
+    f(std::sync::Arc::make_mut(&mut *guard));
     RC_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 

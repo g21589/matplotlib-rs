@@ -122,7 +122,7 @@ impl Tick {
         let base_pad = kw.pad.unwrap_or_else(|| r.num(&format!("{name}.{mm}.pad")));
         let color = kw.color.unwrap_or_else(|| ColorSpec::Rgba(r.color(&format!("{name}.color"))));
         let labelcolor = kw.labelcolor.unwrap_or_else(|| rc_color_or(&format!("{name}.labelcolor"), &format!("{name}.color")));
-        let labelsize = kw.labelsize.unwrap_or_else(|| r.num(&format!("{name}.labelsize")));
+        let labelsize = kw.labelsize.unwrap_or_else(|| r.font_size(&format!("{name}.labelsize")));
         let labelrotation = kw.labelrotation.clone().unwrap_or(("default".into(), 0.0));
         let zorder = kw.zorder.unwrap_or(if major { 2.0 + 0.01 } else { 2.0 });
         // grid properties
@@ -520,7 +520,7 @@ impl Axis {
     pub fn new(is_x: bool) -> Axis {
         let r = rc();
         let mut label = Text::new(f64::NAN, f64::NAN, "");
-        label.fontproperties = label.fontproperties.clone().with_size(r.num("axes.labelsize"));
+        label.fontproperties = label.fontproperties.clone().with_size(r.font_size("axes.labelsize"));
         label.fontproperties.weight = super::fonts::parse_weight(&r.string("axes.labelweight"));
         label.color = r.color("axes.labelcolor");
         let offset_text = Text::new(f64::NAN, f64::NAN, "");
@@ -599,7 +599,7 @@ impl Axis {
             }
             l.base.transform_set = true;
             o.base.transform_set = true;
-            o.fontproperties = o.fontproperties.clone().with_size(r.num(&format!("{tick}.labelsize")));
+            o.fontproperties = o.fontproperties.clone().with_size(r.font_size(&format!("{tick}.labelsize")));
             o.color = tick_color.to_rgba(None);
         }
         self.label_position = if self.is_x { "bottom".into() } else { "left".into() };
@@ -612,7 +612,7 @@ impl Axis {
             let mut l = self.label.lk();
             l.reset_visual_defaults();
             l.color = r.color("axes.labelcolor");
-            l.fontproperties = l.fontproperties.clone().with_size(r.num("axes.labelsize"));
+            l.fontproperties = l.fontproperties.clone().with_size(r.font_size("axes.labelsize"));
             l.fontproperties.weight = super::fonts::parse_weight(&r.string("axes.labelweight"));
         }
         self.offset_text.lk().reset_visual_defaults();
@@ -759,7 +759,7 @@ impl Axis {
 
     pub fn tick_label_size(&self) -> f64 {
         let r = rc();
-        let size = self.major_tick_kw.labelsize.unwrap_or_else(|| r.num(&format!("{}tick.labelsize", self.name())));
+        let size = self.major_tick_kw.labelsize.unwrap_or_else(|| r.font_size(&format!("{}tick.labelsize", self.name())));
         super::fonts::resolve_size(Some(size), None)
     }
 

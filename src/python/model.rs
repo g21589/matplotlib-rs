@@ -1,16 +1,14 @@
 //! Bindings for the artist model.  The Python layer (`matplotlib_rs`)
 //! wraps these handles with matplotlib's public API.
 
-use numpy::{PyArray3, PyArrayMethods, PyReadonlyArray1};
+use numpy::{PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList, PyTuple};
 
 use crate::agg::pixfmt::Rgba;
 use crate::mpl::artist::{shared, ClipBoxSpec, Lock, Shared, TSpec};
-use crate::mpl::axes::Child;
 use crate::mpl::colors::ColorSpec;
-use crate::mpl::figure::Figure;
 use crate::mpl::fonts::{self, FontEntry, NumOrName};
 use crate::mpl::lines::{DrawStyle, Line2D};
 use crate::mpl::markers::{FillStyle, MarkerSpec, MarkerStyle};
@@ -44,7 +42,7 @@ fn rgba_of(obj: &Bound<'_, PyAny>) -> PyResult<Rgba> {
     Ok(color_from(obj)?.to_rgba(None))
 }
 
-fn opt_f64(obj: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
+pub fn opt_f64(obj: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
     if obj.is_none() {
         Ok(None)
     } else {
@@ -92,10 +90,14 @@ fn marker_from(obj: &Bound<'_, PyAny>, fs: FillStyle) -> PyResult<MarkerStyle> {
     if let Ok((n, st, a)) = obj.extract::<(usize, u8, f64)>() {
         return Ok(MarkerStyle::new(MarkerSpec::Tuple(n, st, a), fs));
     }
+    if let Ok((verts, codes)) = obj.extract::<(Vec<[f64; 2]>, Option<Vec<u8>>)>() {
+        let p = crate::mpl::path::new_path(verts, codes, crate::mpl::path::SimplifyParams::default());
+        return Ok(MarkerStyle::new(MarkerSpec::Path(p), fs));
+    }
     Err(PyTypeError::new_err("unsupported marker"))
 }
 
-fn base_set(base: &mut crate::mpl::artist::ArtistBase, name: &str, v: &Bound<'_, PyAny>) -> PyResult<bool> {
+pub fn base_set(base: &mut crate::mpl::artist::ArtistBase, name: &str, v: &Bound<'_, PyAny>) -> PyResult<bool> {
     match name {
         "visible" => base.visible = v.extract()?,
         "alpha" => base.alpha = opt_f64(v)?,
@@ -181,7 +183,56 @@ fn line_set(l: &mut Line2D, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
     Ok(())
 }
 
-fn f64_vec(v: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
+pub fn colorspec_py<'py>(py: Python<'py>, c: ColorSpec) -> PyResult<Bound<'py, PyAny>> {
+    Ok(match c {
+        ColorSpec::Rgba(c) => PyTuple::new(py, [c.r, c.g, c.b, c.a])?.into_any(),
+        ColorSpec::None => "none".into_pyobject(py)?.into_any(),
+        ColorSpec::Auto => "auto".into_pyobject(py)?.into_any(),
+    })
+}
+
+fn line_get<'py>(py: Python<'py>, l: &mut Line2D, name: &str) -> PyResult<Bound<'py, PyAny>> {
+    Ok(match name {
+        "xdata" => PyList::new(py, &l.xorig)?.into_any(),
+        "ydata" => PyList::new(py, &l.yorig)?.into_any(),
+        "xydata" => {
+            let xy = l.get_xydata(false).to_vec();
+            PyList::new(py, xy.iter().map(|p| (p[0], p[1])))?.into_any()
+        }
+        "linewidth" => l.linewidth.into_pyobject(py)?.into_any(),
+        "linestyle" => l.linestyle.clone().into_pyobject(py)?.into_any(),
+        "color" => colorspec_py(py, l.color)?,
+        "markersize" => l.markersize.into_pyobject(py)?.into_any(),
+        "markeredgewidth" => l.markeredgewidth.into_pyobject(py)?.into_any(),
+        "markeredgecolor" => colorspec_py(py, l.markeredgecolor)?,
+        "markerfacecolor" => colorspec_py(py, l.markerfacecolor)?,
+        "markerfacecoloralt" => colorspec_py(py, l.markerfacecoloralt)?,
+        "marker" => match &l.marker.spec {
+            MarkerSpec::Named(s) => s.clone().into_pyobject(py)?.into_any(),
+            MarkerSpec::Tuple(n, st, a) => (*n, *st, *a).into_pyobject(py)?.into_any(),
+            MarkerSpec::Path(_) => "path".into_pyobject(py)?.into_any(),
+        },
+        "fillstyle" => format!("{:?}", l.marker.fillstyle).to_lowercase().into_pyobject(py)?.into_any(),
+        "visible" => l.base.visible.into_pyobject(py)?.to_owned().into_any(),
+        "alpha" => l.base.alpha.into_pyobject(py)?.into_any(),
+        "zorder" => l.base.zorder.into_pyobject(py)?.into_any(),
+        "label" => l.base.label.clone().into_pyobject(py)?.into_any(),
+        "antialiased" => l.antialiased.into_pyobject(py)?.to_owned().into_any(),
+        "drawstyle" => match l.drawstyle {
+            DrawStyle::Default => "default",
+            DrawStyle::StepsPre => "steps-pre",
+            DrawStyle::StepsMid => "steps-mid",
+            DrawStyle::StepsPost => "steps-post",
+        }
+        .into_pyobject(py)?
+        .into_any(),
+        "dash_pattern" => (l.dash_pattern.0, l.dash_pattern.1.clone()).into_pyobject(py)?.into_any(),
+        "clip_on" => l.base.clip_on.into_pyobject(py)?.to_owned().into_any(),
+        _ => return Err(PyKeyError::new_err(format!("Line2D has no property {name:?}"))),
+    })
+}
+
+pub fn f64_vec(v: &Bound<'_, PyAny>) -> PyResult<Vec<f64>> {
     if let Ok(a) = v.extract::<PyReadonlyArray1<f64>>() {
         return Ok(a.as_array().iter().copied().collect());
     }
@@ -207,81 +258,20 @@ impl PyLine2D {
         line_set(&mut self.inner.lk(), name, value)
     }
 
+    fn get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
+        line_get(py, &mut self.inner.lk(), name)
+    }
+
+    fn ident(&self) -> usize {
+        std::sync::Arc::as_ptr(&self.inner) as usize
+    }
+
     fn set_many(&self, props: &Bound<'_, PyDict>) -> PyResult<()> {
         let mut l = self.inner.lk();
         for (k, v) in props.iter() {
             line_set(&mut l, &k.extract::<String>()?, &v)?;
         }
         Ok(())
-    }
-}
-
-#[pyclass(name = "Figure", module = "matplotlib_rs._mplrs")]
-pub struct PyFigure {
-    pub inner: Shared<Figure>,
-}
-
-#[pymethods]
-impl PyFigure {
-    #[new]
-    #[pyo3(signature = (figsize=None, dpi=None, facecolor=None, edgecolor=None, linewidth=0.0, frameon=None))]
-    fn new(
-        figsize: Option<(f64, f64)>,
-        dpi: Option<f64>,
-        facecolor: Option<&Bound<'_, PyAny>>,
-        edgecolor: Option<&Bound<'_, PyAny>>,
-        linewidth: f64,
-        frameon: Option<bool>,
-    ) -> PyResult<Self> {
-        let fc = facecolor.map(color_from).transpose()?;
-        let ec = edgecolor.map(color_from).transpose()?;
-        Ok(PyFigure { inner: shared(Figure::new(figsize, dpi, fc, ec, linewidth, frameon)) })
-    }
-
-    /// add_subplot(nrows, ncols, num1, num2) with 0-based cell indices.
-    fn add_subplot(&self, nrows: usize, ncols: usize, num1: usize, num2: usize) -> u64 {
-        let mut f = self.inner.lk();
-        let gs = f.gridspec_for(nrows, ncols);
-        f.add_subplot(gs, num1, num2)
-    }
-
-    fn add_axes(&self, rect: (f64, f64, f64, f64)) -> u64 {
-        self.inner.lk().add_axes_rect(rect)
-    }
-
-    fn add_line(&self, ax: u64, line: &PyLine2D) -> PyResult<()> {
-        let mut f = self.inner.lk();
-        let a = f.ax(ax).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        a.add_line(line.inner.clone());
-        Ok(())
-    }
-
-    #[pyo3(signature = (ax, x=true, y=true, tight=None))]
-    fn request_autoscale_view(&self, ax: u64, x: bool, y: bool, tight: Option<bool>) -> PyResult<()> {
-        let mut f = self.inner.lk();
-        let a = f.ax(ax).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        a.request_autoscale_view(x, y, tight);
-        Ok(())
-    }
-
-    fn get_lim(&self, ax: u64, x: bool) -> PyResult<(f64, f64)> {
-        let mut f = self.inner.lk();
-        let i = f.axes_index(ax).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        f.unstale_viewlim(i);
-        Ok(f.axes[i].get_lim(x))
-    }
-
-    fn render<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<u8>>> {
-        let r = py.detach(|| self.inner.lk().render());
-        let (w, h) = (r.agg.width as usize, r.agg.height as usize);
-        let arr = numpy::PyArray1::from_slice(py, r.agg.buffer());
-        Ok(arr.reshape([h, w, 4])?)
-    }
-
-    fn line_count(&self, ax: u64) -> PyResult<usize> {
-        let mut f = self.inner.lk();
-        let a = f.ax(ax).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        Ok(a.children.iter().filter(|c| matches!(c, Child::Line(_))).count())
     }
 }
 
@@ -393,7 +383,6 @@ fn text_handle(_t: &Shared<Text>) {}
 fn patch_handle(_p: &Shared<Patch>) {}
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
-    m.add_class::<PyFigure>()?;
     m.add_class::<PyLine2D>()?;
     m.add_function(wrap_pyfunction!(rc_set, m)?)?;
     m.add_function(wrap_pyfunction!(rc_clear, m)?)?;

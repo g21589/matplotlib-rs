@@ -424,6 +424,8 @@ pub struct Axes {
     pub prop_cycle_index: usize,
     pub patch_cycle_index: usize,
     pub name: String,
+    /// positions frozen by `bbox_inches` adjustment (apply_aspect disabled)
+    pub aspect_frozen: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -435,16 +437,7 @@ pub fn next_uid() -> u64 {
 fn mk_title(x: f64, y: f64, ha: &str) -> Text {
     let r = rc();
     let mut t = Text::new(x, y, "");
-    let size = super::fonts::resolve_size(
-        match r.get("axes.titlesize") {
-            Some(RcValue::Num(v)) => Some(*v),
-            _ => None,
-        },
-        match r.get("axes.titlesize") {
-            Some(RcValue::Str(s)) => Some(s.as_str()),
-            _ => None,
-        },
-    );
+    let size = r.font_size("axes.titlesize");
     t.fontproperties = t.fontproperties.clone().with_size(size);
     t.fontproperties.weight = parse_weight(&r.string("axes.titleweight"));
     t.va = "baseline".into();
@@ -500,6 +493,7 @@ impl Axes {
             prop_cycle_index: 0,
             patch_cycle_index: 0,
             name: "rectilinear".into(),
+            aspect_frozen: false,
         };
         ax.set_axisbelow(&r.string("axes.axisbelow"));
         ax.clear();
@@ -1317,6 +1311,9 @@ impl Axes {
 
     /// `apply_aspect(position)`.
     pub fn apply_aspect(&mut self, position: Option<Bbox>, fig: &FigCtx) {
+        if self.aspect_frozen {
+            return;
+        }
         let position = position.unwrap_or(self.original_position);
         let aspect = match self.aspect {
             Aspect::Auto if self.box_aspect.is_none() => {

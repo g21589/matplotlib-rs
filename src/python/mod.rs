@@ -1,7 +1,10 @@
 //! Python bindings (PyO3).
 
+pub mod api;
+pub mod collections;
 pub mod lowlevel;
 pub mod model;
+pub mod pathmod;
 
 use pyo3::prelude::*;
 
@@ -9,5 +12,8 @@ use pyo3::prelude::*;
 fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     lowlevel::register(m)?;
     model::register(m)?;
+    api::register(m)?;
+    collections::register(m)?;
+    pathmod::register(m)?;
     Ok(())
 }

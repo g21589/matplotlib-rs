@@ -29,6 +29,8 @@ pub struct Renderer {
     pub height: f64,
     pub dpi: f64,
     metrics: HashMap<MetricsKey, (f64, f64, f64)>,
+    /// drawing calls are ignored (`_draw_disabled`)
+    pub disabled: bool,
 }
 
 /// `np.round(v).astype(int)` / Python `round()`.
@@ -45,7 +47,13 @@ impl Renderer {
             height,
             dpi,
             metrics: HashMap::new(),
+            disabled: false,
         }
+    }
+
+    /// A renderer used only for text metrics (no pixel buffer).
+    pub fn metrics_only(width: f64, height: f64, dpi: f64) -> Renderer {
+        Renderer { agg: RendererAgg::new(1, 1, dpi), width, height, dpi, metrics: HashMap::new(), disabled: true }
     }
 
     pub fn points_to_pixels(&self, points: f64) -> f64 {
@@ -57,12 +65,18 @@ impl Renderer {
     }
 
     pub fn draw_path(&mut self, gc: &GcState, path: &Path, trans: &Mat, face: Option<Rgba>) {
+        if self.disabled {
+            return;
+        }
         let g = gc.to_agg();
         let face = gc.face(face, false);
         self.agg.draw_path(&g, path, &TransAffine::from_matrix(trans), face);
     }
 
     pub fn draw_markers(&mut self, gc: &GcState, marker: &Path, marker_trans: &Mat, path: &Path, trans: &Mat, face: Option<Rgba>) {
+        if self.disabled {
+            return;
+        }
         let g = gc.to_agg();
         let face = gc.face(face, false);
         self.agg.draw_markers(
@@ -90,6 +104,9 @@ impl Renderer {
         linestyles: &[(f64, Option<Vec<f64>>)],
         antialiaseds: &[bool],
     ) {
+        if self.disabled {
+            return;
+        }
         let g = gc.to_agg();
         let trs: Vec<TransAffine> = transforms.iter().map(TransAffine::from_matrix).collect();
         let ls: Vec<Dashes> = linestyles
@@ -118,6 +135,9 @@ impl Renderer {
     }
 
     pub fn draw_image(&mut self, gc: &GcState, x: f64, y: f64, rgba: &[u8], w: usize, h: usize) {
+        if self.disabled {
+            return;
+        }
         let g = gc.to_agg();
         self.agg.draw_image(&g, x, y, rgba, w, h);
     }
@@ -142,6 +162,9 @@ impl Renderer {
     /// `draw_text` for plain (non-math) text.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text(&mut self, gc: &GcState, x: f64, y: f64, s: &str, prop: &FontProperties, angle: f64, ismath: bool) {
+        if self.disabled {
+            return;
+        }
         if ismath {
             super::mathtext::draw_mathtext(self, gc, x, y, s, prop, angle);
             return;
