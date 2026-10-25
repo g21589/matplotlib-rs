@@ -91,3 +91,10 @@ class FT2Font:
 
     def get_descent(self):
         return int(round(self._last[2] * 64))
+
+
+def _get_sfnt_table(self, name):
+    return self._f.get_sfnt_table(name)
+
+
+FT2Font.get_sfnt_table = _get_sfnt_table

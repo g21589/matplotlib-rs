@@ -95,6 +95,20 @@ class TransformNode:
     # Possible values for the _invalid attribute.
     _VALID, _INVALID_AFFINE_ONLY, _INVALID_FULL = range(3)
 
+    # matplotlib_rs: nodes whose values live in the Rust model ("live"
+    # nodes) and every node depending on them are never cached.
+    _live = False
+
+    @property
+    def _invalid(self):
+        if self._live:
+            return self._INVALID_FULL
+        return self.__dict__.get("_invalid_", self._INVALID_FULL)
+
+    @_invalid.setter
+    def _invalid(self, v):
+        self.__dict__["_invalid_"] = v
+
     # Some metadata about the transform, used to determine whether an
     # invalidation is affine-only
     is_affine = False
@@ -194,6 +208,8 @@ class TransformNode:
             ref = weakref.ref(
                 self, lambda _, pop=child._parents.pop, k=id_self: pop(k))
             child._parents[id_self] = ref
+            if child._live:
+                self._live = True
 
     def frozen(self):
         """

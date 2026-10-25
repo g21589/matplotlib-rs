@@ -1,7 +1,7 @@
 //! Bindings for the artist model.  The Python layer (`matplotlib_rs`)
 //! wraps these handles with matplotlib's public API.
 
-use numpy::{PyArrayMethods, PyReadonlyArray1};
+use numpy::PyReadonlyArray1;
 use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyDictMethods, PyList, PyTuple};
@@ -152,11 +152,52 @@ fn line_set(l: &mut Line2D, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
                 l.set_dashes(o, d);
             }
         }
+        "dash_pattern" => {
+            let (o, d): (f64, Option<Vec<f64>>) = v.extract()?;
+            l.dash_pattern = (o, d);
+        }
         "color" => l.color = color_from(v)?,
         "gapcolor" => l.gapcolor = if v.is_none() { None } else { Some(color_from(v)?) },
         "marker" => {
             let fs = l.marker.fillstyle;
             l.set_marker(marker_from(v, fs)?);
+        }
+        "marker_parts" => {
+            let t = v.cast::<PyTuple>()?;
+            let mk_path = |vv: &Bound<'_, PyAny>, cc: &Bound<'_, PyAny>| -> PyResult<crate::mpl::path::Path> {
+                let verts: Vec<[f64; 2]> = vv.extract()?;
+                let codes: Option<Vec<u8>> = cc.extract()?;
+                Ok(crate::mpl::path::Path::new(verts, codes))
+            };
+            let mtx = |m: &Bound<'_, PyAny>| -> PyResult<crate::mpl::transforms::Affine2D> {
+                let r: Vec<Vec<f64>> = m.extract()?;
+                Ok(crate::mpl::transforms::Affine2D([[r[0][0], r[0][1], r[0][2]], [r[1][0], r[1][1], r[1][2]], [0.0, 0.0, 1.0]]))
+            };
+            let path = mk_path(&t.get_item(0)?, &t.get_item(1)?)?;
+            let tr = mtx(&t.get_item(2)?)?;
+            let alt = t.get_item(3)?;
+            let (alt_path, alt_tr) = if alt.is_none() {
+                (None, None)
+            } else {
+                (Some(mk_path(&alt, &t.get_item(4)?)?), Some(mtx(&t.get_item(5)?)?))
+            };
+            let join = crate::mpl::artist::parse_joinstyle(&t.get_item(6)?.extract::<String>()?);
+            let cap = crate::mpl::artist::parse_capstyle(&t.get_item(7)?.extract::<String>()?);
+            let sn = t.get_item(8)?;
+            let snap = if sn.is_none() {
+                crate::mpl::markers::SnapThreshold::None
+            } else {
+                let v: f64 = sn.extract()?;
+                if v.is_infinite() {
+                    crate::mpl::markers::SnapThreshold::Inf
+                } else {
+                    crate::mpl::markers::SnapThreshold::Value(v)
+                }
+            };
+            let filled: bool = t.get_item(9)?.extract()?;
+            let fs = FillStyle::parse(&t.get_item(10)?.extract::<String>()?).unwrap_or(FillStyle::Full);
+            let is_pixel: bool = t.get_item(11)?.extract()?;
+            l.set_marker(MarkerStyle::from_parts(path, tr, alt_path, alt_tr, join, cap, snap, filled, fs, is_pixel));
         }
         "fillstyle" => {
             let s: String = v.extract()?;

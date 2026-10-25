@@ -353,6 +353,41 @@ impl PyFont {
         self.inner.text_width_height_descent(&cps)
     }
 
+    /// `get_sfnt_table(name)` for 'OS/2', 'head' and 'hhea'.
+    fn get_sfnt_table<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyDict>>> {
+        let sf = self.inner.sfnt();
+        let d = PyDict::new(py);
+        match name {
+            "OS/2" => match sf.os2 {
+                Some(o) if o.version != 0xffff => {
+                    d.set_item("version", o.version)?;
+                    d.set_item("usWeightClass", o.us_weight_class)?;
+                    d.set_item("fsSelection", o.fs_selection)?;
+                    d.set_item("sTypoAscender", o.s_typo_ascender)?;
+                    d.set_item("sTypoDescender", o.s_typo_descender)?;
+                    d.set_item("sTypoLineGap", o.s_typo_line_gap)?;
+                }
+                _ => return Ok(None),
+            },
+            "head" => {
+                d.set_item("unitsPerEm", sf.units_per_em)?;
+                d.set_item("xMin", sf.bbox.0)?;
+                d.set_item("yMin", sf.bbox.1)?;
+                d.set_item("xMax", sf.bbox.2)?;
+                d.set_item("yMax", sf.bbox.3)?;
+                d.set_item("macStyle", sf.mac_style)?;
+            }
+            "hhea" => {
+                d.set_item("ascent", sf.ascender)?;
+                d.set_item("descent", sf.descender)?;
+                d.set_item("lineGap", sf.line_gap)?;
+                d.set_item("advanceWidthMax", sf.max_advance_width)?;
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(d))
+    }
+
     fn get_char_index(&self, c: u32) -> u32 {
         self.inner.glyph_index(c)
     }

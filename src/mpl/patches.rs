@@ -333,6 +333,8 @@ pub enum PatchKind {
     FancyBbox { x: f64, y: f64, width: f64, height: f64, boxstyle: BoxStyle },
     /// Shadow of another patch, offset by (ox, oy) points.
     Shadow { patch: Box<Patch>, ox: f64, oy: f64 },
+    /// A path plus a precomputed patch transform (from the Python side).
+    Generic { path: Path, patch_transform: Option<super::transforms::Mat> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -555,6 +557,7 @@ impl Patch {
                 new_path(verts, p.codes, SimplifyParams::default())
             }
             PatchKind::Shadow { patch, .. } => patch.get_path(),
+            PatchKind::Generic { path, .. } => path.clone(),
         }
     }
 
@@ -600,6 +603,7 @@ impl Patch {
                     None => st,
                 })
             }
+            PatchKind::Generic { patch_transform, .. } => patch_transform.map(Transform::Affine),
             _ => None,
         }
     }

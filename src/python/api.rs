@@ -212,6 +212,14 @@ fn patch_set(p: &mut Patch, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         }
     };
     match name {
+        "facecolor_rgba" => p.facecolor = color_from(v)?.to_rgba(None),
+        "edgecolor_rgba" => p.edgecolor = color_from(v)?.to_rgba(None),
+        "hatchcolor_rgba" => p.hatch_color = crate::mpl::patches::HatchColor::Color(color_from(v)?.to_rgba(None)),
+        "dash_pattern" => {
+            let (o, d): (f64, Option<Vec<f64>>) = v.extract()?;
+            p.dash_pattern = (o, d);
+        }
+        "linestyle_name" => p.linestyle = v.extract()?,
         "facecolor" => p.set_facecolor(opt_color(v)?),
         "edgecolor" => p.set_edgecolor(opt_color(v)?),
         "hatchcolor" => {
@@ -290,6 +298,14 @@ fn patch_set(p: &mut Patch, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         "path" => {
             let (verts, codes): (Vec<[f64; 2]>, Option<Vec<u8>>) = v.extract()?;
             p.kind = PatchKind::Path { path: path_from_parts(verts, codes) };
+        }
+        "generic" => {
+            let (verts, codes, mtx): (Vec<[f64; 2]>, Option<Vec<u8>>, Option<Vec<Vec<f64>>>) = v.extract()?;
+            let pt = mtx.map(|m| [[m[0][0], m[0][1], m[0][2]], [m[1][0], m[1][1], m[1][2]], [0.0, 0.0, 1.0]]);
+            p.kind = PatchKind::Generic { path: path_from_parts(verts, codes), patch_transform: pt };
+        }
+        "edge_default" => {
+            p.edge_default = v.extract()?;
         }
         "rotation_point" => {
             let rp = if let Ok(s) = v.extract::<String>() {
@@ -386,6 +402,11 @@ impl PyPatch {
             "regular_polygon" => {
                 let (x, y, n, r, o): (f64, f64, usize, f64, f64) = args.extract()?;
                 PatchKind::RegularPolygon { xy: (x, y), numvertices: n, radius: r, orientation: o }
+            }
+            "generic" => {
+                let (verts, codes, mtx): (Vec<[f64; 2]>, Option<Vec<u8>>, Option<Vec<Vec<f64>>>) = args.extract()?;
+                let pt = mtx.map(|m| [[m[0][0], m[0][1], m[0][2]], [m[1][0], m[1][1], m[1][2]], [0.0, 0.0, 1.0]]);
+                PatchKind::Generic { path: path_from_parts(verts, codes), patch_transform: pt }
             }
             "fancybbox" => {
                 let (x, y, w, h, bs): (f64, f64, f64, f64, String) = args.extract()?;
@@ -773,6 +794,32 @@ impl PyFigure {
 
     fn add_axes(&self, rect: (f64, f64, f64, f64)) -> u64 {
         self.inner.lk().add_axes_rect(rect)
+    }
+
+    fn new_axes(&self, rect: (f64, f64, f64, f64)) -> u64 {
+        self.inner.lk().new_detached(rect)
+    }
+
+    fn attach_axes(&self, uid: u64) -> bool {
+        self.inner.lk().attach(uid)
+    }
+
+    fn detach_axes(&self, uid: u64) {
+        self.inner.lk().detach(uid)
+    }
+
+    /// Reorder the attached axes to the given uid order.
+    fn order_axes(&self, uids: Vec<u64>) {
+        let mut f = self.inner.lk();
+        let mut ax = std::mem::take(&mut f.axes);
+        let mut out = Vec::new();
+        for u in &uids {
+            if let Some(i) = ax.iter().position(|a| a.uid == *u) {
+                out.push(ax.remove(i));
+            }
+        }
+        out.extend(ax);
+        f.axes = out;
     }
 
     fn delaxes(&self, uid: u64) {

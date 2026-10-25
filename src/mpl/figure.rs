@@ -32,6 +32,8 @@ pub struct Figure {
     pub dpi: f64,
     pub patch: Patch,
     pub axes: Vec<Axes>,
+    /// axes created but not (yet) added to the figure
+    pub detached: Vec<Axes>,
     /// axes uids in "current axes" order (last is current)
     pub axstack: Vec<u64>,
     pub children: Vec<FigChild>,
@@ -75,6 +77,7 @@ impl Figure {
             dpi,
             patch,
             axes: Vec::new(),
+            detached: Vec::new(),
             axstack: Vec::new(),
             children: Vec::new(),
             suptitle: None,
@@ -118,7 +121,38 @@ impl Figure {
     }
 
     pub fn ax(&mut self, uid: u64) -> Option<&mut Axes> {
-        self.axes.iter_mut().find(|a| a.uid == uid)
+        if let Some(i) = self.axes.iter().position(|a| a.uid == uid) {
+            return Some(&mut self.axes[i]);
+        }
+        self.detached.iter_mut().find(|a| a.uid == uid)
+    }
+
+    /// Create an axes that is not yet part of the figure.
+    pub fn new_detached(&mut self, rect: (f64, f64, f64, f64)) -> u64 {
+        let ax = Axes::new(Bbox::from_bounds(rect.0, rect.1, rect.2, rect.3), None, &self.subplotpars);
+        let uid = ax.uid;
+        self.detached.push(ax);
+        uid
+    }
+
+    /// Move a detached axes into the figure (draw order = attach order).
+    pub fn attach(&mut self, uid: u64) -> bool {
+        if let Some(i) = self.detached.iter().position(|a| a.uid == uid) {
+            let ax = self.detached.remove(i);
+            self.add_axes_internal(ax);
+            true
+        } else {
+            self.axes_index(uid).is_some()
+        }
+    }
+
+    /// Remove an axes from the figure, keeping it detached.
+    pub fn detach(&mut self, uid: u64) {
+        if let Some(i) = self.axes.iter().position(|a| a.uid == uid) {
+            let ax = self.axes.remove(i);
+            self.detached.push(ax);
+        }
+        self.axstack.retain(|&u| u != uid);
     }
 
     /// `_add_axes_internal`.
@@ -175,6 +209,7 @@ impl Figure {
 
     pub fn delaxes(&mut self, uid: u64) {
         self.axes.retain(|a| a.uid != uid);
+        self.detached.retain(|a| a.uid != uid);
         self.axstack.retain(|&u| u != uid);
         for a in self.axes.iter_mut() {
             a.shared_x.retain(|&u| u != uid);

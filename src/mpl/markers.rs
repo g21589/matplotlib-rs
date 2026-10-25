@@ -110,6 +110,40 @@ impl MarkerStyle {
         m
     }
 
+    /// A marker fully described by the Python side (`MarkerStyle`'s path,
+    /// transforms and styles).
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_parts(
+        path: Path,
+        transform: Affine2D,
+        alt_path: Option<Path>,
+        alt_transform: Option<Affine2D>,
+        joinstyle: LineJoin,
+        capstyle: LineCap,
+        snap_threshold: SnapThreshold,
+        filled: bool,
+        fillstyle: FillStyle,
+        is_pixel: bool,
+    ) -> MarkerStyle {
+        MarkerStyle {
+            spec: MarkerSpec::Path(path.clone()),
+            fillstyle,
+            user_transform: None,
+            user_capstyle: None,
+            user_joinstyle: None,
+            path,
+            transform,
+            alt_path,
+            alt_transform,
+            snap_threshold,
+            joinstyle,
+            capstyle,
+            filled,
+            is_nothing: false,
+            is_pixel,
+        }
+    }
+
     pub fn named(s: &str) -> MarkerStyle {
         MarkerStyle::new(MarkerSpec::Named(s.to_string()), FillStyle::Full)
     }
