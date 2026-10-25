@@ -677,18 +677,41 @@ impl RendererAgg {
     pub fn draw_image(&mut self, gc: &Gc, x: f64, y: f64, image: &[u8], img_w: usize, img_h: usize) {
         let x = mpl_round(x);
         let y = mpl_round(y);
+        // (the Python wrapper sets gc.alpha to 1)
         let alpha = 1.0f64;
-        self.ras.reset_clipping();
-        let has_clippath = self.render_clippath(&gc.clippath, gc.snap_mode);
         let (w, h) = (self.width, self.height);
         let cliprect = gc.cliprect_d();
+        self.ras.reset_clipping();
+        Self::set_clipbox_ras(&mut self.ras, cliprect, w, h);
+        let has_clippath = self.render_clippath(&gc.clippath, gc.snap_mode);
         let x0 = x as i32;
         let y0 = (h as f64 - (y + img_h as f64)) as i32;
-        let cover = (alpha * 255.0) as u8;
-        let _ = has_clippath;
-        let mut rb = RendererBase::new(&mut self.pixf);
-        Self::set_clipbox_rb(&mut rb, cliprect, w, h);
-        blend_from_rgba(&mut rb, image, img_w, img_h, x0, y0, cover);
+        if has_clippath {
+            // the image rectangle, rendered through the clip mask with a
+            // nearest-neighbour image span (an integer translation)
+            let mut rect = crate::agg::basics::PathStorage::new();
+            let (iw, ih) = (img_w as f64, img_h as f64);
+            for (k, (px, py)) in [(0.0, 0.0), (iw, 0.0), (iw, ih), (0.0, ih), (0.0, 0.0)].into_iter().enumerate() {
+                let (px, py) = (px + x0 as f64, py + y0 as f64);
+                if k == 0 {
+                    rect.move_to(px, py);
+                } else {
+                    rect.line_to(px, py);
+                }
+            }
+            self.ras.add_path(&mut rect);
+            let mut gen = ImageNnSpan { img: image, w: img_w as i32, h: img_h as i32, tx: x0, ty: y0 };
+            let mask = self.alpha_mask.as_ref().unwrap();
+            let pfa = PixfmtAmaskAdaptor::new(&mut self.pixf, mask);
+            let mut rb = RendererBase::new(pfa);
+            let mut sl = ScanlineU8::new(None);
+            render_scanlines_aa(&mut self.ras, &mut sl, &mut rb, &mut gen);
+        } else {
+            let cover = (alpha * 255.0) as u8;
+            let mut rb = RendererBase::new(&mut self.pixf);
+            Self::set_clipbox_rb(&mut rb, cliprect, w, h);
+            blend_from_rgba(&mut rb, image, img_w, img_h, x0, y0, cover);
+        }
     }
 
     /// `draw_path_collection` / `_draw_path_collection_generic`.
@@ -858,6 +881,32 @@ impl RendererAgg {
                 self.draw_path_inner(&mut sketch, has_clippath, face, gc);
             }
             None => self.draw_path_inner(path, has_clippath, face, gc),
+        }
+    }
+}
+
+/// `span_image_filter_rgba_nn` over an `image_accessor_clip` (transparent
+/// outside) of an image attached with a negative stride, for the integer
+/// translation (tx, ty) `draw_image` uses.
+struct ImageNnSpan<'a> {
+    img: &'a [u8],
+    w: i32,
+    h: i32,
+    tx: i32,
+    ty: i32,
+}
+
+impl SpanGenerator for ImageNnSpan<'_> {
+    fn generate(&mut self, span: &mut [Rgba8], x: i32, y: i32) {
+        let sy = y - self.ty;
+        for (i, s) in span.iter_mut().enumerate() {
+            let sx = x + i as i32 - self.tx;
+            *s = if sx >= 0 && sx < self.w && sy >= 0 && sy < self.h {
+                let o = (((self.h - 1 - sy) * self.w + sx) * 4) as usize;
+                Rgba8::new(self.img[o], self.img[o + 1], self.img[o + 2], self.img[o + 3])
+            } else {
+                Rgba8::new(0, 0, 0, 0)
+            };
         }
     }
 }

@@ -170,6 +170,20 @@ pub fn base_set(base: &mut crate::mpl::artist::ArtistBase, name: &str, v: &Bound
         "animated" => base.animated = v.extract()?,
         "rasterized" => base.rasterized = v.extract()?,
         "sketch_params" => base.sketch = if v.is_none() { None } else { Some(v.extract()?) },
+        "clip_path" => {
+            // None or (Path, transform spec, clip path object):
+            // `TransformedPath(path, transform)`
+            base.clip_path = if v.is_none() {
+                None
+            } else {
+                let t = v.cast::<PyTuple>()?;
+                Some(crate::mpl::artist::ClipPathSpec {
+                    path: std::sync::Arc::new(super::pathmod::path_from_py(&t.get_item(0)?)?),
+                    trans: tspec_from(&t.get_item(1)?)?,
+                    source: Some(crate::mpl::artist::ClipSource(std::sync::Arc::new(t.get_item(2)?.unbind()))),
+                })
+            };
+        }
         _ => return Ok(false),
     }
     Ok(true)

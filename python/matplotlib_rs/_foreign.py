@@ -65,12 +65,14 @@ def _gc(renderer, state, clip_cache):
         if bb is None:
             bb = clip_cache[cliprect] = Bbox.from_extents(*cliprect[1])
         gc._cliprect = bb
-    if clippath is not None:
+    if isinstance(clippath, tuple):
         key, verts, codes, ss, st, matrix = clippath
         tp = clip_cache.get(key)
         if tp is None:
             tp = clip_cache[key] = TransformedPath(_path(verts, codes, ss, st), Affine2D(matrix))
         gc._clippath = tp
+    elif clippath is not None:
+        gc._clippath = clippath
     gc._dashes = dashes
     gc._linewidth = linewidth
     gc._rgb = rgb

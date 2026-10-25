@@ -160,6 +160,19 @@ def _sync_dirty():
 _PLAIN_HANDLES = (_mplrs.Line2D, _mplrs.Text, _mplrs.Patch)
 
 
+def _rs_clip_path(a):
+    """The clip path of *a* as (Path, transform spec), or None; raises
+    NotImplementedError if the Rust core cannot evaluate its transform."""
+    cp = a._clippath
+    if cp is None:
+        return None
+    from ._live import tspec
+    from .transforms import TransformedPatchPath
+    # (a TransformedPatchPath follows the path of its patch)
+    path = cp._patch.get_path() if isinstance(cp, TransformedPatchPath) else cp._path
+    return (path, tspec(cp._transform), cp)
+
+
 def _rs_base_props(a, d):
     """Common Artist properties for a Rust `set_many` call."""
     from ._live import tspec
@@ -174,6 +187,10 @@ def _rs_base_props(a, d):
     d["gid"] = None if a._gid is None else str(a._gid)
     d["url"] = None if a._url is None else str(a._url)
     d["animated"] = bool(a._animated)
+    try:
+        d["clip_path"] = _rs_clip_path(a)
+    except NotImplementedError:
+        d["clip_path"] = None  # (such artists are drawn by Python)
     if a._transformSet or a._transform is not None:
         try:
             d["transform"] = tspec(a.get_transform())

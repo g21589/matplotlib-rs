@@ -452,6 +452,8 @@ class Axis(martist.Artist):
             kw = dict(base=float(tr.base), linthresh=float(tr.linthresh),
                       linscale=float(tr.linscale),
                       subs=None if s.subs is None else [float(v) for v in s.subs])
+        elif name == "logit":
+            kw = dict(clip=bool(getattr(s._transform, "_clip", False)))
         elif name == "asinh":
             kw = dict(linear_width=float(s.linear_width))
         if name not in ("linear", "log", "symlog", "logit", "asinh"):

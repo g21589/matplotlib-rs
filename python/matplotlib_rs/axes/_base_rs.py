@@ -72,6 +72,10 @@ def _rs_native(a):
             return False
     if a.get_path_effects() or a.get_agg_filter() is not None or a.get_rasterized():
         return False
+    try:
+        martist._rs_clip_path(a)
+    except NotImplementedError:
+        return False
     return True
 
 

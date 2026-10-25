@@ -227,6 +227,19 @@ pub enum ClipBoxSpec {
 pub struct ClipPathSpec {
     pub path: std::sync::Arc<MplPath>,
     pub trans: TSpec,
+    /// the embedding layer's clip path object, handed back to its renderers
+    pub source: Option<ClipSource>,
+}
+
+/// An opaque clip path object of the embedding layer (vector renderers
+/// identify clip paths by object).
+#[derive(Clone)]
+pub struct ClipSource(pub std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl std::fmt::Debug for ClipSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ClipSource({:p})", std::sync::Arc::as_ptr(&self.0))
+    }
 }
 
 /// Common artist properties (`matplotlib.artist.Artist`).
@@ -304,6 +317,8 @@ pub struct GcState {
     pub clip_owner: usize,
     /// `gc.get_url()` (vector backends make it a link)
     pub url: Option<String>,
+    /// the source of `clippath`, if any
+    pub clip_source: Option<ClipSource>,
 }
 
 impl Default for GcState {
@@ -326,6 +341,7 @@ impl Default for GcState {
             hatch_np: false,
             clip_owner: 0,
             url: None,
+            clip_source: None,
         }
     }
 }
@@ -373,12 +389,18 @@ impl GcState {
                 let t = ctx.trans.resolve(&cp.trans);
                 // TransformedPath: non-affine part applied to the path, the
                 // affine part passed to the renderer.
-                let p = super::path::transform_path_non_affine(&cp.path, &t);
-                ClipPath { path: std::sync::Arc::new(p), trans: crate::agg::TransAffine::from_matrix(&t.get_affine()) }
+                let path = if t.is_affine() {
+                    cp.path.clone()
+                } else {
+                    std::sync::Arc::new(super::path::transform_path_non_affine(&cp.path, &t))
+                };
+                ClipPath { path, trans: crate::agg::TransAffine::from_matrix(&t.get_affine()) }
             });
+            self.clip_source = base.clip_path.as_ref().and_then(|cp| cp.source.clone());
         } else {
             self.cliprect = None;
             self.clippath = None;
+            self.clip_source = None;
         }
     }
 

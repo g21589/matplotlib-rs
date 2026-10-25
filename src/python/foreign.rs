@@ -93,18 +93,23 @@ fn gc<'py>(py: Python<'py>, g: &GcState) -> PyResult<Bound<'py, PyTuple>> {
         Some(b) => (g.clip_owner, (b.x0, b.y0, b.x1, b.y1)).into_pyobject(py)?.into_any(),
         None => none(),
     };
-    let clippath = match &g.clippath {
-        Some(cp) => {
+    let source = g.clip_source.as_ref().and_then(|s| s.0.downcast_ref::<Py<PyAny>>());
+    let clippath = match (&g.clippath, source) {
+        // the artist's own clip path object, as matplotlib's gc gets it
+        (Some(_), Some(obj)) => obj.bind(py).clone(),
+        (Some(cp), None) => {
             let t = &cp.trans;
             let m: Mat = [[t.sx, t.shx, t.tx], [t.shy, t.sy, t.ty], [0.0, 0.0, 1.0]];
-            let key = (Arc::as_ptr(&cp.path) as usize, m.iter().flatten().map(|v| v.to_bits()).collect::<Vec<u64>>());
+            // (one clip path object per artist clip path and transform)
+            let bits = PyTuple::new(py, m.iter().flatten().map(|v| v.to_bits()).collect::<Vec<u64>>())?;
+            let key = PyTuple::new(py, [(Arc::as_ptr(&cp.path) as usize).into_pyobject(py)?.into_any(), bits.into_any()])?;
             let p = path(py, &cp.path)?;
-            let mut items: Vec<Bound<'py, PyAny>> = vec![key.into_pyobject(py)?.into_any()];
+            let mut items: Vec<Bound<'py, PyAny>> = vec![key.into_any()];
             items.extend(p.iter());
             items.push(mat(py, &m)?.into_any());
             PyTuple::new(py, items)?.into_any()
         }
-        None => none(),
+        (None, _) => none(),
     };
     let dashes = match &g.dashes.1 {
         Some(d) => PyTuple::new(py, [g.dashes.0.into_pyobject(py)?.into_any(), PyList::new(py, d)?.into_any()])?,
