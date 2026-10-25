@@ -119,8 +119,8 @@ class Patch(artist.Artist):
         return ("generic", (path.vertices.tolist(),
                             None if path.codes is None else path.codes.tolist(), mtx))
 
-    def _rs_sync(self):
-        """Push this patch's state into its Rust twin."""
+    def _rs_props(self):
+        """This patch's state as a Rust `set_many` dict."""
         d = {}
         try:
             key, val = self._rs_geometry()
@@ -146,7 +146,7 @@ class Patch(artist.Artist):
         if self._sticky_edges is not None:
             d["sticky_x"] = [float(v) for v in self._sticky_edges.x]
             d["sticky_y"] = [float(v) for v in self._sticky_edges.y]
-        self._h.set_many(d)
+        return d
 
     def get_verts(self):
         """
@@ -755,7 +755,7 @@ class Patch(artist.Artist):
             gc.set_sketch_params(*self.get_sketch_params())
 
         if self.get_path_effects():
-            from matplotlib.patheffects import PathEffectRenderer
+            from matplotlib_rs.patheffects import PathEffectRenderer
             renderer = PathEffectRenderer(self.get_path_effects(), renderer)
 
         # We first draw a path within the gaps if needed, but only for visible
@@ -3602,7 +3602,7 @@ class ArrowStyle(_Style):
             cos_t, sin_t = get_cos_sin(x1, y1, x0, y0)
 
             # arrow from x0, y0 to x1, y1
-            from matplotlib.bezier import get_normal_points
+            from matplotlib_rs.bezier import get_normal_points
             x1, y1, x2, y2 = get_normal_points(x0, y0, cos_t, sin_t, width)
 
             dx, dy = length * cos_t, length * sin_t
@@ -4953,3 +4953,69 @@ class ConnectionPatch(FancyArrowPatch):
         if not self.get_visible() or not self._check_xy(renderer):
             return
         super().draw(renderer)
+
+
+class _RsPatchHandle:
+    """`get` / `set` / `set_many` on the patch of a Rust axes or figure."""
+
+    def __init__(self, rs):
+        self._rs = rs
+
+    def get(self, name):
+        return self._rs.patch_get(name)
+
+    def set(self, name, value):
+        self._rs.patch_set(name, value)
+
+    def set_many(self, d):
+        for k, v in d.items():
+            self._rs.patch_set(k, v)
+
+    def ident(self):
+        return id(self._rs)
+
+
+from . import artist as _martist
+
+
+class _RsRectangle(_martist._RsOwned, Rectangle):
+    """A `Rectangle` view of an axes or figure background patch."""
+
+    @classmethod
+    def _rs_blank(cls):
+        self = cls((0, 0), 1, 1)
+        _martist._DIRTY.discard(self)
+        return self
+
+    def _rs_read(self, g):
+        axes, fig = _martist._rs_owner_axes_fig(self._rs_owner)
+        if fig is not None and self.figure is None:
+            self.set_figure(fig)
+        if axes is not None:
+            self.__dict__["_axes"] = axes
+        self._facecolor = tuple(g("facecolor"))
+        self._original_facecolor = self._facecolor
+        self._edgecolor = tuple(g("edgecolor"))
+        self._original_edgecolor = self._edgecolor
+        self._linewidth = g("linewidth")
+        try:
+            self.set_linestyle(g("linestyle"))
+        except (ValueError, TypeError):
+            pass
+        self._fill = g("fill")
+        self._visible = g("visible")
+        self._alpha = g("alpha")
+        self.zorder = g("zorder")
+        self._label = g("label")
+        self._hatch = g("hatch")
+        self._antialiased = g("antialiased")
+        self._clipon = g("clip_on")
+        x, y, w, h = g("bounds")
+        self._x0, self._y0, self._width, self._height = x, y, w, h
+        self._angle = g("angle")
+
+    def get_data_transform(self):
+        return _martist._RsOwnedTransformMixin.get_transform(self)
+
+    def get_transform(self):
+        return self.get_patch_transform() + self.get_data_transform()

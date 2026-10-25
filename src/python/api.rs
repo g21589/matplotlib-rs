@@ -1,5 +1,6 @@
 //! Figure / Axes / Text / Patch handles for the Python API layer.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
 use numpy::{PyArray3, PyArrayMethods};
@@ -13,7 +14,7 @@ use crate::mpl::artist::{shared, Lock, Shared, SpinePosition, TransCtx};
 use crate::mpl::axes::{anchor_coefs, scale_from_name, Aspect, Axes, Child};
 use crate::mpl::axis::{GridKw, TickKw};
 use crate::mpl::colors::ColorSpec;
-use crate::mpl::figure::{FigChild, Figure, LayoutEngine};
+use crate::mpl::figure::{snapshot_for, DrawSnapshot, FigChild, Figure, LayoutEngine};
 use crate::mpl::fonts::{self, FontProperties, NumOrName};
 use crate::mpl::logticker::{LogFormatter, LogFormatterKind, LogLocator, Subs};
 use crate::mpl::patches::{BoxStyle, Patch, PatchKind, RotationPoint};
@@ -147,6 +148,7 @@ fn text_get<'py>(py: Python<'py>, t: &Text, name: &str) -> PyResult<Bound<'py, P
         "antialiased" => t.antialiased.into_pyobject(py)?.to_owned().into_any(),
         "clip_on" => t.base.clip_on.into_pyobject(py)?.to_owned().into_any(),
         "in_layout" => t.base.in_layout.into_pyobject(py)?.to_owned().into_any(),
+        "transform" => super::model::tspec_to(py, &t.base.transform)?,
         _ => return Err(PyKeyError::new_err(format!("Text has no property {name:?}"))),
     })
 }
@@ -154,6 +156,12 @@ fn text_get<'py>(py: Python<'py>, t: &Text, name: &str) -> PyResult<Bound<'py, P
 #[pyclass(name = "Text", module = "matplotlib_rs._mplrs")]
 pub struct PyText {
     pub inner: Shared<Text>,
+}
+
+impl PyText {
+    fn lk(&self) -> std::sync::MutexGuard<'_, Text> {
+        Lock::lk(&self.inner)
+    }
 }
 
 #[pymethods]
@@ -165,11 +173,11 @@ impl PyText {
     }
 
     fn set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        text_set(&mut self.inner.lk(), name, value)
+        text_set(&mut self.lk(), name, value)
     }
 
     fn set_many(&self, props: &Bound<'_, PyDict>) -> PyResult<()> {
-        let mut t = self.inner.lk();
+        let mut t = self.lk();
         for (k, v) in props.iter() {
             text_set(&mut t, &k.extract::<String>()?, &v)?;
         }
@@ -177,7 +185,7 @@ impl PyText {
     }
 
     fn get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        text_get(py, &self.inner.lk(), name)
+        text_get(py, &self.lk(), name)
     }
 
     fn same(&self, other: &PyText) -> bool {
@@ -340,6 +348,8 @@ fn patch_get<'py>(py: Python<'py>, p: &Patch, name: &str) -> PyResult<Bound<'py,
         "label" => p.base.label.clone().into_pyobject(py)?.into_any(),
         "hatch" => p.hatch.clone().into_pyobject(py)?.into_any(),
         "antialiased" => p.antialiased.into_pyobject(py)?.to_owned().into_any(),
+        "clip_on" => p.base.clip_on.into_pyobject(py)?.to_owned().into_any(),
+        "transform" => super::model::tspec_to(py, &p.base.transform)?,
         "bounds" | "xy" | "width" | "height" | "angle" => {
             let (x, y, w, h, a) = match &p.kind {
                 PatchKind::Rectangle { x0, y0, width, height, angle, .. } => (*x0, *y0, *width, *height, *angle),
@@ -369,6 +379,12 @@ fn patch_get<'py>(py: Python<'py>, p: &Patch, name: &str) -> PyResult<Bound<'py,
 #[pyclass(name = "Patch", module = "matplotlib_rs._mplrs")]
 pub struct PyPatch {
     pub inner: Shared<Patch>,
+}
+
+impl PyPatch {
+    fn lk(&self) -> std::sync::MutexGuard<'_, Patch> {
+        Lock::lk(&self.inner)
+    }
 }
 
 #[pymethods]
@@ -425,11 +441,11 @@ impl PyPatch {
     }
 
     fn set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        patch_set(&mut self.inner.lk(), name, value)
+        patch_set(&mut self.lk(), name, value)
     }
 
     fn set_many(&self, props: &Bound<'_, PyDict>) -> PyResult<()> {
-        let mut p = self.inner.lk();
+        let mut p = self.lk();
         for (k, v) in props.iter() {
             patch_set(&mut p, &k.extract::<String>()?, &v)?;
         }
@@ -437,7 +453,7 @@ impl PyPatch {
     }
 
     fn get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        patch_get(py, &self.inner.lk(), name)
+        patch_get(py, &self.lk(), name)
     }
 
     fn ident(&self) -> usize {
@@ -720,6 +736,29 @@ fn axes_mut<'a>(f: &'a mut Figure, uid: u64) -> PyResult<&'a mut Axes> {
     f.ax(uid).ok_or_else(|| PyValueError::new_err("the Axes does not belong to this figure"))
 }
 
+impl PyFigure {
+    fn lk(&self) -> std::sync::MutexGuard<'_, Figure> {
+        check_not_drawing(&self.inner);
+        Lock::lk(&self.inner)
+    }
+
+    fn snap(&self) -> Option<Rc<DrawSnapshot>> {
+        snapshot_for(Arc::as_ptr(&self.inner) as usize)
+    }
+
+    /// Run `f` on the figure, releasing the GIL unless Python artists need it.
+    fn locked_maybe_detached<R: Send>(&self, py: Python<'_>, f: impl FnOnce(&mut Figure) -> R + Send) -> PyResult<R> {
+        let ext = self.lk().has_ext();
+        let r = if ext {
+            f(&mut self.lk())
+        } else {
+            py.detach(|| f(&mut self.lk()))
+        };
+        super::ext::take_error()?;
+        Ok(r)
+    }
+}
+
 #[pymethods]
 impl PyFigure {
     #[new]
@@ -734,13 +773,15 @@ impl PyFigure {
     ) -> PyResult<Self> {
         let fc = facecolor.map(color_from).transpose()?;
         let ec = edgecolor.map(color_from).transpose()?;
-        Ok(PyFigure { inner: shared(Figure::new(figsize, dpi, fc, ec, linewidth, frameon)) })
+        let inner = shared(Figure::new(figsize, dpi, fc, ec, linewidth, frameon));
+        Lock::lk(&inner).key = Arc::as_ptr(&inner) as usize;
+        Ok(PyFigure { inner })
     }
 
     /// add_subplot(nrows, ncols, num1, num2[, gridspec params]) -> uid
     #[pyo3(signature = (nrows, ncols, num1, num2, gs=None))]
     fn add_subplot(&self, nrows: usize, ncols: usize, num1: usize, num2: usize, gs: Option<&Bound<'_, PyDict>>) -> PyResult<u64> {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let g = match gs {
             None => f.gridspec_for(nrows, ncols),
             Some(d) => {
@@ -787,30 +828,30 @@ impl PyFigure {
 
     /// Index of a new (or updated) gridspec for later `add_subplot(gs=...)`.
     fn new_gridspec_id(&self, nrows: usize, ncols: usize) -> usize {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         f.gridspecs.push(shared(crate::mpl::axes::GridSpec::new(nrows, ncols)));
         f.gridspecs.len() - 1
     }
 
     fn add_axes(&self, rect: (f64, f64, f64, f64)) -> u64 {
-        self.inner.lk().add_axes_rect(rect)
+        self.lk().add_axes_rect(rect)
     }
 
     fn new_axes(&self, rect: (f64, f64, f64, f64)) -> u64 {
-        self.inner.lk().new_detached(rect)
+        self.lk().new_detached(rect)
     }
 
     fn attach_axes(&self, uid: u64) -> bool {
-        self.inner.lk().attach(uid)
+        self.lk().attach(uid)
     }
 
     fn detach_axes(&self, uid: u64) {
-        self.inner.lk().detach(uid)
+        self.lk().detach(uid)
     }
 
     /// Reorder the attached axes to the given uid order.
     fn order_axes(&self, uids: Vec<u64>) {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let mut ax = std::mem::take(&mut f.axes);
         let mut out = Vec::new();
         for u in &uids {
@@ -823,23 +864,23 @@ impl PyFigure {
     }
 
     fn delaxes(&self, uid: u64) {
-        self.inner.lk().delaxes(uid);
+        self.lk().delaxes(uid);
     }
 
     fn sca(&self, uid: u64) {
-        self.inner.lk().sca(uid);
+        self.lk().sca(uid);
     }
 
     fn gca(&self) -> Option<u64> {
-        self.inner.lk().gca_uid()
+        self.lk().gca_uid()
     }
 
     fn axes_uids(&self) -> Vec<u64> {
-        self.inner.lk().axes.iter().map(|a| a.uid).collect()
+        self.lk().axes.iter().map(|a| a.uid).collect()
     }
 
     fn clear(&self) {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         f.axes.clear();
         f.axstack.clear();
         f.children.clear();
@@ -851,43 +892,52 @@ impl PyFigure {
 
     #[getter]
     fn get_dpi(&self) -> f64 {
-        self.inner.lk().dpi
+        if let Some(s) = self.snap() {
+            return s.fig.dpi;
+        }
+        self.lk().dpi
     }
 
     #[setter]
     fn set_dpi(&self, dpi: f64) {
-        self.inner.lk().dpi = dpi;
+        self.lk().dpi = dpi;
     }
 
     fn get_size_inches(&self) -> (f64, f64) {
-        self.inner.lk().figsize
+        if let Some(s) = self.snap() {
+            return s.figsize;
+        }
+        self.lk().figsize
     }
 
     fn set_size_inches(&self, w: f64, h: f64) {
-        self.inner.lk().figsize = (w, h);
+        self.lk().figsize = (w, h);
     }
 
     fn patch_set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        patch_set(&mut self.inner.lk().patch, name, value)
+        patch_set(&mut self.lk().patch, name, value)
     }
 
     fn patch_get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        patch_get(py, &self.inner.lk().patch, name)
+        patch_get(py, &self.lk().patch, name)
     }
 
     #[pyo3(signature = (left=None, bottom=None, right=None, top=None, wspace=None, hspace=None))]
     fn subplots_adjust(&self, left: Option<f64>, bottom: Option<f64>, right: Option<f64>, top: Option<f64>, wspace: Option<f64>, hspace: Option<f64>) {
-        self.inner.lk().subplots_adjust(left, bottom, right, top, wspace, hspace);
+        self.lk().subplots_adjust(left, bottom, right, top, wspace, hspace);
     }
 
     fn get_subplotpars(&self) -> (f64, f64, f64, f64, f64, f64) {
-        let p = self.inner.lk().subplotpars;
+        let p = self.lk().subplotpars;
         (p.left, p.bottom, p.right, p.top, p.wspace, p.hspace)
     }
 
-    /// Add a figure-level artist (text, line or patch).
-    fn add_artist(&self, a: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut f = self.inner.lk();
+    /// Add a figure-level artist: a text, line or patch handle, or any
+    /// Python artist (drawn by its own `draw`), with its `get_children`
+    /// category (0 artists, 2 lines, 3 patches, 4 texts, 5 images, 6 legends).
+    #[pyo3(signature = (a, category=0))]
+    fn add_artist(&self, a: &Bound<'_, PyAny>, category: u8) -> PyResult<()> {
+        let mut f = self.lk();
         if let Ok(t) = a.cast::<PyText>() {
             f.children.push(FigChild::Text(t.borrow().inner.clone()));
         } else if let Ok(l) = a.cast::<PyLine2D>() {
@@ -895,13 +945,13 @@ impl PyFigure {
         } else if let Ok(p) = a.cast::<PyPatch>() {
             f.children.push(FigChild::Patch(p.borrow().inner.clone()));
         } else {
-            return err("unsupported figure artist");
+            f.children.push(FigChild::Ext(super::ext::ext_from(a), category));
         }
         Ok(())
     }
 
     fn remove_artist(&self, a: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let before = f.children.len();
         if let Ok(t) = a.cast::<PyText>() {
             let p = t.borrow().inner.clone();
@@ -912,13 +962,16 @@ impl PyFigure {
         } else if let Ok(pp) = a.cast::<PyPatch>() {
             let p = pp.borrow().inner.clone();
             f.children.retain(|c| !matches!(c, FigChild::Patch(x) if Arc::ptr_eq(x, &p)));
+        } else {
+            let id = a.as_ptr() as usize;
+            f.children.retain(|c| !matches!(c, FigChild::Ext(e, _) if e.ident() == id));
         }
         Ok(f.children.len() != before)
     }
 
     /// Render and return the RGBA buffer (h, w, 4).
     fn render<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<u8>>> {
-        let r = py.detach(|| self.inner.lk().render());
+        let r = self.locked_maybe_detached(py, |f| f.render())?;
         let (w, h) = (r.agg.width as usize, r.agg.height as usize);
         let arr = numpy::PyArray1::from_slice(py, r.agg.buffer());
         Ok(arr.reshape([h, w, 4])?)
@@ -943,9 +996,8 @@ impl PyFigure {
         let ec = edgecolor.map(color_from).transpose()?;
         let meta = metadata.unwrap_or_default();
         let path = path.to_string();
+        let buf = self.locked_maybe_detached(py, |f| render_for_save(f, dpi, fc, ec, bbox, tight))?;
         py.detach(|| -> PyResult<()> {
-            let mut f = self.inner.lk();
-            let buf = render_for_save(&mut f, dpi, fc, ec, bbox, tight);
             write_png(&path, &buf.0, buf.1, buf.2, buf.3, &meta, compression.unwrap_or(1))
                 .map_err(|e| PyValueError::new_err(e.to_string()))
         })
@@ -964,32 +1016,63 @@ impl PyFigure {
     ) -> PyResult<Bound<'py, PyArray3<u8>>> {
         let fc = facecolor.map(color_from).transpose()?;
         let ec = edgecolor.map(color_from).transpose()?;
-        let (buf, w, h, _) = py.detach(|| render_for_save(&mut self.inner.lk(), dpi, fc, ec, bbox, tight));
+        let (buf, w, h, _) = self.locked_maybe_detached(py, |f| render_for_save(f, dpi, fc, ec, bbox, tight))?;
         let arr = numpy::PyArray1::from_vec(py, buf);
         Ok(arr.reshape([h as usize, w as usize, 4])?)
     }
 
     /// `get_tightbbox()` in inches: (x0, y0, x1, y1).
     #[pyo3(signature = (dpi=None))]
-    fn get_tightbbox(&self, dpi: Option<f64>) -> (f64, f64, f64, f64) {
-        let mut f = self.inner.lk();
-        let old = f.dpi;
-        if let Some(d) = dpi {
-            f.dpi = d;
+    fn get_tightbbox(&self, dpi: Option<f64>) -> PyResult<(f64, f64, f64, f64)> {
+        let b = {
+            let mut f = self.lk();
+            let old = f.dpi;
+            if let Some(d) = dpi {
+                f.dpi = d;
+            }
+            let (w, h) = f.canvas_size();
+            let mut r = Renderer::metrics_only(w as f64, h as f64, f.dpi);
+            for i in 0..f.axes.len() {
+                f.unstale_viewlim(i);
+            }
+            let b = f.get_tightbbox(&mut r);
+            f.dpi = old;
+            b
+        };
+        super::ext::take_error()?;
+        Ok((b.x0, b.y0, b.x1, b.y1))
+    }
+
+    /// `draw_without_rendering`: run a disabled draw (layout, aspect, ticks).
+    fn draw_disabled(&self) -> PyResult<()> {
+        self.lk().draw_disabled();
+        super::ext::take_error()
+    }
+
+    /// `Figure.draw(renderer)` into a Python-side `RendererAgg`.
+    fn draw_into(&self, target: &Bound<'_, super::lowlevel::PyRendererAgg>) -> PyResult<()> {
+        {
+            let mut t = target.borrow_mut();
+            let r = t.r()?;
+            self.lk().draw(r);
         }
-        let (w, h) = f.canvas_size();
-        let mut r = Renderer::metrics_only(w as f64, h as f64, f.dpi);
-        for i in 0..f.axes.len() {
-            f.unstale_viewlim(i);
-        }
-        let b = f.get_tightbbox(&mut r);
-        f.dpi = old;
-        (b.x0, b.y0, b.x1, b.y1)
+        super::ext::take_error()
+    }
+
+    /// Mirror the figure geometry owned by the Python layer (size in inches,
+    /// dpi and the `bbox_inches` adjustment of `transFigure`).
+    #[pyo3(signature = (figsize, dpi, boxout=None))]
+    fn mirror_state(&self, figsize: (f64, f64), dpi: f64, boxout: Option<(f64, f64, f64, f64)>) {
+        let mut f = self.lk();
+        f.figsize = figsize;
+        f.dpi = dpi;
+        f.boxout = boxout.map(|b| Bbox::new(b.0, b.1, b.2, b.3));
+        f.layout = LayoutEngine::None;
     }
 
     #[pyo3(signature = (kind, pad=1.08, h_pad=None, w_pad=None, rect=None))]
     fn set_layout(&self, kind: &str, pad: f64, h_pad: Option<f64>, w_pad: Option<f64>, rect: Option<(f64, f64, f64, f64)>) {
-        self.inner.lk().layout = match kind {
+        self.lk().layout = match kind {
             "tight" => LayoutEngine::Tight { pad, h_pad, w_pad, rect },
             "constrained" => LayoutEngine::Constrained,
             _ => LayoutEngine::None,
@@ -997,7 +1080,7 @@ impl PyFigure {
     }
 
     fn get_layout(&self) -> String {
-        match self.inner.lk().layout {
+        match self.lk().layout {
             LayoutEngine::None => "none".into(),
             LayoutEngine::Tight { .. } => "tight".into(),
             LayoutEngine::Constrained => "constrained".into(),
@@ -1007,7 +1090,7 @@ impl PyFigure {
     /// Run tight_layout once now.
     #[pyo3(signature = (pad=1.08, h_pad=None, w_pad=None, rect=None))]
     fn tight_layout(&self, pad: f64, h_pad: Option<f64>, w_pad: Option<f64>, rect: Option<(f64, f64, f64, f64)>) {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let (w, h) = f.canvas_size();
         let mut r = Renderer::metrics_only(w as f64, h as f64, f.dpi);
         for i in 0..f.axes.len() {
@@ -1022,7 +1105,12 @@ impl PyFigure {
 
     /// Display coordinates of a figure-level text's extent.
     fn text_extent(&self, t: &PyText) -> (f64, f64, f64, f64) {
-        let f = self.inner.lk();
+        if let Some(s) = self.snap() {
+            let mut r = Renderer::metrics_only(s.canvas.0, s.canvas.1, s.fig.dpi);
+            let b = t.lk().get_window_extent(&mut r, &s.tc);
+            return (b.x0, b.y0, b.x1, b.y1);
+        }
+        let f = self.lk();
         let tc = f.trans_ctx();
         let (w, h) = f.canvas_size();
         let mut r = Renderer::metrics_only(w as f64, h as f64, f.dpi);
@@ -1032,14 +1120,16 @@ impl PyFigure {
 
     /// The figure's transFigure matrix rows.
     fn trans_figure(&self) -> Vec<Vec<f64>> {
-        let f = self.inner.lk();
-        let m = f.ctx().trans_figure.get_affine();
+        let m = match self.snap() {
+            Some(s) => s.fig.trans_figure.get_affine(),
+            None => self.lk().ctx().trans_figure.get_affine(),
+        };
         m.iter().map(|r| r.to_vec()).collect()
     }
 
     /// Share an axis between two axes (x if `x`).
     fn share(&self, a: u64, b: u64, x: bool) -> PyResult<()> {
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let ia = f.axes_index(a).ok_or_else(|| PyValueError::new_err("no axes"))?;
         let ib = f.axes_index(b).ok_or_else(|| PyValueError::new_err("no axes"))?;
         let mut group: Vec<u64> = if x { f.axes[ib].shared_x.clone() } else { f.axes[ib].shared_y.clone() };
@@ -1085,7 +1175,7 @@ impl PyFigure {
 
     fn twin(&self, a: u64, x: bool) -> PyResult<u64> {
         // twinx: shares x, y on the right
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let i = f.axes_index(a).ok_or_else(|| PyValueError::new_err("no axes"))?;
         let (pos, ss) = (f.axes[i].original_position, f.axes[i].subplotspec.clone());
         let sp = f.subplotpars;
@@ -1096,7 +1186,7 @@ impl PyFigure {
         f.add_axes_internal(ax);
         drop(f);
         self.share(uid, a, x)?;
-        let mut f = self.inner.lk();
+        let mut f = self.lk();
         let ib = f.axes_index(uid).unwrap();
         let ia = f.axes_index(a).unwrap();
         let tw: Vec<u64> = {
@@ -1208,26 +1298,49 @@ fn axis_of(x: &str) -> PyResult<bool> {
     }
 }
 
+/// Fail loudly instead of deadlocking when Python code running inside a
+/// draw of `f` (an external artist) tries to access the locked figure.
+fn check_not_drawing(f: &Shared<Figure>) {
+    if snapshot_for(Arc::as_ptr(f) as usize).is_some() {
+        panic!("matplotlib_rs: this figure's state cannot be changed while the figure is being drawn");
+    }
+}
+
 impl PyAxes {
+    fn lk(&self) -> std::sync::MutexGuard<'_, Figure> {
+        check_not_drawing(&self.fig);
+        Lock::lk(&self.fig)
+    }
+
+    /// The draw-time snapshot of this axes, if its figure is being drawn.
+    fn snap(&self) -> Option<(Rc<DrawSnapshot>, usize)> {
+        let s = snapshot_for(Arc::as_ptr(&self.fig) as usize)?;
+        let i = s.axes.iter().position(|a| a.uid == self.uid)?;
+        Some((s, i))
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Axes, &crate::mpl::axes::FigCtx) -> R) -> PyResult<R> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let ctx = fig.ctx();
         let a = axes_mut(&mut fig, self.uid)?;
         Ok(f(a, &ctx))
     }
 
     fn unstaled<R>(&self, f: impl FnOnce(&mut Axes, &crate::mpl::axes::FigCtx) -> R) -> PyResult<R> {
-        let mut fig = self.fig.lk();
-        let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        fig.unstale_viewlim(i);
+        let mut fig = self.lk();
+        if let Some(i) = fig.axes_index(self.uid) {
+            fig.unstale_viewlim(i);
+        }
         let ctx = fig.ctx();
-        Ok(f(&mut fig.axes[i], &ctx))
+        let a = axes_mut(&mut fig, self.uid)?;
+        Ok(f(a, &ctx))
     }
 
     fn after_lim_change(&self) -> PyResult<()> {
-        let mut fig = self.fig.lk();
-        let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        fig.sync_shared(i);
+        let mut fig = self.lk();
+        if let Some(i) = fig.axes_index(self.uid) {
+            fig.sync_shared(i);
+        }
         Ok(())
     }
 }
@@ -1248,7 +1361,8 @@ fn child_from(obj: &Bound<'_, PyAny>) -> PyResult<Child> {
     if let Ok(c) = obj.cast::<super::collections::PyImage>() {
         return Ok(Child::Image(c.borrow().inner.clone()));
     }
-    err("unsupported artist")
+    // any other object is a Python artist drawn by its own `draw`
+    Ok(Child::Ext(super::ext::ext_from(obj)))
 }
 
 #[pymethods]
@@ -1272,7 +1386,7 @@ impl PyAxes {
 
     #[pyo3(signature = (c, autolim=true))]
     fn add_collection(&self, c: &super::collections::PyCollection, autolim: bool) -> PyResult<()> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
         fig.unstale_viewlim(i);
         let ctx = fig.ctx();
@@ -1310,6 +1424,10 @@ impl PyAxes {
                 Child::Text(t) => Py::new(py, PyText { inner: t })?.into_any(),
                 Child::Collection(c) => Py::new(py, super::collections::PyCollection { inner: c })?.into_any(),
                 Child::Image(c) => Py::new(py, super::collections::PyImage { inner: c })?.into_any(),
+                Child::Ext(e) => match super::ext::py_object(&e) {
+                    Some(o) => o.clone_ref(py),
+                    None => continue,
+                },
             };
             out.push(o);
         }
@@ -1324,7 +1442,7 @@ impl PyAxes {
     #[pyo3(signature = (tight=None, scalex=true, scaley=true))]
     fn autoscale_view(&self, tight: Option<bool>, scalex: bool, scaley: bool) -> PyResult<()> {
         {
-            let mut fig = self.fig.lk();
+            let mut fig = self.lk();
             let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
             fig.unstale_viewlim(i);
             let ctx = fig.ctx();
@@ -1349,6 +1467,10 @@ impl PyAxes {
 
     fn get_lim(&self, axis: &str) -> PyResult<(f64, f64)> {
         let x = axis_of(axis)?;
+        if let Some((s, i)) = self.snap() {
+            let v = s.axes[i].view_lim;
+            return Ok(if x { (v.x0, v.x1) } else { (v.y0, v.y1) });
+        }
         self.unstaled(|a, _| a.get_lim(x))
     }
 
@@ -1428,34 +1550,12 @@ impl PyAxes {
             Scale::Asinh { linear_width: lw } => *lw = linear_width,
             Scale::Linear => {}
         }
-        {
-            let mut fig = self.fig.lk();
-            let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-            let ctx = fig.ctx();
-            let group: Vec<u64> = {
-                let a = &fig.axes[i];
-                let g = if x { a.shared_x.clone() } else { a.shared_y.clone() };
-                if g.is_empty() {
-                    vec![self.uid]
-                } else {
-                    g
-                }
-            };
-            let old_info = fig.axes[i].axis_info(x, &ctx);
-            let old = fig.axes[i].axis(x).major_locator.nonsingular(f64::NEG_INFINITY, f64::INFINITY, &old_info);
-            for ax in fig.axes.iter_mut() {
-                if group.contains(&ax.uid) {
-                    ax.axis_mut(x).set_scale(sc.clone());
-                    ax.axis_mut(x).reset_ticks();
-                }
-            }
-            let new_info = fig.axes[i].axis_info(x, &ctx);
-            let new = fig.axes[i].axis(x).major_locator.nonsingular(f64::NEG_INFINITY, f64::INFINITY, &new_info);
-            if old != new {
-                fig.axes[i].autoscale_view(None, x, !x, &ctx, None);
-            }
-        }
-        self.after_lim_change()
+        // The Python layer applies the scale to shared axes and autoscales.
+        self.with(|a, _| {
+            let ax = a.axis_mut(x);
+            ax.set_scale(sc);
+            ax.reset_ticks();
+        })
     }
 
     fn get_scale(&self, axis: &str) -> PyResult<String> {
@@ -1464,10 +1564,57 @@ impl PyAxes {
     }
 
     fn get_datalim(&self) -> PyResult<(f64, f64, f64, f64, f64, f64)> {
+        if let Some((s, i)) = self.snap() {
+            let d = s.axes[i].data_lim;
+            let b = d.bbox;
+            return Ok((b.x0, b.y0, b.x1, b.y1, d.minpos[0], d.minpos[1]));
+        }
         self.with(|a, _| {
             let b = a.data_lim.bbox;
             (b.x0, b.y0, b.x1, b.y1, a.data_lim.minpos[0], a.data_lim.minpos[1])
         })
+    }
+
+    /// Replace the data limits (and their minpos when given).
+    #[pyo3(signature = (x0, y0, x1, y1, minposx=None, minposy=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_datalim(&self, x0: f64, y0: f64, x1: f64, y1: f64, minposx: Option<f64>, minposy: Option<f64>) -> PyResult<()> {
+        self.with(|a, _| {
+            a.data_lim.bbox = Bbox::new(x0, y0, x1, y1);
+            if let Some(m) = minposx {
+                a.data_lim.minpos[0] = m;
+            }
+            if let Some(m) = minposy {
+                a.data_lim.minpos[1] = m;
+            }
+        })
+    }
+
+    /// Mirror the state the Python layer owns: active and original
+    /// position, view limits and data limits (with minpos); the Rust axes
+    /// then neither autoscales nor applies its aspect by itself.
+    #[allow(clippy::too_many_arguments)]
+    fn mirror_state(
+        &self,
+        position: (f64, f64, f64, f64),
+        original: (f64, f64, f64, f64),
+        viewlim: (f64, f64, f64, f64),
+        datalim: (f64, f64, f64, f64),
+        minpos: (f64, f64),
+    ) -> PyResult<()> {
+        self.with(|a, _| {
+            a.position = Bbox::new(position.0, position.1, position.2, position.3);
+            a.original_position = Bbox::new(original.0, original.1, original.2, original.3);
+            a.view_lim = Bbox::new(viewlim.0, viewlim.1, viewlim.2, viewlim.3);
+            a.data_lim.bbox = Bbox::new(datalim.0, datalim.1, datalim.2, datalim.3);
+            a.data_lim.minpos = [minpos.0, minpos.1];
+            a.stale_viewlims = [false, false];
+            a.aspect_frozen = true;
+        })
+    }
+
+    fn set_aspect_frozen(&self, b: bool) -> PyResult<()> {
+        self.with(|a, _| a.aspect_frozen = b)
     }
 
     #[pyo3(signature = (xys, updatex=true, updatey=true))]
@@ -1476,10 +1623,31 @@ impl PyAxes {
     }
 
     fn get_viewlim(&self) -> PyResult<(f64, f64, f64, f64)> {
+        if let Some((s, i)) = self.snap() {
+            let b = s.axes[i].view_lim;
+            return Ok((b.x0, b.y0, b.x1, b.y1));
+        }
         self.unstaled(|a, _| {
             let b = a.view_lim;
             (b.x0, b.y0, b.x1, b.y1)
         })
+    }
+
+    /// The view limits without triggering a pending autoscale.
+    fn get_viewlim_raw(&self) -> PyResult<(f64, f64, f64, f64)> {
+        if let Some((s, i)) = self.snap() {
+            let b = s.axes[i].view_lim;
+            return Ok((b.x0, b.y0, b.x1, b.y1));
+        }
+        self.with(|a, _| {
+            let b = a.view_lim;
+            (b.x0, b.y0, b.x1, b.y1)
+        })
+    }
+
+    /// Whether the view limits of the x / y axis await an autoscale.
+    fn get_stale_viewlims(&self) -> PyResult<(bool, bool)> {
+        self.with(|a, _| (a.stale_viewlims[0], a.stale_viewlims[1]))
     }
 
     fn ignore_existing_data_limits(&self, b: bool) -> PyResult<()> {
@@ -1495,6 +1663,16 @@ impl PyAxes {
                 _ => a.title.clone(),
             };
             PyText { inner: t }
+        })
+    }
+
+    /// Use a Python-created text as the left/center/right title.
+    fn set_title_handle(&self, loc: &str, t: &PyText) -> PyResult<()> {
+        let h = t.inner.clone();
+        self.with(|a, _| match loc {
+            "left" => a.left_title = h,
+            "right" => a.right_title = h,
+            _ => a.title = h,
         })
     }
 
@@ -1523,7 +1701,7 @@ impl PyAxes {
     /// tick_position, autolabelpos, remove_overlapping_locs, is_default_label.
     fn axis_set(&self, axis: &str, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let x = axis_of(axis)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         let ax = a.axis_mut(x);
         match name {
@@ -1554,7 +1732,7 @@ impl PyAxes {
 
     fn axis_get<'py>(&self, py: Python<'py>, axis: &str, name: &str) -> PyResult<Bound<'py, PyAny>> {
         let x = axis_of(axis)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         let ax = a.axis_mut(x);
         Ok(match name {
@@ -1613,13 +1791,13 @@ impl PyAxes {
     }
 
     fn patch_set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         patch_set(&mut a.patch, name, value)
     }
 
     fn patch_get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         patch_get(py, &a.patch, name)
     }
@@ -1669,24 +1847,43 @@ impl PyAxes {
         })
     }
 
-    #[pyo3(signature = (original=false))]
-    fn get_position(&self, original: bool) -> PyResult<(f64, f64, f64, f64)> {
-        let mut fig = self.fig.lk();
+    /// `get_position(original)`; `apply` = False reads the active position
+    /// without applying the aspect first (the `_position` attribute).
+    #[pyo3(signature = (original=false, apply=true))]
+    fn get_position(&self, original: bool, apply: bool) -> PyResult<(f64, f64, f64, f64)> {
+        if let Some((s, i)) = self.snap() {
+            let a = &s.axes[i];
+            let p = if original { a.original_position } else { a.position };
+            return Ok((p.x0, p.y0, p.x1, p.y1));
+        }
+        let mut fig = self.lk();
         let ctx = fig.ctx();
         let a = axes_mut(&mut fig, self.uid)?;
         let p = if original {
             a.original_position
         } else {
-            a.apply_aspect(None, &ctx);
+            if apply {
+                a.apply_aspect(None, &ctx);
+            }
             a.position
         };
         Ok((p.x0, p.y0, p.x1, p.y1))
     }
 
+    /// `apply_aspect(position)`.
+    #[pyo3(signature = (position=None))]
+    fn apply_aspect(&self, position: Option<(f64, f64, f64, f64)>) -> PyResult<()> {
+        let mut fig = self.lk();
+        let ctx = fig.ctx();
+        let a = axes_mut(&mut fig, self.uid)?;
+        a.apply_aspect(position.map(|p| Bbox::new(p.0, p.1, p.2, p.3)), &ctx);
+        Ok(())
+    }
+
     #[pyo3(signature = (rect, which="both"))]
     fn set_position(&self, rect: (f64, f64, f64, f64), which: &str) -> PyResult<()> {
         let b = Bbox::new(rect.0, rect.1, rect.2, rect.3);
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let tw: Vec<u64> = {
             let a = axes_mut(&mut fig, self.uid)?;
             if a.twinned.is_empty() {
@@ -1719,9 +1916,12 @@ impl PyAxes {
 
     fn spine_set(&self, name: &str, prop: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let idx = spine_idx(name)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         match prop {
+            "position" if value.is_none() => {
+                a.spines[idx].position = None;
+            }
             "position" => {
                 let s = &mut a.spines[idx];
                 s.position = Some(if let Ok(st) = value.extract::<String>() {
@@ -1758,7 +1958,7 @@ impl PyAxes {
 
     fn spine_get<'py>(&self, py: Python<'py>, name: &str, prop: &str) -> PyResult<Bound<'py, PyAny>> {
         let idx = spine_idx(name)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         match prop {
             "position" => Ok(match a.spines[idx].position() {
@@ -1876,7 +2076,7 @@ impl PyAxes {
     fn set_locator(&self, axis: &str, spec: &Bound<'_, PyAny>, minor: bool) -> PyResult<()> {
         let x = axis_of(axis)?;
         let loc = locator_from(spec)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let group: Vec<u64> = {
             let a = axes_mut(&mut fig, self.uid)?;
             let g = if x { a.shared_x.clone() } else { a.shared_y.clone() };
@@ -1905,7 +2105,7 @@ impl PyAxes {
     fn set_formatter(&self, axis: &str, spec: &Bound<'_, PyAny>, minor: bool) -> PyResult<()> {
         let x = axis_of(axis)?;
         let fmt = formatter_from(spec)?;
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let group: Vec<u64> = {
             let a = axes_mut(&mut fig, self.uid)?;
             let g = if x { a.shared_x.clone() } else { a.shared_y.clone() };
@@ -1998,26 +2198,33 @@ impl PyAxes {
 
     /// Display-space window extent of the axes (`ax.bbox`).
     fn get_window_extent(&self) -> PyResult<(f64, f64, f64, f64)> {
+        if let Some((s, i)) = self.snap() {
+            let b = s.axes[i].bbox;
+            return Ok((b.x0, b.y0, b.x1, b.y1));
+        }
         self.with(|a, c| {
             let b = a.bbox(c);
             (b.x0, b.y0, b.x1, b.y1)
         })
     }
 
-    fn get_tightbbox(&self) -> PyResult<Option<(f64, f64, f64, f64)>> {
-        let mut fig = self.fig.lk();
-        let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        fig.unstale_viewlim(i);
-        let ctx = fig.ctx();
-        let (w, h) = fig.canvas_size();
-        let mut r = Renderer::metrics_only(w as f64, h as f64, ctx.dpi);
-        Ok(fig.axes[i].get_tightbbox(&mut r, &ctx, false).map(|b| (b.x0, b.y0, b.x1, b.y1)))
+    #[pyo3(signature = (for_layout_only=false))]
+    fn get_tightbbox(&self, for_layout_only: bool) -> PyResult<Option<(f64, f64, f64, f64)>> {
+        let b = {
+            let mut fig = self.lk();
+            let ctx = fig.ctx();
+            let (w, h) = fig.canvas_size();
+            let mut r = Renderer::metrics_only(w as f64, h as f64, ctx.dpi);
+            let _snap = fig.publish_snapshot();
+            axes_mut(&mut fig, self.uid)?.get_tightbbox(&mut r, &ctx, for_layout_only)
+        };
+        super::ext::take_error()?;
+        Ok(b.map(|b| (b.x0, b.y0, b.x1, b.y1)))
     }
 
     /// Matrices of the axes transforms: "data", "axes", "xaxis", "yaxis".
     fn transform_matrix(&self, which: &str) -> PyResult<Vec<Vec<f64>>> {
-        let m = self.unstaled(|a, c| {
-            let tc = a.trans_ctx(c);
+        let pick = |tc: &TransCtx| {
             let t = match which {
                 "axes" => tc.trans_axes.clone().unwrap(),
                 "xaxis" => tc.resolve(&crate::mpl::artist::TSpec::XAxis(crate::mpl::artist::Which::Grid)),
@@ -2025,12 +2232,22 @@ impl PyAxes {
                 _ => tc.trans_data.clone().unwrap(),
             };
             t.get_affine()
-        })?;
+        };
+        let m = if let Some((s, i)) = self.snap() {
+            pick(&s.axes[i].tc)
+        } else if which == "axes" {
+            self.with(|a, c| pick(&a.trans_ctx(c)))?
+        } else {
+            self.unstaled(|a, c| pick(&a.trans_ctx(c)))?
+        };
         Ok(m.iter().map(|r| r.to_vec()).collect())
     }
 
     /// Transform points with the axes' transData (incl. non-affine scales).
     fn transform_data(&self, pts: Vec<[f64; 2]>) -> PyResult<Vec<[f64; 2]>> {
+        if let Some((s, i)) = self.snap() {
+            return Ok(s.axes[i].tc.trans_data.as_ref().unwrap().transform_points(&pts));
+        }
         self.unstaled(|a, c| {
             let tc: TransCtx = a.trans_ctx(c);
             tc.trans_data.as_ref().unwrap().transform_points(&pts)
@@ -2038,19 +2255,22 @@ impl PyAxes {
     }
 
     fn text_extent(&self, t: &PyText) -> PyResult<(f64, f64, f64, f64)> {
-        let mut fig = self.fig.lk();
-        let i = fig.axes_index(self.uid).ok_or_else(|| PyValueError::new_err("no such axes"))?;
-        fig.unstale_viewlim(i);
+        if let Some((s, i)) = self.snap() {
+            let mut r = Renderer::metrics_only(s.canvas.0, s.canvas.1, s.fig.dpi);
+            let b = t.lk().get_window_extent(&mut r, &s.axes[i].tc);
+            return Ok((b.x0, b.y0, b.x1, b.y1));
+        }
+        let mut fig = self.lk();
         let ctx = fig.ctx();
         let (w, h) = fig.canvas_size();
         let mut r = Renderer::metrics_only(w as f64, h as f64, ctx.dpi);
-        let tc = fig.axes[i].trans_ctx(&ctx);
+        let tc = axes_mut(&mut fig, self.uid)?.trans_ctx(&ctx);
         let b = t.inner.lk().get_window_extent(&mut r, &tc);
         Ok((b.x0, b.y0, b.x1, b.y1))
     }
 
     fn base_set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         if name == "label" {
             a.label = value.extract()?;
@@ -2063,7 +2283,7 @@ impl PyAxes {
     }
 
     fn base_get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let mut fig = self.fig.lk();
+        let mut fig = self.lk();
         let a = axes_mut(&mut fig, self.uid)?;
         Ok(match name {
             "visible" => a.base.visible.into_pyobject(py)?.to_owned().into_any(),
@@ -2076,6 +2296,19 @@ impl PyAxes {
 
     fn cla(&self) -> PyResult<()> {
         self.with(|a, _| a.clear())
+    }
+
+    /// `Axes.draw(renderer)` of this axes alone into a Python `RendererAgg`.
+    fn draw_into(&self, target: &Bound<'_, super::lowlevel::PyRendererAgg>) -> PyResult<()> {
+        {
+            let mut t = target.borrow_mut();
+            let r = t.r()?;
+            let mut fig = self.lk();
+            let ctx = fig.ctx();
+            let _snap = fig.publish_snapshot();
+            axes_mut(&mut fig, self.uid)?.draw(r, &ctx);
+        }
+        super::ext::take_error()
     }
 
     fn shared(&self, axis: &str) -> PyResult<Vec<u64>> {
@@ -2138,6 +2371,57 @@ fn text_metrics(s: &str, prop: &Bound<'_, PyAny>, ismath: bool, dpi: f64) -> PyR
     Ok(crate::mpl::renderer::text_metrics(s, &p, ismath, dpi))
 }
 
+/// Encode an (h, w, 4) uint8 RGBA array as PNG bytes with the pixel
+/// density of `dpi` and text chunks `meta`.
+#[pyfunction]
+#[pyo3(signature = (rgba, dpi, meta, compression=1))]
+fn encode_png<'py>(
+    py: Python<'py>,
+    rgba: numpy::PyReadonlyArray3<'py, u8>,
+    dpi: f64,
+    meta: Vec<(String, String)>,
+    compression: u8,
+) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+    let a = rgba.as_array();
+    let (h, w, c) = (a.shape()[0], a.shape()[1], a.shape()[2]);
+    if c != 4 {
+        return err("expected an RGBA array");
+    }
+    let data: Vec<u8> = match a.as_slice() {
+        Some(s) => s.to_vec(),
+        None => a.iter().copied().collect(),
+    };
+    let out = py
+        .detach(|| encode_png_bytes(&data, w as u32, h as u32, dpi, &meta, compression))
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    Ok(pyo3::types::PyBytes::new(py, &out))
+}
+
+fn encode_png_bytes(rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, String)], level: u8) -> std::io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        enc.set_compression(match level {
+            0 => png::Compression::NoCompression,
+            1 => png::Compression::Fastest,
+            2 => png::Compression::Fast,
+            3 => png::Compression::Balanced,
+            _ => png::Compression::High,
+        });
+        let ppm = (dpi / 0.0254).round() as u32;
+        enc.set_pixel_dims(Some(png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
+        for (k, v) in meta {
+            enc.add_text_chunk(k.clone(), v.clone()).map_err(std::io::Error::other)?;
+        }
+        let mut writer = enc.write_header().map_err(std::io::Error::other)?;
+        writer.write_image_data(rgba).map_err(std::io::Error::other)?;
+        writer.finish().map_err(std::io::Error::other)?;
+    }
+    Ok(out)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyFigure>()?;
     m.add_class::<PyAxes>()?;
@@ -2145,6 +2429,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPatch>()?;
     m.add_function(wrap_pyfunction!(findfont_props, m)?)?;
     m.add_function(wrap_pyfunction!(text_metrics, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_png, m)?)?;
     let _ = f64_vec;
     Ok(())
 }

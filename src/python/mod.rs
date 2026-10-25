@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod collections;
+pub mod ext;
 pub mod lowlevel;
 pub mod model;
 pub mod pathmod;

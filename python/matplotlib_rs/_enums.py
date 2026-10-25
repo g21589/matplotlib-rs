@@ -65,7 +65,7 @@ class JoinStyle(str, Enum):
     .. plot::
         :alt: Demo of possible JoinStyle's
 
-        from matplotlib._enums import JoinStyle
+        from matplotlib_rs._enums import JoinStyle
         JoinStyle.demo()
 
     """
@@ -78,7 +78,7 @@ class JoinStyle(str, Enum):
     def demo():
         """Demonstrate how each JoinStyle looks for various join angles."""
         import numpy as np
-        import matplotlib.pyplot as plt
+        import matplotlib_rs.pyplot as plt
 
         def plot_angle(ax, x, y, angle, style):
             phi = np.radians(angle)
@@ -138,7 +138,7 @@ class CapStyle(str, Enum):
     .. plot::
         :alt: Demo of possible CapStyle's
 
-        from matplotlib._enums import CapStyle
+        from matplotlib_rs._enums import CapStyle
         CapStyle.demo()
 
     """
@@ -149,7 +149,7 @@ class CapStyle(str, Enum):
     @staticmethod
     def demo():
         """Demonstrate how each CapStyle looks for a thick line segment."""
-        import matplotlib.pyplot as plt
+        import matplotlib_rs.pyplot as plt
 
         fig = plt.figure(figsize=(4, 1.2))
         ax = fig.add_axes((0, 0, 1, 0.8))

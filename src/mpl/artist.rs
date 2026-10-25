@@ -423,3 +423,21 @@ impl<T> Lock<T> for Shared<T> {
         self.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
+
+/// An artist implemented outside the Rust model (a Python artist drawn by
+/// its own `draw` method through a renderer proxy).
+pub trait ExtArtist: Send + Sync + std::fmt::Debug {
+    fn zorder(&self) -> f64;
+    fn visible(&self) -> bool;
+    fn draw(&self, renderer: &mut super::renderer::Renderer);
+    /// Identity of the underlying object (for removal).
+    fn ident(&self) -> usize;
+    fn as_any(&self) -> &dyn std::any::Any;
+    fn sticky_edges(&self) -> (Vec<f64>, Vec<f64>) {
+        (Vec::new(), Vec::new())
+    }
+    /// `get_tightbbox(renderer)` for layout, if the artist takes part in it.
+    fn tightbbox(&self, _renderer: &mut super::renderer::Renderer, _for_axes: bool) -> Option<super::transforms::Bbox> {
+        None
+    }
+}

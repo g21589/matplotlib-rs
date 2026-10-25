@@ -828,7 +828,7 @@ class Line2D(Artist):
             subslice = None
 
         if self.get_path_effects():
-            from matplotlib.patheffects import PathEffectRenderer
+            from matplotlib_rs.patheffects import PathEffectRenderer
             renderer = PathEffectRenderer(self.get_path_effects(), renderer)
 
         renderer.open_group('line2d', self.get_gid())
@@ -959,8 +959,8 @@ class Line2D(Artist):
         renderer.close_group('line2d')
         self.stale = False
 
-    def _rs_sync(self):
-        """Push this line's state into its Rust twin."""
+    def _rs_props(self):
+        """This line's state as a Rust `set_many` dict."""
         d = _rs_base_props(self, {})
         try:
             x = self.convert_xunits(self._xorig)
@@ -989,7 +989,7 @@ class Line2D(Artist):
         d["solid_joinstyle"] = self._solidjoinstyle.name
         d["dash_pattern"] = (float(self._dash_pattern[0]),
                              None if self._dash_pattern[1] is None else [float(v) for v in self._dash_pattern[1]])
-        self._h.set_many(d)
+        return d
 
     def get_antialiased(self):
         """Return whether antialiased rendering is used."""
@@ -1748,8 +1748,8 @@ class VertexSelector:
     Here is an example which highlights the selected verts with red circles::
 
         import numpy as np
-        import matplotlib.pyplot as plt
-        import matplotlib.lines as lines
+        import matplotlib_rs.pyplot as plt
+        import matplotlib_rs.lines as lines
 
         class HighlightSelected(lines.VertexSelector):
             def __init__(self, line, fmt='ro', **kwargs):
@@ -1810,6 +1810,56 @@ class VertexSelector:
         ind = sorted(self.ind)
         xdata, ydata = self.line.get_data()
         self.process_selected(ind, xdata[ind], ydata[ind])
+
+
+_RS_NAMED_MARKERS = {
+    "tickleft": 0, "tickright": 1, "tickup": 2, "tickdown": 3,
+    "caretleft": 4, "caretright": 5, "caretup": 6, "caretdown": 7,
+    "caretleftbase": 8, "caretrightbase": 9, "caretupbase": 10, "caretdownbase": 11,
+}
+
+
+from . import artist as _martist
+
+
+class _RsLine2D(_martist._RsOwned, _martist._RsOwnedTransformMixin, Line2D):
+    """A `Line2D` view of a line owned by the Rust model (tick/grid lines)."""
+
+    @classmethod
+    def _rs_blank(cls):
+        self = cls([], [])
+        _martist._DIRTY.discard(self)
+        return self
+
+    def _rs_read(self, g):
+        axes, fig = _martist._rs_owner_axes_fig(self._rs_owner)
+        if fig is not None and self.figure is None:
+            self.set_figure(fig)
+        if axes is not None:
+            self.__dict__["_axes"] = axes
+        self.set_data(np.asarray(g("xdata"), float), np.asarray(g("ydata"), float))
+        self.set_linewidth(g("linewidth"))
+        try:
+            self.set_linestyle(g("linestyle"))
+        except (ValueError, TypeError):
+            pass
+        self.set_color(g("color"))
+        m = g("marker")
+        fs = g("fillstyle")
+        if m != "path":
+            self._marker = MarkerStyle(_RS_NAMED_MARKERS.get(m, m), fs)
+        self.set_markersize(g("markersize"))
+        self.set_markeredgewidth(g("markeredgewidth"))
+        self.set_markeredgecolor(g("markeredgecolor"))
+        self.set_markerfacecolor(g("markerfacecolor"))
+        self.set_markerfacecoloralt(g("markerfacecoloralt"))
+        self.set_drawstyle(g("drawstyle"))
+        self._antialiased = g("antialiased")
+        self._visible = g("visible")
+        self._alpha = g("alpha")
+        self.zorder = g("zorder")
+        self._label = g("label")
+        self._clipon = g("clip_on")
 
 
 lineStyles = Line2D._lineStyles

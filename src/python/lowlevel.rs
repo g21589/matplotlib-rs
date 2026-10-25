@@ -10,8 +10,16 @@ use pyo3::types::{PyDict, PyDictMethods};
 use crate::agg::pixfmt::Rgba;
 use crate::agg::stroke::{LineCap, LineJoin};
 use crate::agg::TransAffine;
+use std::cell::Cell;
+use std::rc::Rc;
+
+use pyo3::exceptions::PyRuntimeError;
+
 use crate::backend::path_converters::SnapMode;
 use crate::backend::renderer_agg::{ClipPath, Dashes, Gc, Hatch, MplPath, RendererAgg};
+use crate::mpl::artist::GcState;
+use crate::mpl::renderer::{GlyphDraw, Renderer};
+use crate::mpl::transforms::Bbox;
 
 fn trans_from(arr: &PyReadonlyArray2<f64>) -> PyResult<TransAffine> {
     let a = arr.as_array();
@@ -133,6 +141,33 @@ fn gc_from(d: &Bound<'_, PyDict>) -> PyResult<Gc> {
     Ok(gc)
 }
 
+/// The same graphics-context dict as the renderer-level `GcState` (used by
+/// the text drawing code).
+pub fn gcstate_from(d: &Bound<'_, PyDict>) -> PyResult<GcState> {
+    let g = gc_from(d)?;
+    let mut gc = GcState::default();
+    gc.linewidth = g.linewidth;
+    gc.alpha = g.alpha;
+    gc.forced_alpha = g.forced_alpha;
+    gc.rgb = g.color;
+    gc.antialiased = g.isaa;
+    gc.capstyle = g.cap;
+    gc.joinstyle = g.join;
+    gc.cliprect = g.cliprect.map(|r| Bbox::new(r[0], r[1], r[2], r[3]));
+    gc.clippath = g.clippath;
+    if let Some(v) = d.get_item("dashes")? {
+        if !v.is_none() {
+            gc.dashes = v.extract()?;
+        }
+    }
+    if let Some(v) = d.get_item("snap")? {
+        gc.snap = if v.is_none() { None } else { Some(v.extract::<bool>()?) };
+    }
+    gc.sketch = g.sketch;
+    gc.hatch = g.hatch.map(|h| (h.path, h.color, h.linewidth));
+    Ok(gc)
+}
+
 fn face_from(gc: &Gc, face: Option<Bound<'_, PyAny>>) -> PyResult<Option<Rgba>> {
     match face {
         None => Ok(None),
@@ -148,9 +183,60 @@ fn face_from(gc: &Gc, face: Option<Bound<'_, PyAny>>) -> PyResult<Option<Rgba>> 
     }
 }
 
+enum Target {
+    Owned(Box<Renderer>),
+    /// The renderer of a figure draw in progress (valid while `alive`).
+    Borrowed(*mut Renderer, Rc<Cell<bool>>),
+}
+
+/// matplotlib's `_backend_agg.RendererAgg`: either a standalone renderer or
+/// a proxy for the renderer of a figure being drawn by the Rust core.
 #[pyclass(name = "RendererAgg", module = "matplotlib_rs._mplrs", unsendable)]
 pub struct PyRendererAgg {
-    inner: RendererAgg,
+    t: Target,
+}
+
+impl PyRendererAgg {
+    /// A proxy valid while `alive` is set (the caller clears it before the
+    /// borrow of `r` ends).
+    pub fn borrowed(r: &mut Renderer, alive: Rc<Cell<bool>>) -> Self {
+        PyRendererAgg { t: Target::Borrowed(r as *mut Renderer, alive) }
+    }
+
+    pub fn r(&mut self) -> PyResult<&mut Renderer> {
+        match &mut self.t {
+            Target::Owned(b) => Ok(b),
+            Target::Borrowed(p, alive) => {
+                if alive.get() {
+                    // SAFETY: the pointer comes from a `&mut Renderer` that its
+                    // owner does not use while `alive` is set.
+                    Ok(unsafe { &mut **p })
+                } else {
+                    Err(PyRuntimeError::new_err("the renderer is no longer valid (the draw has finished)"))
+                }
+            }
+        }
+    }
+
+    fn rr(&self) -> PyResult<&Renderer> {
+        match &self.t {
+            Target::Owned(b) => Ok(b),
+            Target::Borrowed(p, alive) => {
+                if alive.get() {
+                    // SAFETY: as in `r`.
+                    Ok(unsafe { &**p })
+                } else {
+                    Err(PyRuntimeError::new_err("the renderer is no longer valid (the draw has finished)"))
+                }
+            }
+        }
+    }
+
+    /// The Agg renderer to draw on, or None if drawing is disabled.
+    fn agg(&mut self) -> PyResult<Option<&mut RendererAgg>> {
+        let r = self.r()?;
+        Ok(if r.disabled { None } else { Some(&mut r.agg) })
+    }
 }
 
 #[pymethods]
@@ -160,7 +246,7 @@ impl PyRendererAgg {
         if dpi <= 0.0 {
             return Err(PyValueError::new_err("dpi must be positive"));
         }
-        Ok(PyRendererAgg { inner: RendererAgg::new(width, height, dpi) })
+        Ok(PyRendererAgg { t: Target::Owned(Box::new(Renderer::new(width as f64, height as f64, dpi))) })
     }
 
     #[pyo3(signature = (gc, vertices, codes, should_simplify, simplify_threshold, trans, face=None))]
@@ -179,7 +265,9 @@ impl PyRendererAgg {
         let path = path_from(&vertices, codes.as_ref(), should_simplify, simplify_threshold)?;
         let trans = trans_from(&trans)?;
         let face = face_from(&gc, face)?;
-        self.inner.draw_path(&gc, &path, &trans, face);
+        if let Some(r) = self.agg()? {
+            r.draw_path(&gc, &path, &trans, face);
+        }
         Ok(())
     }
 
@@ -200,7 +288,9 @@ impl PyRendererAgg {
         let mpath = path_from(&marker_vertices, marker_codes.as_ref(), false, 1.0 / 9.0)?;
         let path = path_from(&vertices, codes.as_ref(), false, 1.0 / 9.0)?;
         let face = face_from(&gc, face)?;
-        self.inner.draw_markers(&gc, &mpath, &trans_from(&marker_trans)?, &path, &trans_from(&trans)?, face);
+        if let Some(r) = self.agg()? {
+            r.draw_markers(&gc, &mpath, &trans_from(&marker_trans)?, &path, &trans_from(&trans)?, face);
+        }
         Ok(())
     }
 
@@ -259,7 +349,8 @@ impl PyRendererAgg {
             })
             .collect();
         let aa: Vec<bool> = antialiaseds.as_array().iter().map(|&v| v != 0).collect();
-        self.inner.draw_path_collection(
+        let Some(r) = self.agg()? else { return Ok(()) };
+        r.draw_path_collection(
             &gc,
             &trans_from(&master_transform)?,
             &paths,
@@ -282,7 +373,9 @@ impl PyRendererAgg {
         let a = image.as_array();
         let (h, w) = (a.shape()[0], a.shape()[1]);
         let data: Vec<u8> = a.iter().copied().collect();
-        self.inner.draw_text_image(&gc, &data, w, h, x, y);
+        if let Some(r) = self.agg()? {
+            r.draw_text_image(&gc, &data, w, h, x, y);
+        }
         Ok(())
     }
 
@@ -291,18 +384,104 @@ impl PyRendererAgg {
         let a = image.as_array();
         let (h, w) = (a.shape()[0], a.shape()[1]);
         let data: Vec<u8> = a.iter().copied().collect();
-        self.inner.draw_image(&gc, x, y, &data, w, h);
+        if let Some(r) = self.agg()? {
+            r.draw_image(&gc, x, y, &data, w, h);
+        }
         Ok(())
     }
 
-    fn clear(&mut self) {
-        self.inner.clear();
+    fn clear(&mut self) -> PyResult<()> {
+        self.r()?.clear();
+        Ok(())
     }
 
     fn buffer_rgba<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyArray3<u8>>> {
-        let (w, h) = (self.inner.width as usize, self.inner.height as usize);
-        let arr = numpy::PyArray1::from_slice(py, self.inner.buffer());
+        let r = self.rr()?;
+        let (w, h) = (r.agg.width as usize, r.agg.height as usize);
+        let arr = numpy::PyArray1::from_slice(py, r.agg.buffer());
         Ok(arr.reshape([h, w, 4])?)
+    }
+
+    #[getter]
+    fn width(&self) -> PyResult<f64> {
+        Ok(self.rr()?.width)
+    }
+
+    #[getter]
+    fn height(&self) -> PyResult<f64> {
+        Ok(self.rr()?.height)
+    }
+
+    #[getter]
+    fn dpi(&self) -> PyResult<f64> {
+        Ok(self.rr()?.dpi)
+    }
+
+    /// Whether drawing calls are ignored (`_draw_disabled`).
+    #[getter]
+    fn disabled(&self) -> PyResult<bool> {
+        Ok(self.rr()?.disabled)
+    }
+
+    /// Whether this proxy can still be used.
+    #[getter]
+    fn valid(&self) -> bool {
+        match &self.t {
+            Target::Owned(_) => true,
+            Target::Borrowed(_, alive) => alive.get(),
+        }
+    }
+
+    /// `RendererAgg.draw_text` (prop is the Rust font-properties tuple).
+    #[pyo3(signature = (gc, x, y, s, prop, angle, ismath=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text(&mut self, gc: &Bound<'_, PyDict>, x: f64, y: f64, s: &str, prop: &Bound<'_, PyAny>, angle: f64, ismath: bool) -> PyResult<()> {
+        let gc = gcstate_from(gc)?;
+        let fp = super::api::fontprops_from(prop)?;
+        self.r()?.draw_text(&gc, x, y, s, &fp, angle, ismath);
+        Ok(())
+    }
+
+    fn get_text_width_height_descent(&mut self, s: &str, prop: &Bound<'_, PyAny>, ismath: bool) -> PyResult<(f64, f64, f64)> {
+        let fp = super::api::fontprops_from(prop)?;
+        Ok(self.r()?.get_text_width_height_descent(s, &fp, ismath))
+    }
+
+    /// `_draw_text_glyphs_and_boxes`; glyphs are (font path, face index,
+    /// size, glyph index, slant, extend, dx, dy).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_glyphs_and_boxes(
+        &mut self,
+        gc: &Bound<'_, PyDict>,
+        x: f64,
+        y: f64,
+        angle: f64,
+        glyphs: Vec<(String, u32, f64, u32, f64, f64, f64, f64)>,
+        boxes: Vec<(f64, f64, f64, f64)>,
+    ) -> PyResult<()> {
+        let gc = gcstate_from(gc)?;
+        let mut fonts: Vec<std::sync::Arc<crate::font::FontData>> = Vec::new();
+        let mut keys: Vec<(String, u32)> = Vec::new();
+        let mut gd = Vec::with_capacity(glyphs.len());
+        for (path, index, size, gid, slant, extend, dx, dy) in glyphs {
+            let k = (path, index);
+            let fi = match keys.iter().position(|x| *x == k) {
+                Some(i) => i,
+                None => {
+                    let data = crate::mpl::fonts::load_font_data(&k.0, k.1)
+                        .ok_or_else(|| PyValueError::new_err(format!("cannot load font {}", k.0)))?;
+                    fonts.push(data);
+                    keys.push(k);
+                    fonts.len() - 1
+                }
+            };
+            gd.push(GlyphDraw { font: fi, size, gid, slant, extend, dx, dy });
+        }
+        let r = self.r()?;
+        if !r.disabled {
+            r.draw_text_glyphs_and_boxes(&gc, x, y, angle, &fonts, &gd, &boxes);
+        }
+        Ok(())
     }
 }
 

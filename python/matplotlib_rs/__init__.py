@@ -5,7 +5,7 @@ An object-oriented plotting library.
 A procedural interface is provided by the companion pyplot module,
 which may be imported directly, e.g.::
 
-    import matplotlib.pyplot as plt
+    import matplotlib_rs.pyplot as plt
 
 or using ipython::
 
@@ -896,7 +896,7 @@ def _rc_params_in_file(fname, transform=lambda x: x, fail_on_error=False):
     fail_on_error : bool, default: False
         Whether invalid entries should result in an exception or a warning.
     """
-    import matplotlib as mpl
+    import matplotlib_rs as mpl
     rc_temp = {}
     with _open_file_or_url(fname) as fd:
         try:
@@ -1583,4 +1583,23 @@ from .cm import _multivar_colormaps as multivar_colormaps  # noqa: E402
 from .cm import _bivar_colormaps as bivar_colormaps  # noqa: E402
 from . import _rcpush  # noqa: E402
 _rcpush.push_all(rcParams)
+
+
+def _dot_uses_fma():
+    import numpy as np
+    """Whether numpy's 3x3 ``np.dot`` uses fused multiply-adds (the Rust
+    transforms then compose matrices the same way)."""
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        a = rng.standard_normal((3, 3))
+        b = rng.standard_normal((3, 3))
+        r = np.dot(b, a)
+        for i in range(3):
+            for j in range(3):
+                if r[i, j] != b[i, 0] * a[0, j] + b[i, 1] * a[1, j] + b[i, 2] * a[2, j]:
+                    return True
+    return False
+
+
+_mplrs.set_dot_uses_fma(_dot_uses_fma())
 from ._hook import install, uninstall  # noqa: E402

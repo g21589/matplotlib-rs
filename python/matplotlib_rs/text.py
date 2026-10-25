@@ -20,6 +20,7 @@ from . import _api, artist, cbook, _docstring, colors as mcolors
 from .artist import Artist
 from .font_manager import FontProperties, fontManager, get_font
 from .patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+from .textpath import TextPath, TextToPath  # noqa # Logically located here
 from .transforms import (
     Affine2D, Bbox, BboxBase, BboxTransformTo, IdentityTransform, Transform)
 
@@ -352,8 +353,8 @@ class Text(Artist):
         std_x = x - bb.x0
         return (np.abs(size_accum - std_x)).argmin()
 
-    def _rs_sync(self):
-        """Push this text's state into its Rust twin."""
+    def _rs_props(self):
+        """This text's state as a Rust `set_many` dict."""
         d = _rs_base_props(self, {})
         try:
             x = float(self.convert_xunits(self._x))
@@ -390,7 +391,7 @@ class Text(Artist):
             d["bbox"] = bp._h
         else:
             d["bbox"] = None
-        self._h.set_many(d)
+        return d
 
     def get_rotation(self):
         """Return the text angle in degrees in the range [0, 360)."""
@@ -952,7 +953,7 @@ class Text(Artist):
             clean_line, ismath = self._preprocess_math(line)
 
             if self.get_path_effects():
-                from matplotlib.patheffects import PathEffectRenderer
+                from matplotlib_rs.patheffects import PathEffectRenderer
                 textrenderer = PathEffectRenderer(self.get_path_effects(), renderer)
             else:
                 textrenderer = renderer
@@ -1758,7 +1759,7 @@ class _AnnotationBase:
 
         if isinstance(coords, tuple):
             xcoord, ycoord = coords
-            from matplotlib.transforms import blended_transform_factory
+            from matplotlib_rs.transforms import blended_transform_factory
             tr1 = self._get_xy_transform(renderer, xcoord)
             tr2 = self._get_xy_transform(renderer, ycoord)
             return blended_transform_factory(tr1, tr2)
@@ -1787,7 +1788,7 @@ class _AnnotationBase:
         if coords == 'data':
             return self.axes.transData
         elif coords == 'polar':
-            from matplotlib.projections import PolarAxes
+            from matplotlib_rs.projections import PolarAxes
             return PolarAxes.PolarTransform() + self.axes.transData
 
         try:
@@ -1885,7 +1886,7 @@ class _AnnotationBase:
             If the annotation is draggable, the corresponding
             `.DraggableAnnotation` helper is returned.
         """
-        from matplotlib.offsetbox import DraggableAnnotation
+        from matplotlib_rs.offsetbox import DraggableAnnotation
         is_draggable = self._draggable is not None
 
         # if state is None we'll toggle
@@ -2308,3 +2309,54 @@ or callable, default: value of *xycoords*
 
 
 _docstring.interpd.register(Annotation=Annotation.__init__.__doc__)
+
+
+class _RsText(artist._RsOwned, artist._RsOwnedTransformMixin, Text):
+    """A `Text` view of a text owned by the Rust model (tick labels, ...)."""
+
+    @classmethod
+    def _rs_blank(cls):
+        self = cls()
+        artist._DIRTY.discard(self)
+        return self
+
+    def _rs_read(self, g):
+        axes, fig = artist._rs_owner_axes_fig(self._rs_owner)
+        if fig is not None and self.figure is None:
+            self.set_figure(fig)
+        self._text = g("text")
+        self._x = g("x")
+        self._y = g("y")
+        self._color = g("color")
+        fam, style, variant, weight, stretch, size, fname, mff = g("fontproperties")
+        self._fontproperties = FontProperties(
+            family=fam, style=style, variant=variant, weight=weight,
+            stretch=stretch, size=size, fname=fname, math_fontfamily=mff)
+        self._horizontalalignment = g("ha")
+        self._verticalalignment = g("va")
+        self._multialignment = g("multialignment")
+        self._rotation = g("rotation")
+        self._rotation_mode = g("rotation_mode")
+        ls = g("linespacing")
+        self._linespacing = "normal" if ls is None else ls
+        self._visible = g("visible")
+        self._alpha = g("alpha")
+        self.zorder = g("zorder")
+        self._label = g("label")
+        self._usetex = g("usetex")
+        self._parse_math = g("parse_math")
+        self._antialiased = g("antialiased")
+        self._wrap = g("wrap")
+        self._clipon = g("clip_on")
+        self._in_layout = g("in_layout")
+
+    def get_window_extent(self, renderer=None, dpi=None):
+        if not self.get_visible():
+            return Bbox.unit()
+        artist._sync_dirty()
+        fig = self.get_figure(root=True)
+        owner = self._rs_owner
+        if dpi is None or fig is None or dpi == fig.dpi:
+            return Bbox.from_extents(*owner._rs.text_extent(self._h))
+        with cbook._setattr_cm(fig, dpi=dpi):
+            return Bbox.from_extents(*owner._rs.text_extent(self._h))

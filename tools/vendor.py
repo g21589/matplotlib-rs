@@ -1,0 +1,129 @@
+"""Vendor pure-Python modules of matplotlib 3.11 into matplotlib_rs.
+
+Usage: python tools/vendor.py [module.py ...]   (default: all of MODULES)
+
+Imports of ``matplotlib`` are rewritten to ``matplotlib_rs`` and the small
+adaptations listed in PATCHES are applied (each patch must match exactly
+once, so an upstream change is noticed instead of silently ignored).
+Modules not listed here (artist, lines, text, ...) were vendored earlier and
+edited in place; they are not touched by this script.
+"""
+import pathlib
+import re
+import sys
+
+import matplotlib
+
+SRC = pathlib.Path(matplotlib.__file__).parent
+DST = pathlib.Path(__file__).resolve().parent.parent / "python" / "matplotlib_rs"
+HEADER = ("# Vendored from matplotlib 3.11 (see licenses/LICENSE_MATPLOTLIB), "
+          "adapted for matplotlib_rs.\n")
+
+MODULES = [
+    "_afm.py", "_animation_data.py", "_blocking_input.py", "_constrained_layout.py",
+    "_internal_utils.py", "_layoutgrid.py", "_mathtext.py", "_mathtext_data.py",
+    "_pylab_helpers.py", "_style_helpers.py", "_text_helpers.py", "_tight_bbox.py",
+    "_tight_layout.py", "_type1font.py", "animation.py", "backend_bases.py",
+    "backend_managers.py", "backend_tools.py", "category.py", "collections.py",
+    "colorbar.py", "colorizer.py", "container.py", "contour.py", "dates.py",
+    "dviread.py", "figure.py", "gridspec.py", "image.py", "inset.py",
+    "layout_engine.py", "legend.py", "legend_handler.py", "mathtext.py",
+    "offsetbox.py", "patheffects.py", "pylab.py", "pyplot.py", "quiver.py",
+    "sankey.py", "spines.py", "stackplot.py", "streamplot.py", "table.py",
+    "texmanager.py", "textpath.py", "typing.py", "units.py", "widgets.py",
+    "axes/__init__.py", "axes/_axes.py", "axes/_base.py", "axes/_secondary_axes.py",
+    "backends/__init__.py", "backends/registry.py",
+    "projections/__init__.py", "projections/geo.py", "projections/polar.py",
+    "style/__init__.py", "style/core.py",
+    "tri/__init__.py", "tri/_triangulation.py", "tri/_tricontour.py",
+    "tri/_trifinder.py", "tri/_triinterpolate.py", "tri/_tripcolor.py",
+    "tri/_triplot.py", "tri/_trirefine.py", "tri/_tritools.py",
+]
+
+PATCHES = {
+    "backend_bases.py": [
+        # file formats are served by matplotlib_rs' own backends
+        ("_default_backends = {", "_default_backends = {  # matplotlib_rs backends"),
+        ('if mod.startswith(("matplotlib.", "mpl_toolkits.")):',
+         'if mod.startswith(("matplotlib.", "matplotlib_rs.", "mpl_toolkits.")):'),
+        ('sys.modules.get("matplotlib.pyplot")', 'sys.modules.get("matplotlib_rs.pyplot")', 2),
+        (None, "\n\n_default_backends = {k: v.replace('matplotlib.', 'matplotlib_rs.', 1)\n"
+               "                     for k, v in _default_backends.items()}\n"),
+    ],
+    "axes/_base.py": [
+        # Rust-backed state and drawing (see axes/_base_rs.py)
+        (None, "\n\nfrom ._base_rs import _patch_axes_base  # noqa: E402\n"
+               "_patch_axes_base(_AxesBase)\n"),
+    ],
+    "figure.py": [
+        (None, "\n\nfrom ._figure_rs import _patch_figure  # noqa: E402\n"
+               "_patch_figure(FigureBase, Figure, SubFigure)\n"),
+    ],
+    "spines.py": [
+        (None, "\n\nfrom ._spines_rs import _patch_spines  # noqa: E402\n"
+               "_patch_spines(Spine)\n"),
+    ],
+    "projections/__init__.py": [
+        # the 3D toolkit imports matplotlib itself; not supported yet
+        ('''try:
+    from mpl_toolkits.mplot3d import Axes3D
+except Exception:
+    import warnings
+    warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+                  "Matplotlib being installed (e.g. as a system package and as a pip "
+                  "package). As a result, the 3D projection is not available.")
+    Axes3D = None''', "Axes3D = None"),
+    ],
+    "backends/registry.py": [
+        ('''        return (backend[9:] if backend.startswith("module://")
+                else f"matplotlib.backends.backend_{backend}")''',
+         '''        if backend.startswith("module://"):
+            return backend[9:]
+        # matplotlib_rs renders with its Rust Agg port; interactive and
+        # vector backends fall back to it.
+        if backend in _RS_BACKENDS:
+            return f"{__package__}.backend_{backend}"
+        return f"{__package__}.backend_agg"'''),
+        ("class BackendFilter(Enum):", '_RS_BACKENDS = {"agg"}\n\n\nclass BackendFilter(Enum):'),
+    ],
+}
+
+
+def rewrite_imports(s):
+    s = re.sub(r"^(\s*)import matplotlib as mpl\b", r"\1import matplotlib_rs as mpl", s, flags=re.M)
+    s = re.sub(r"^(\s*)import matplotlib(\s*(#.*)?)$", r"\1import matplotlib_rs as matplotlib\2", s,
+               flags=re.M)
+    s = re.sub(r"^(\s*)from matplotlib((?:\.[\w]+)*) import", r"\1from matplotlib_rs\2 import", s,
+               flags=re.M)
+    s = re.sub(r"^(\s*)import matplotlib((?:\.[\w]+)+) as (\w+)", r"\1import matplotlib_rs\2 as \3", s,
+               flags=re.M)
+    # bare "import matplotlib.x" (side-effect imports, e.g. unit converters)
+    s = re.sub(r"^(\s*)import matplotlib((?:\.[\w]+)+)(\s*(#.*)?)$", r"\1import matplotlib_rs\2\3", s,
+               flags=re.M)
+    return s
+
+
+def vendor(rel):
+    src = (SRC / rel).read_text()
+    s = HEADER + rewrite_imports(src)
+    for old, new, *count in PATCHES.get(rel, []):
+        if old is None:
+            s += new
+            continue
+        n = s.count(old)
+        if n != (count[0] if count else 1):
+            raise SystemExit(f"{rel}: patch matches {n} times:\n{old[:200]}")
+        s = s.replace(old, new)
+    out = DST / rel
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(s)
+
+
+def main():
+    for rel in sys.argv[1:] or MODULES:
+        vendor(rel)
+        print("vendored", rel)
+
+
+if __name__ == "__main__":
+    main()

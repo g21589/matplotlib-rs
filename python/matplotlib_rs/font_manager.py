@@ -1214,8 +1214,8 @@ class FontManager:
 
     Example usage::
 
-        import matplotlib.pyplot as plt
-        from matplotlib import font_manager
+        import matplotlib_rs.pyplot as plt
+        from matplotlib_rs import font_manager
 
         font_dirs = ["/resources/fonts"]  # The path to the custom font file.
         font_files = font_manager.findSystemFonts(fontpaths=font_dirs)

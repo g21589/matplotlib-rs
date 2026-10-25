@@ -1,6 +1,6 @@
 //! Port of `matplotlib.figure.Figure` (drawing, subplots, savefig).
 
-use super::artist::{shared, ClipCtx, Lock, Shared, TSpec, TransCtx};
+use super::artist::{shared, ClipCtx, ExtArtist, Lock, Shared, TSpec, TransCtx};
 use super::axes::{Axes, FigCtx, GridSpec, SharedLims, SubplotParams, SubplotSpec};
 use super::colors::ColorSpec;
 use super::legend::Legend;
@@ -24,6 +24,9 @@ pub enum FigChild {
     Line(Shared<Line2D>),
     Patch(Shared<Patch>),
     Legend(Shared<Legend>),
+    /// An external artist and its `get_children` category (0 artists,
+    /// 2 lines, 3 patches, 4 texts, 5 images, 6 legends; axes are 1).
+    Ext(std::sync::Arc<dyn ExtArtist>, u8),
 }
 
 #[derive(Debug)]
@@ -46,9 +49,17 @@ pub struct Figure {
     pub visible: bool,
     /// `transFigure._boxout` override (bbox_inches adjustment)
     pub boxout: Option<Bbox>,
+    /// identity of the owning handle (set by the Python layer; 0 if none)
+    pub key: usize,
 }
 
 impl Figure {
+    /// Whether any external (Python-drawn) artist is in the figure.
+    pub fn has_ext(&self) -> bool {
+        self.children.iter().any(|c| matches!(c, FigChild::Ext(..)))
+            || self.axes.iter().any(|a| a.children.iter().any(|c| matches!(c, super::axes::Child::Ext(_))))
+    }
+
     pub fn new(figsize: Option<(f64, f64)>, dpi: Option<f64>, facecolor: Option<ColorSpec>, edgecolor: Option<ColorSpec>, linewidth: f64, frameon: Option<bool>) -> Figure {
         let r = rc();
         let fs = r.num_list("figure.figsize");
@@ -88,6 +99,7 @@ impl Figure {
             layout,
             visible: true,
             boxout: None,
+            key: 0,
         }
     }
 
@@ -354,41 +366,43 @@ impl Figure {
         }
         let fig = self.ctx();
         let tc = self.trans_ctx();
+        let _snap = self.publish_snapshot();
         let clip = ClipCtx { axes_bbox: None, trans: &tc };
         self.patch.draw(renderer, &tc, &clip);
-        // artists sorted by zorder: [*artists, *axes, *lines, *patches, *texts, *legends]
+        // artists sorted by zorder, in `get_children` order:
+        // [*artists, *axes, *lines, *patches, *texts, *images, *legends]
         enum Item {
             Axes(usize),
             Child(usize),
         }
-        let mut items: Vec<(f64, usize, Item)> = Vec::new();
-        let mut seq = 0;
-        for (i, c) in self.children.iter().enumerate() {
-            if let FigChild::Patch(_) = c {
-                let _ = i;
-            }
-        }
-        for (i, ax) in self.axes.iter().enumerate() {
-            items.push((ax.base.zorder, seq, Item::Axes(i)));
-            seq += 1;
-        }
         let order = |c: &FigChild| match c {
-            FigChild::Line(_) => 1,
-            FigChild::Patch(_) => 2,
-            FigChild::Text(_) => 3,
-            FigChild::Legend(_) => 4,
+            FigChild::Line(_) => 2,
+            FigChild::Patch(_) => 3,
+            FigChild::Text(_) => 4,
+            FigChild::Legend(_) => 6,
+            FigChild::Ext(_, cat) => *cat,
         };
-        let mut ch: Vec<(usize, usize)> = self.children.iter().enumerate().map(|(i, c)| (order(c), i)).collect();
-        ch.sort_by_key(|x| x.0);
-        for (_, i) in ch {
-            let z = match &self.children[i] {
-                FigChild::Text(t) => t.lk().base.zorder,
-                FigChild::Line(l) => l.lk().base.zorder,
-                FigChild::Patch(p) => p.lk().base.zorder,
-                FigChild::Legend(l) => l.lk().zorder,
+        let mut keyed: Vec<(u8, usize, Item)> = Vec::new();
+        for (i, c) in self.children.iter().enumerate() {
+            keyed.push((order(c), i, Item::Child(i)));
+        }
+        for i in 0..self.axes.len() {
+            keyed.push((1, i, Item::Axes(i)));
+        }
+        keyed.sort_by_key(|k| (k.0, k.1));
+        let mut items: Vec<(f64, usize, Item)> = Vec::new();
+        for (seq, (_, _, it)) in keyed.into_iter().enumerate() {
+            let z = match &it {
+                Item::Axes(i) => self.axes[*i].base.zorder,
+                Item::Child(i) => match &self.children[*i] {
+                    FigChild::Text(t) => t.lk().base.zorder,
+                    FigChild::Line(l) => l.lk().base.zorder,
+                    FigChild::Patch(p) => p.lk().base.zorder,
+                    FigChild::Legend(l) => l.lk().zorder,
+                    FigChild::Ext(e, _) => e.zorder(),
+                },
             };
-            items.push((z, seq, Item::Child(i)));
-            seq += 1;
+            items.push((z, seq, it));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));
         for (_, _, it) in items {
@@ -401,6 +415,11 @@ impl Figure {
                     FigChild::Line(l) => l.lk().draw(renderer, &tc, &clip, None, false),
                     FigChild::Patch(p) => p.lk().draw(renderer, &tc, &clip),
                     FigChild::Legend(_) => {}
+                    FigChild::Ext(e, _) => {
+                        if e.visible() {
+                            e.draw(renderer)
+                        }
+                    }
                 },
             }
         }
@@ -482,16 +501,27 @@ impl Figure {
     pub fn get_tightbbox(&mut self, renderer: &mut Renderer) -> Bbox {
         let fig = self.ctx();
         let tc = self.trans_ctx();
+        let _snap = self.publish_snapshot();
         let mut bb: Vec<Bbox> = Vec::new();
         for c in &self.children {
-            if let FigChild::Text(t) = c {
-                let t = t.lk();
-                if t.base.visible && t.base.in_layout {
-                    let b = t.get_window_extent(renderer, &tc);
-                    if b.width() != 0.0 || b.height() != 0.0 {
-                        bb.push(b);
+            match c {
+                FigChild::Text(t) => {
+                    let t = t.lk();
+                    if t.base.visible && t.base.in_layout {
+                        let b = t.get_window_extent(renderer, &tc);
+                        if b.width() != 0.0 || b.height() != 0.0 {
+                            bb.push(b);
+                        }
                     }
                 }
+                FigChild::Ext(e, _) => {
+                    if let Some(b) = e.tightbbox(renderer, false) {
+                        if b.width() != 0.0 || b.height() != 0.0 {
+                            bb.push(b);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         for ax in self.axes.iter_mut() {
@@ -508,5 +538,91 @@ impl Figure {
         let u = if isfinite.is_empty() { fb } else { Bbox::union(&isfinite) };
         let inv = fig.dpi_scale.inverted();
         u.transformed_bbox(&inv)
+    }
+}
+
+/// Read-only figure state published while the figure is drawn, so that
+/// external (Python) artists can query transforms and limits without
+/// re-entering the locked figure.
+#[derive(Clone, Debug)]
+pub struct AxesSnapshot {
+    pub uid: u64,
+    pub tc: TransCtx,
+    pub bbox: Bbox,
+    pub view_lim: Bbox,
+    pub data_lim: super::axes::DataLim,
+    pub position: Bbox,
+    pub original_position: Bbox,
+}
+
+#[derive(Clone, Debug)]
+pub struct DrawSnapshot {
+    /// `Figure::key` of the figure being drawn
+    pub key: usize,
+    pub fig: FigCtx,
+    pub tc: TransCtx,
+    pub canvas: (f64, f64),
+    pub figsize: (f64, f64),
+    pub axes: Vec<AxesSnapshot>,
+}
+
+impl DrawSnapshot {
+    pub fn axes(&self, uid: u64) -> Option<&AxesSnapshot> {
+        self.axes.iter().find(|a| a.uid == uid)
+    }
+}
+
+thread_local! {
+    static SNAPSHOTS: std::cell::RefCell<Vec<std::rc::Rc<DrawSnapshot>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The innermost published snapshot, if a figure is being drawn.
+pub fn current_snapshot() -> Option<std::rc::Rc<DrawSnapshot>> {
+    SNAPSHOTS.with(|s| s.borrow().last().cloned())
+}
+
+/// The snapshot of the figure with `key` if it is being drawn by this thread.
+pub fn snapshot_for(key: usize) -> Option<std::rc::Rc<DrawSnapshot>> {
+    if key == 0 {
+        return None;
+    }
+    SNAPSHOTS.with(|s| s.borrow().iter().rev().find(|x| x.key == key).cloned())
+}
+
+pub struct SnapshotGuard;
+
+impl Drop for SnapshotGuard {
+    fn drop(&mut self) {
+        SNAPSHOTS.with(|s| {
+            s.borrow_mut().pop();
+        });
+    }
+}
+
+impl Figure {
+    pub fn snapshot(&self) -> DrawSnapshot {
+        let fig = self.ctx();
+        let axes = self
+            .axes
+            .iter()
+            .map(|a| AxesSnapshot {
+                uid: a.uid,
+                tc: a.trans_ctx(&fig),
+                bbox: a.bbox(&fig),
+                view_lim: a.view_lim,
+                data_lim: a.data_lim,
+                position: a.position,
+                original_position: a.original_position,
+            })
+            .collect();
+        let (w, h) = self.canvas_size();
+        DrawSnapshot { key: self.key, tc: self.trans_ctx(), fig, canvas: (w as f64, h as f64), figsize: self.figsize, axes }
+    }
+
+    /// Publish the current state for external artists until the guard drops.
+    pub fn publish_snapshot(&self) -> SnapshotGuard {
+        let s = std::rc::Rc::new(self.snapshot());
+        SNAPSHOTS.with(|v| v.borrow_mut().push(s));
+        SnapshotGuard
     }
 }

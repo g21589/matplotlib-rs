@@ -77,6 +77,40 @@ fn tspec_from(obj: &Bound<'_, PyAny>) -> PyResult<TSpec> {
     })
 }
 
+/// The Python form of a transform spec (inverse of `tspec_from`, plus the
+/// read-only forms used by Rust-owned artists).
+pub fn tspec_to<'py>(py: Python<'py>, t: &TSpec) -> PyResult<Bound<'py, PyAny>> {
+    use crate::mpl::artist::Which;
+    let w = |w: &Which| match w {
+        Which::Grid => "grid",
+        Which::Tick1 => "tick1",
+        Which::Tick2 => "tick2",
+    };
+    Ok(match t {
+        TSpec::Identity => "identity".into_pyobject(py)?.into_any(),
+        TSpec::Data => "data".into_pyobject(py)?.into_any(),
+        TSpec::Axes => "axes".into_pyobject(py)?.into_any(),
+        TSpec::Figure => "figure".into_pyobject(py)?.into_any(),
+        TSpec::DpiScale => "dpi".into_pyobject(py)?.into_any(),
+        TSpec::XAxis(x) => ("xaxis", w(x)).into_pyobject(py)?.into_any(),
+        TSpec::YAxis(x) => ("yaxis", w(x)).into_pyobject(py)?.into_any(),
+        TSpec::XText1(p) => ("xtext1", *p).into_pyobject(py)?.into_any(),
+        TSpec::XText2(p) => ("xtext2", *p).into_pyobject(py)?.into_any(),
+        TSpec::YText1(p) => ("ytext1", *p).into_pyobject(py)?.into_any(),
+        TSpec::YText2(p) => ("ytext2", *p).into_pyobject(py)?.into_any(),
+        TSpec::Title(p) => ("title", *p).into_pyobject(py)?.into_any(),
+        TSpec::Affine(m) => ("affine", vec![m[0].to_vec(), m[1].to_vec()]).into_pyobject(py)?.into_any(),
+        TSpec::ScaledTranslation(x, y) => ("scaled_translation", *x, *y).into_pyobject(py)?.into_any(),
+        TSpec::Then(a, b) => ("then", tspec_to(py, a)?, tspec_to(py, b)?).into_pyobject(py)?.into_any(),
+        TSpec::Blend(a, b) => ("blend", tspec_to(py, a)?, tspec_to(py, b)?).into_pyobject(py)?.into_any(),
+        TSpec::Fixed(tr) => {
+            let m = tr.get_affine();
+            ("affine", vec![m[0].to_vec(), m[1].to_vec()]).into_pyobject(py)?.into_any()
+        }
+        TSpec::Spine(i) => ("spine", *i).into_pyobject(py)?.into_any(),
+    })
+}
+
 fn marker_from(obj: &Bound<'_, PyAny>, fs: FillStyle) -> PyResult<MarkerStyle> {
     if obj.is_none() {
         return Ok(MarkerStyle::new(MarkerSpec::Named("none".into()), fs));
@@ -269,6 +303,7 @@ fn line_get<'py>(py: Python<'py>, l: &mut Line2D, name: &str) -> PyResult<Bound<
         .into_any(),
         "dash_pattern" => (l.dash_pattern.0, l.dash_pattern.1.clone()).into_pyobject(py)?.into_any(),
         "clip_on" => l.base.clip_on.into_pyobject(py)?.to_owned().into_any(),
+        "transform" => tspec_to(py, &l.base.transform)?,
         _ => return Err(PyKeyError::new_err(format!("Line2D has no property {name:?}"))),
     })
 }

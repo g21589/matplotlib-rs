@@ -79,7 +79,7 @@ class ColormapRegistry(Mapping):
 
     Read access uses a dict-like interface mapping names to `.Colormap`\s::
 
-        import matplotlib as mpl
+        import matplotlib_rs as mpl
         cmap = mpl.colormaps['viridis']
 
     Returned `.Colormap`\s are copies, so that their modification does not
@@ -91,7 +91,7 @@ class ColormapRegistry(Mapping):
 
     To get a list of all registered colormaps, you can do::
 
-        from matplotlib import colormaps
+        from matplotlib_rs import colormaps
         list(colormaps)
     """
     def __init__(self, cmaps):

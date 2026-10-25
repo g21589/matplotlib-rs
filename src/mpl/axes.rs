@@ -1,6 +1,6 @@
 //! Port of `matplotlib.axes._base._AxesBase` (and the Spines).
 
-use super::artist::{shared, ArtistBase, ClipBoxSpec, ClipCtx, Lock, Shared, SpinePosition, TSpec, TransCtx};
+use super::artist::{shared, ArtistBase, ExtArtist, ClipBoxSpec, ClipCtx, Lock, Shared, SpinePosition, TSpec, TransCtx};
 use super::axis::{Axis, AxisCtx, GridKw, TickKw};
 use super::collections::Collection;
 use super::colors::ColorSpec;
@@ -26,6 +26,7 @@ pub enum Child {
     Text(Shared<Text>),
     Collection(Shared<Collection>),
     Image(Shared<AxesImage>),
+    Ext(std::sync::Arc<dyn ExtArtist>),
 }
 
 impl Child {
@@ -36,6 +37,7 @@ impl Child {
             Child::Text(a) => a.lk().base.zorder,
             Child::Collection(a) => a.lk().base.zorder,
             Child::Image(a) => a.lk().base.zorder,
+            Child::Ext(e) => e.zorder(),
         }
     }
 
@@ -46,6 +48,7 @@ impl Child {
             (Child::Text(a), Child::Text(b)) => std::sync::Arc::ptr_eq(a, b),
             (Child::Collection(a), Child::Collection(b)) => std::sync::Arc::ptr_eq(a, b),
             (Child::Image(a), Child::Image(b)) => std::sync::Arc::ptr_eq(a, b),
+            (Child::Ext(a), Child::Ext(b)) => a.ident() == b.ident(),
             _ => false,
         }
     }
@@ -64,6 +67,7 @@ impl Child {
                 let i = i.lk();
                 (i.sticky_x.clone(), i.sticky_y.clone())
             }
+            Child::Ext(e) => e.sticky_edges(),
             _ => (Vec::new(), Vec::new()),
         }
     }
@@ -1103,7 +1107,7 @@ impl Axes {
                     let e = im.lk().get_extent();
                     self.update_datalim(&[[e.0, e.2], [e.1, e.3]], true, true);
                 }
-                Child::Text(_) => {}
+                Child::Text(_) | Child::Ext(_) => {}
             }
         }
     }
@@ -1278,6 +1282,11 @@ impl Axes {
                     Child::Text(t) => t.lk().draw(renderer, &tc, &clip),
                     Child::Collection(cc) => cc.lk().draw(renderer, &tc, &clip),
                     Child::Image(im) => im.lk().draw(renderer, &tc, &clip),
+                    Child::Ext(e) => {
+                        if e.visible() {
+                            e.draw(renderer)
+                        }
+                    }
                 },
                 Item::Spine(i) => {
                     let view = self.view_lim;
@@ -1504,6 +1513,7 @@ fn child_tightbbox(c: &Child, renderer: &mut Renderer, tc: &TransCtx, _axes_clip
             let bb = t.get_window_extent(renderer, tc);
             Some(clip_extent(bb, &t.base, tc, _axes_clip))
         }
+        Child::Ext(e) => e.tightbbox(renderer, true),
         // lines, patches and collections clipped to the axes are fully
         // clipped (their extents never exceed the axes box)
         _ => None,

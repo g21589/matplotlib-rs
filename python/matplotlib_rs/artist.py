@@ -156,6 +156,118 @@ def _rs_base_props(a, d):
     return d
 
 
+_MISSING = object()
+
+
+def _rs_same(a, b):
+    """Whether two `set_many` values are equal (pushing would be a no-op)."""
+    if a is b:
+        return not hasattr(a, "set_many")  # Rust handles may have changed inside
+    if isinstance(a, np.ndarray) or isinstance(b, np.ndarray):
+        try:
+            return np.array_equal(a, b, equal_nan=True)
+        except TypeError:
+            return np.array_equal(a, b)
+    try:
+        return bool(a == b)
+    except Exception:
+        return False
+
+
+class _RsOwned:
+    """
+    Mixin for Python views of artists owned by the Rust model (tick labels,
+    tick and grid lines, axis labels, titles, ...).
+
+    The view mirrors the Rust state when it is created (`_rs_refresh`) and
+    afterwards only pushes back the properties changed from Python, so Rust
+    keeps managing everything else (tick positions, label texts, ...).
+    """
+    _rs_snap = None
+    _rs_owner = None  # the Python Axes or Figure whose Rust model holds it
+
+    @classmethod
+    def _from_rs(cls, h, owner=None):
+        self = cls._rs_blank()
+        self._rs_owner = owner
+        self.__dict__["_h"] = h
+        self._rs_refresh()
+        return self
+
+    def _rs_refresh(self):
+        """Re-read the Rust state (after pushing pending Python changes)."""
+        if self in _DIRTY:
+            _DIRTY.discard(self)
+            self._rs_sync()
+        h = self.__dict__.pop("_h")
+        try:
+            self._rs_read(h.get)
+        finally:
+            self.__dict__["_h"] = h
+        self._rs_snap = self._rs_props()
+
+    def _rs_sync(self):
+        d = self._rs_props()
+        snap = self._rs_snap
+        if snap is not None:
+            changed = {k: v for k, v in d.items()
+                       if not _rs_same(snap.get(k, _MISSING), v)}
+        else:
+            changed = d
+        self._rs_snap = d
+        if changed:
+            self._h.set_many(changed)
+
+
+def _rs_transform_from_spec(spec, axes, figure):
+    """A Python transform equivalent to a Rust transform spec."""
+    from . import transforms as mtransforms
+    if isinstance(spec, str):
+        if spec == "identity":
+            return mtransforms.IdentityTransform()
+        if spec == "data":
+            return axes.transData
+        if spec == "axes":
+            return axes.transAxes
+        if spec == "figure":
+            return figure.transFigure
+        if spec == "dpi":
+            return figure.dpi_scale_trans
+        raise ValueError(spec)
+    kind = spec[0]
+    if kind == "xaxis":
+        return axes.get_xaxis_transform(which=spec[1])
+    if kind == "yaxis":
+        return axes.get_yaxis_transform(which=spec[1])
+    if kind == "xtext1":
+        return axes.get_xaxis_text1_transform(spec[1])[0]
+    if kind == "xtext2":
+        return axes.get_xaxis_text2_transform(spec[1])[0]
+    if kind == "ytext1":
+        return axes.get_yaxis_text1_transform(spec[1])[0]
+    if kind == "ytext2":
+        return axes.get_yaxis_text2_transform(spec[1])[0]
+    if kind == "title":
+        return axes.transAxes + mtransforms.ScaledTranslation(
+            0, spec[1] / 72, figure.dpi_scale_trans)
+    if kind == "affine":
+        m = np.eye(3)
+        m[:2] = spec[1]
+        return mtransforms.Affine2D(m)
+    if kind == "scaled_translation":
+        return mtransforms.ScaledTranslation(spec[1], spec[2], figure.dpi_scale_trans)
+    if kind == "then":
+        return (_rs_transform_from_spec(spec[1], axes, figure)
+                + _rs_transform_from_spec(spec[2], axes, figure))
+    if kind == "blend":
+        return mtransforms.blended_transform_factory(
+            _rs_transform_from_spec(spec[1], axes, figure),
+            _rs_transform_from_spec(spec[2], axes, figure))
+    if kind == "spine":
+        return axes.spines[("left", "right", "bottom", "top")[spec[1]]].get_spine_transform()
+    raise ValueError(spec)
+
+
 class Artist:
     """
     Abstract base class for objects that render into a FigureCanvas.
@@ -278,6 +390,36 @@ Supported properties are
 
     # -- matplotlib_rs: mirror properties into the Rust artist -------------
     _h = None  # the Rust handle (set by subclasses)
+
+    def _rs_props(self):
+        return _rs_base_props(self, {})
+
+    def _rs_sync(self):
+        """Push this artist's state into its Rust twin."""
+        self._h.set_many(self._rs_props())
+
+    # Called by the Rust core for artists it does not draw itself; *target*
+    # is the renderer of the figure being drawn.
+    def _rs_draw(self, target):
+        from .backends.backend_agg import RendererAgg
+        self.draw(RendererAgg._for_target(target))
+
+    def _rs_sticky_edges(self):
+        se = self._sticky_edges
+        if se is None:
+            return ([], [])
+        return ([float(v) for v in se.x], [float(v) for v in se.y])
+
+    def _rs_tightbbox(self, target, for_axes):
+        if not self.get_visible() or not self.get_in_layout():
+            return None
+        if for_axes and self._fully_clipped_to_axes():
+            return None
+        from .backends.backend_agg import RendererAgg
+        bb = self.get_tightbbox(RendererAgg._for_target(target))
+        if bb is None:
+            return None
+        return tuple(map(float, bb.extents))
 
     def _push(self, name, value):
         h = self.__dict__.get("_h")
@@ -2028,3 +2170,22 @@ def kwdoc(artist):
 # We defer this to the end of them module, because it needs ArtistInspector
 # to be defined.
 Artist._update_set_signature_and_docstring()
+
+
+def _rs_owner_axes_fig(owner):
+    """(axes, figure) of the owner of a Rust-owned artist view."""
+    if owner is None:
+        return None, None
+    if hasattr(owner, "transAxes"):
+        return owner, owner.get_figure(root=False)
+    return None, owner
+
+
+class _RsOwnedTransformMixin:
+    """`get_transform` reads the transform the Rust model uses."""
+
+    def get_transform(self):
+        if self._transformSet or self.__dict__.get("_h") is None:
+            return Artist.get_transform(self)
+        axes, fig = _rs_owner_axes_fig(self._rs_owner)
+        return _rs_transform_from_spec(self._h.get("transform"), axes, fig)

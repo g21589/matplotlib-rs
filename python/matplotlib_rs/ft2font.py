@@ -1,5 +1,6 @@
 """Minimal ``matplotlib.ft2font`` replacement backed by the Rust font engine."""
 from enum import Flag, IntEnum, IntFlag
+from typing import NamedTuple
 
 from . import _mplrs
 
@@ -98,3 +99,16 @@ def _get_sfnt_table(self, name):
 
 
 FT2Font.get_sfnt_table = _get_sfnt_table
+
+# type aliases used in annotations of the vendored modules
+CharacterCodeType = int
+GlyphIndexType = int
+
+
+class LayoutItem(NamedTuple):
+    ft_object: "FT2Font"
+    char: str
+    glyph_index: int
+    x: float
+    y: float
+    prev_kern: float
