@@ -1489,7 +1489,16 @@ impl PyAxes {
         Some((s, i))
     }
 
+    /// This axes if it is a child axes lent to the Python draw of its parent.
+    fn lent(&self) -> Option<crate::mpl::figure::LentAxes> {
+        crate::mpl::figure::lent_take(Arc::as_ptr(&self.fig) as usize, self.uid)
+    }
+
     fn with<R>(&self, f: impl FnOnce(&mut Axes, &crate::mpl::axes::FigCtx) -> R) -> PyResult<R> {
+        if let Some(mut l) = self.lent() {
+            let ctx = l.fig.clone();
+            return Ok(f(l.axes(), &ctx));
+        }
         let mut fig = self.lk();
         let ctx = fig.ctx();
         let a = axes_mut(&mut fig, self.uid)?;
@@ -1497,6 +1506,12 @@ impl PyAxes {
     }
 
     fn unstaled<R>(&self, f: impl FnOnce(&mut Axes, &crate::mpl::axes::FigCtx) -> R) -> PyResult<R> {
+        if let Some(mut l) = self.lent() {
+            let ctx = l.fig.clone();
+            let a = l.axes();
+            a.unstale_viewlim(&ctx);
+            return Ok(f(a, &ctx));
+        }
         let mut fig = self.lk();
         if let Some(i) = fig.axes_index(self.uid) {
             fig.unstale_viewlim(i);
@@ -1507,6 +1522,9 @@ impl PyAxes {
     }
 
     fn after_lim_change(&self) -> PyResult<()> {
+        if self.lent().is_some() {
+            return Ok(());
+        }
         let mut fig = self.lk();
         if let Some(i) = fig.axes_index(self.uid) {
             fig.sync_shared(i);
@@ -1903,51 +1921,51 @@ impl PyAxes {
     /// tick_position, autolabelpos, remove_overlapping_locs, is_default_label.
     fn axis_set(&self, axis: &str, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let x = axis_of(axis)?;
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        let ax = a.axis_mut(x);
-        match name {
-            "labelpad" => ax.labelpad = value.extract()?,
-            "visible" => ax.visible = value.extract()?,
-            "label_position" => {
-                let p: String = value.extract()?;
-                {
-                    let mut l = ax.label.lk();
-                    if x {
-                        l.va = if p == "top" { "baseline".into() } else { "top".into() };
-                    } else {
-                        l.rotation_mode = "anchor".into();
-                        l.va = if p == "right" { "top".into() } else { "bottom".into() };
+        self.with(|a, _| -> PyResult<_> {
+            let ax = a.axis_mut(x);
+            match name {
+                "labelpad" => ax.labelpad = value.extract()?,
+                "visible" => ax.visible = value.extract()?,
+                "label_position" => {
+                    let p: String = value.extract()?;
+                    {
+                        let mut l = ax.label.lk();
+                        if x {
+                            l.va = if p == "top" { "baseline".into() } else { "top".into() };
+                        } else {
+                            l.rotation_mode = "anchor".into();
+                            l.va = if p == "right" { "top".into() } else { "bottom".into() };
+                        }
                     }
+                    ax.label_position = p;
                 }
-                ax.label_position = p;
+                "tick_position" => ax.tick_position = value.extract()?,
+                "autolabelpos" => ax.autolabelpos = value.extract()?,
+                "remove_overlapping_locs" => ax.remove_overlapping_locs = value.extract()?,
+                "is_default_label" => ax.is_default_label = value.extract()?,
+                "zorder" => ax.zorder = value.extract()?,
+                _ => return Err(PyKeyError::new_err(format!("unknown axis property {name}"))),
             }
-            "tick_position" => ax.tick_position = value.extract()?,
-            "autolabelpos" => ax.autolabelpos = value.extract()?,
-            "remove_overlapping_locs" => ax.remove_overlapping_locs = value.extract()?,
-            "is_default_label" => ax.is_default_label = value.extract()?,
-            "zorder" => ax.zorder = value.extract()?,
-            _ => return Err(PyKeyError::new_err(format!("unknown axis property {name}"))),
-        }
-        Ok(())
+            Ok(())
+        })?
     }
 
     fn axis_get<'py>(&self, py: Python<'py>, axis: &str, name: &str) -> PyResult<Bound<'py, PyAny>> {
         let x = axis_of(axis)?;
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        let ax = a.axis_mut(x);
-        Ok(match name {
-            "labelpad" => ax.labelpad.into_pyobject(py)?.into_any(),
-            "visible" => ax.visible.into_pyobject(py)?.to_owned().into_any(),
-            "label_position" => ax.label_position.clone().into_pyobject(py)?.into_any(),
-            "tick_position" => ax.tick_position.clone().into_pyobject(py)?.into_any(),
-            "ticks_position" => ax.ticks_position().into_pyobject(py)?.into_any(),
-            "remove_overlapping_locs" => ax.remove_overlapping_locs.into_pyobject(py)?.to_owned().into_any(),
-            "zorder" => ax.zorder.into_pyobject(py)?.into_any(),
-            "offset" => ax.major_formatter.get_offset().into_pyobject(py)?.into_any(),
-            _ => return Err(PyKeyError::new_err(format!("unknown axis property {name}"))),
-        })
+        self.with(|a, _| -> PyResult<_> {
+            let ax = a.axis_mut(x);
+            Ok(match name {
+                "labelpad" => ax.labelpad.into_pyobject(py)?.into_any(),
+                "visible" => ax.visible.into_pyobject(py)?.to_owned().into_any(),
+                "label_position" => ax.label_position.clone().into_pyobject(py)?.into_any(),
+                "tick_position" => ax.tick_position.clone().into_pyobject(py)?.into_any(),
+                "ticks_position" => ax.ticks_position().into_pyobject(py)?.into_any(),
+                "remove_overlapping_locs" => ax.remove_overlapping_locs.into_pyobject(py)?.to_owned().into_any(),
+                "zorder" => ax.zorder.into_pyobject(py)?.into_any(),
+                "offset" => ax.major_formatter.get_offset().into_pyobject(py)?.into_any(),
+                _ => return Err(PyKeyError::new_err(format!("unknown axis property {name}"))),
+            })
+        })?
     }
 
     /// `set_tick_params(which, reset, **kw)` with matplotlib-translated keys.
@@ -1993,15 +2011,15 @@ impl PyAxes {
     }
 
     fn patch_set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        patch_set(&mut a.patch, name, value)
+        self.with(|a, _| -> PyResult<_> {
+            patch_set(&mut a.patch, name, value)
+        })?
     }
 
     fn patch_get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        patch_get(py, &a.patch, name)
+        self.with(|a, _| -> PyResult<_> {
+            patch_get(py, &a.patch, name)
+        })?
     }
 
     /// set_aspect(aspect 'auto' or float, adjustable, anchor, box_aspect)
@@ -2058,28 +2076,26 @@ impl PyAxes {
             let p = if original { a.original_position } else { a.position };
             return Ok((p.x0, p.y0, p.x1, p.y1));
         }
-        let mut fig = self.lk();
-        let ctx = fig.ctx();
-        let a = axes_mut(&mut fig, self.uid)?;
-        let p = if original {
-            a.original_position
-        } else {
-            if apply {
-                a.apply_aspect(None, &ctx);
-            }
-            a.position
-        };
-        Ok((p.x0, p.y0, p.x1, p.y1))
+        self.with(|a, ctx| -> PyResult<_> {
+            let p = if original {
+                a.original_position
+            } else {
+                if apply {
+                    a.apply_aspect(None, &ctx);
+                }
+                a.position
+            };
+            Ok((p.x0, p.y0, p.x1, p.y1))
+        })?
     }
 
     /// `apply_aspect(position)`.
     #[pyo3(signature = (position=None))]
     fn apply_aspect(&self, position: Option<(f64, f64, f64, f64)>) -> PyResult<()> {
-        let mut fig = self.lk();
-        let ctx = fig.ctx();
-        let a = axes_mut(&mut fig, self.uid)?;
-        a.apply_aspect(position.map(|p| Bbox::new(p.0, p.1, p.2, p.3)), &ctx);
-        Ok(())
+        self.with(|a, ctx| -> PyResult<_> {
+            a.apply_aspect(position.map(|p| Bbox::new(p.0, p.1, p.2, p.3)), &ctx);
+            Ok(())
+        })?
     }
 
     #[pyo3(signature = (rect, which="both"))]
@@ -2118,59 +2134,59 @@ impl PyAxes {
 
     fn spine_set(&self, name: &str, prop: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let idx = spine_idx(name)?;
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        match prop {
-            "position" if value.is_none() => {
-                a.spines[idx].position = None;
+        self.with(|a, _| -> PyResult<_> {
+            match prop {
+                "position" if value.is_none() => {
+                    a.spines[idx].position = None;
+                }
+                "position" => {
+                    let s = &mut a.spines[idx];
+                    s.position = Some(if let Ok(st) = value.extract::<String>() {
+                        match st.as_str() {
+                            "center" => SpinePosition::Axes(0.5),
+                            "zero" => SpinePosition::Data(0.0),
+                            _ => return err("bad spine position"),
+                        }
+                    } else {
+                        let (k, amt): (String, f64) = value.extract()?;
+                        match k.as_str() {
+                            "outward" => SpinePosition::Outward(amt),
+                            "axes" => SpinePosition::Axes(amt),
+                            "data" => SpinePosition::Data(amt),
+                            _ => return err("bad spine position"),
+                        }
+                    });
+                    let x = idx >= 2;
+                    a.axis_mut(x).reset_ticks();
+                }
+                "bounds" => a.spines[idx].bounds = if value.is_none() { None } else { Some(value.extract()?) },
+                "capstyle" => {
+                    let s: String = value.extract()?;
+                    a.spines[idx].patch.capstyle = match s.as_str() {
+                        "butt" => LineCap::Butt,
+                        "round" => LineCap::Round,
+                        _ => LineCap::Square,
+                    };
+                }
+                _ => patch_set(&mut a.spines[idx].patch, prop, value)?,
             }
-            "position" => {
-                let s = &mut a.spines[idx];
-                s.position = Some(if let Ok(st) = value.extract::<String>() {
-                    match st.as_str() {
-                        "center" => SpinePosition::Axes(0.5),
-                        "zero" => SpinePosition::Data(0.0),
-                        _ => return err("bad spine position"),
-                    }
-                } else {
-                    let (k, amt): (String, f64) = value.extract()?;
-                    match k.as_str() {
-                        "outward" => SpinePosition::Outward(amt),
-                        "axes" => SpinePosition::Axes(amt),
-                        "data" => SpinePosition::Data(amt),
-                        _ => return err("bad spine position"),
-                    }
-                });
-                let x = idx >= 2;
-                a.axis_mut(x).reset_ticks();
-            }
-            "bounds" => a.spines[idx].bounds = if value.is_none() { None } else { Some(value.extract()?) },
-            "capstyle" => {
-                let s: String = value.extract()?;
-                a.spines[idx].patch.capstyle = match s.as_str() {
-                    "butt" => LineCap::Butt,
-                    "round" => LineCap::Round,
-                    _ => LineCap::Square,
-                };
-            }
-            _ => patch_set(&mut a.spines[idx].patch, prop, value)?,
-        }
-        Ok(())
+            Ok(())
+        })?
     }
 
     fn spine_get<'py>(&self, py: Python<'py>, name: &str, prop: &str) -> PyResult<Bound<'py, PyAny>> {
         let idx = spine_idx(name)?;
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        match prop {
-            "position" => Ok(match a.spines[idx].position() {
-                SpinePosition::Outward(v) => ("outward", v).into_pyobject(py)?.into_any(),
-                SpinePosition::Axes(v) => ("axes", v).into_pyobject(py)?.into_any(),
-                SpinePosition::Data(v) => ("data", v).into_pyobject(py)?.into_any(),
-            }),
-            "bounds" => Ok(a.spines[idx].bounds.into_pyobject(py)?.into_any()),
-            _ => patch_get(py, &a.spines[idx].patch, prop),
-        }
+        self.with(|a, _| -> PyResult<_> {
+            match prop {
+                "position" => Ok(match a.spines[idx].position() {
+                    SpinePosition::Outward(v) => ("outward", v).into_pyobject(py)?.into_any(),
+                    SpinePosition::Axes(v) => ("axes", v).into_pyobject(py)?.into_any(),
+                    SpinePosition::Data(v) => ("data", v).into_pyobject(py)?.into_any(),
+                }),
+                "bounds" => Ok(a.spines[idx].bounds.into_pyobject(py)?.into_any()),
+                _ => patch_get(py, &a.spines[idx].patch, prop),
+            }
+        })?
     }
 
     /// Tick locations (`get_ticklocs`).
@@ -2449,7 +2465,12 @@ impl PyAxes {
 
     #[pyo3(signature = (for_layout_only=false))]
     fn get_tightbbox(&self, for_layout_only: bool) -> PyResult<Option<(f64, f64, f64, f64)>> {
-        let b = {
+        let b = if let Some(mut l) = self.lent() {
+            let s = crate::mpl::figure::snapshot_for(l.key).ok_or_else(|| PyValueError::new_err("no draw in progress"))?;
+            let mut r = Renderer::metrics_only(s.canvas.0, s.canvas.1, l.fig.dpi);
+            let ctx = l.fig.clone();
+            l.axes().get_tightbbox(&mut r, &ctx, for_layout_only)
+        } else {
             let mut fig = self.lk();
             let ctx = fig.ctx();
             let (w, h) = fig.canvas_size();
@@ -2509,28 +2530,28 @@ impl PyAxes {
     }
 
     fn base_set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        if name == "label" {
-            a.label = value.extract()?;
-            return Ok(());
-        }
-        if !base_set(&mut a.base, name, value)? {
-            return Err(PyKeyError::new_err(format!("unknown axes property {name}")));
-        }
-        Ok(())
+        self.with(|a, _| -> PyResult<_> {
+            if name == "label" {
+                a.label = value.extract()?;
+                return Ok(());
+            }
+            if !base_set(&mut a.base, name, value)? {
+                return Err(PyKeyError::new_err(format!("unknown axes property {name}")));
+            }
+            Ok(())
+        })?
     }
 
     fn base_get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
-        let mut fig = self.lk();
-        let a = axes_mut(&mut fig, self.uid)?;
-        Ok(match name {
-            "visible" => a.base.visible.into_pyobject(py)?.to_owned().into_any(),
-            "zorder" => a.base.zorder.into_pyobject(py)?.into_any(),
-            "label" => a.label.clone().into_pyobject(py)?.into_any(),
-            "in_layout" => a.base.in_layout.into_pyobject(py)?.to_owned().into_any(),
-            _ => return Err(PyKeyError::new_err(format!("unknown axes property {name}"))),
-        })
+        self.with(|a, _| -> PyResult<_> {
+            Ok(match name {
+                "visible" => a.base.visible.into_pyobject(py)?.to_owned().into_any(),
+                "zorder" => a.base.zorder.into_pyobject(py)?.into_any(),
+                "label" => a.label.clone().into_pyobject(py)?.into_any(),
+                "in_layout" => a.base.in_layout.into_pyobject(py)?.to_owned().into_any(),
+                _ => return Err(PyKeyError::new_err(format!("unknown axes property {name}"))),
+            })
+        })?
     }
 
     fn cla(&self) -> PyResult<()> {
@@ -2572,6 +2593,12 @@ impl PyAxes {
         {
             let mut t = target.borrow_mut();
             let r = t.r()?;
+            if let Some(mut l) = self.lent() {
+                l.draw(r);
+                drop(l);
+                drop(t);
+                return super::ext::take_error();
+            }
             let mut fig = self.lk();
             let _snap = fig.publish_snapshot();
             if !fig.draw_axes(self.uid, r) {
@@ -2584,6 +2611,13 @@ impl PyAxes {
     /// `Axes.draw(renderer)` of this axes alone into any other Python renderer.
     fn draw_foreign(&self, renderer: &Bound<'_, PyAny>) -> PyResult<()> {
         let fr = std::sync::Arc::new(super::foreign::PyForeign::new(renderer)?);
+        if let Some(mut l) = self.lent() {
+            let s = crate::mpl::figure::snapshot_for(l.key).ok_or_else(|| PyValueError::new_err("no draw in progress"))?;
+            let mut r = Renderer::foreign(fr, s.canvas.0, s.canvas.1, l.fig.dpi);
+            l.draw(&mut r);
+            drop(l);
+            return super::ext::take_error();
+        }
         {
             let mut fig = self.lk();
             let (w, h) = fig.canvas_size();

@@ -248,7 +248,10 @@ def _patch_axes_base(cls):
         rs = self._rs
         rs.cla()
         orig_clear(self)
-        self._children = _RsChildren(self, self._children)
+        if not _rs_py_drawn(self):
+            # (axes drawn by Python draw their children themselves, and may
+            # change them while drawing, e.g. parasite axes)
+            self._children = _RsChildren(self, self._children)
         for loc, t in (("center", self.title), ("left", self._left_title),
                        ("right", self._right_title)):
             rs.set_title_handle(loc, t._h)
@@ -304,10 +307,11 @@ def _patch_axes_base(cls):
         with metrics(renderer):
             self._rs_prepare_draw(renderer)
             self.get_figure(root=True)._rs_sync_all()
-            if is_foreign(renderer):
-                self._rs.draw_foreign(renderer)
-            elif not renderer._rs_disabled:
-                self._rs.draw_into(renderer._renderer)
+            with martist._rs_drawing():
+                if is_foreign(renderer):
+                    self._rs.draw_foreign(renderer)
+                elif not renderer._rs_disabled:
+                    self._rs.draw_into(renderer._renderer)
         self.stale = False
 
     cls.draw = martist.allow_rasterization(draw)

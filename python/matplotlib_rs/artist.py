@@ -116,8 +116,25 @@ import weakref as _weakref
 _DIRTY = _weakref.WeakSet()
 
 
+# >0 while the Rust core draws a figure: its state (synced before the draw)
+# cannot change then, so changes made by Python code running inside the
+# draw are pushed afterwards.
+_DRAWING = [0]
+
+
+@contextlib.contextmanager
+def _rs_drawing():
+    _DRAWING[0] += 1
+    try:
+        yield
+    finally:
+        _DRAWING[0] -= 1
+
+
 def _sync_dirty():
     """Push the state of every changed artist into the Rust model."""
+    if _DRAWING[0]:
+        return
     while _DIRTY:
         items = list(_DIRTY)
         _DIRTY.clear()

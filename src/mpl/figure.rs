@@ -55,6 +55,8 @@ pub struct SubFig {
 struct DetachedAxesDraw<'a> {
     detached: &'a mut Vec<Axes>,
     fig: &'a FigCtx,
+    /// `Figure::key`
+    key: usize,
 }
 
 impl ChildAxesDraw for DetachedAxesDraw<'_> {
@@ -68,6 +70,120 @@ impl ChildAxesDraw for DetachedAxesDraw<'_> {
             let fig = self.fig;
             ax.draw_with(renderer, fig, self);
             self.detached.insert(i, ax);
+        }
+    }
+
+    fn lend(&mut self, uids: &[u64], f: &mut dyn FnMut()) {
+        // the child axes and their own child axes, recursively
+        let mut want: Vec<u64> = Vec::new();
+        let mut stack: Vec<u64> = uids.to_vec();
+        while let Some(u) = stack.pop() {
+            if want.contains(&u) {
+                continue;
+            }
+            if let Some(a) = self.detached.iter().find(|a| a.uid == u) {
+                want.push(u);
+                stack.extend(a.child_axes.iter().copied());
+            }
+        }
+        if want.is_empty() {
+            return f();
+        }
+        let order: Vec<u64> = self.detached.iter().map(|a| a.uid).collect();
+        let (lent, kept): (Vec<Axes>, Vec<Axes>) = std::mem::take(self.detached).into_iter().partition(|a| want.contains(&a.uid));
+        *self.detached = kept;
+        LENT.with(|l| {
+            let mut l = l.borrow_mut();
+            for a in lent {
+                l.push((self.key, self.fig.clone(), a));
+            }
+        });
+        // (restores the axes even if `f` unwinds)
+        struct Restore<'b> {
+            detached: &'b mut Vec<Axes>,
+            key: usize,
+            want: Vec<u64>,
+            order: Vec<u64>,
+        }
+        impl Drop for Restore<'_> {
+            fn drop(&mut self) {
+                LENT.with(|l| {
+                    let mut l = l.borrow_mut();
+                    let mut i = 0;
+                    while i < l.len() {
+                        if l[i].0 == self.key && self.want.contains(&l[i].2.uid) {
+                            self.detached.push(l.remove(i).2);
+                        } else {
+                            i += 1;
+                        }
+                    }
+                });
+                let pos = |u: u64| self.order.iter().position(|&o| o == u).unwrap_or(usize::MAX);
+                self.detached.sort_by_key(|a| pos(a.uid));
+            }
+        }
+        let _restore = Restore { detached: &mut *self.detached, key: self.key, want, order };
+        f();
+    }
+}
+
+thread_local! {
+    /// Child axes of Python-drawn axes being drawn, as (figure key, ctx, axes).
+    static LENT: std::cell::RefCell<Vec<(usize, FigCtx, Axes)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// A lent child axes, taken out of the store until dropped.
+pub struct LentAxes {
+    pub key: usize,
+    pub fig: FigCtx,
+    pub axes: Option<Axes>,
+}
+
+impl LentAxes {
+    pub fn axes(&mut self) -> &mut Axes {
+        self.axes.as_mut().unwrap()
+    }
+
+    /// Draw it (with its child axes) as `Axes.draw` does.
+    pub fn draw(&mut self, renderer: &mut Renderer) {
+        let fig = self.fig.clone();
+        let mut kids = LentKids { key: self.key };
+        self.axes().draw_with(renderer, &fig, &mut kids);
+    }
+}
+
+impl Drop for LentAxes {
+    fn drop(&mut self) {
+        if let Some(a) = self.axes.take() {
+            LENT.with(|l| l.borrow_mut().push((self.key, self.fig.clone(), a)));
+        }
+    }
+}
+
+/// Take the child axes *uid* of figure *key* if it is lent to a Python
+/// draw on this thread (the figure itself is then locked by that draw).
+pub fn lent_take(key: usize, uid: u64) -> Option<LentAxes> {
+    LENT.with(|l| {
+        let mut l = l.borrow_mut();
+        let i = l.iter().position(|e| e.0 == key && e.2.uid == uid)?;
+        let (key, fig, a) = l.remove(i);
+        Some(LentAxes { key, fig, axes: Some(a) })
+    })
+}
+
+/// Draws the child axes of a lent axes (lent too).
+struct LentKids {
+    key: usize,
+}
+
+impl ChildAxesDraw for LentKids {
+    fn zorder(&self, uid: u64) -> Option<f64> {
+        LENT.with(|l| l.borrow().iter().find(|e| e.0 == self.key && e.2.uid == uid).map(|e| e.2.base.zorder))
+    }
+
+    fn draw(&mut self, uid: u64, renderer: &mut Renderer) {
+        if let Some(mut a) = lent_take(self.key, uid) {
+            a.draw(renderer);
         }
     }
 }
@@ -298,12 +414,12 @@ impl Figure {
     pub fn draw_axes(&mut self, uid: u64, renderer: &mut Renderer) -> bool {
         let fig = self.ctx();
         if let Some(i) = self.axes_index(uid) {
-            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
+            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig, key: self.key };
             self.axes[i].draw_with(renderer, &fig, &mut kids);
             true
         } else if let Some(i) = self.detached.iter().position(|a| a.uid == uid) {
             let mut ax = self.detached.remove(i);
-            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
+            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig, key: self.key };
             ax.draw_with(renderer, &fig, &mut kids);
             self.detached.insert(i, ax);
             true
@@ -589,11 +705,11 @@ impl Figure {
         for (_, _, it) in items {
             match it {
                 Item::Axes(i) => {
-                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig };
+                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig, key: self.key };
                     self.axes[i].draw_with(renderer, fig, &mut kids);
                 }
                 Item::LocalAxes(u) => {
-                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig };
+                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig, key: self.key };
                     kids.draw(u, renderer);
                 }
                 Item::Child(i) => match &children[i] {

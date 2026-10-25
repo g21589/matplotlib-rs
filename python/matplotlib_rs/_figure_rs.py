@@ -179,12 +179,13 @@ def _patch_figure(FigureBase, Figure, SubFigure):
                     ax._rs_prepare_draw(renderer)
                 _rs_sync_subfigs(self)
                 self._rs_sync_all()
-                if foreign:
-                    self._rs.draw_foreign(renderer)
-                elif not getattr(renderer, "_rs_disabled", False):
-                    self._rs.draw_into(renderer._renderer)
-                else:
-                    self._rs.draw_disabled()
+                with martist._rs_drawing():
+                    if foreign:
+                        self._rs.draw_foreign(renderer)
+                    elif not getattr(renderer, "_rs_disabled", False):
+                        self._rs.draw_into(renderer._renderer)
+                    else:
+                        self._rs.draw_disabled()
                 renderer.close_group('figure')
             finally:
                 self.stale = False

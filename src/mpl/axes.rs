@@ -1256,7 +1256,7 @@ impl Axes {
             return;
         }
         if let Some(e) = self.ext_draw.clone() {
-            e.draw(renderer);
+            kids.lend(&self.child_axes, &mut || e.draw(renderer));
             return;
         }
         self.unstale_viewlim(fig);
@@ -1360,6 +1360,11 @@ impl Axes {
 pub trait ChildAxesDraw {
     fn zorder(&self, uid: u64) -> Option<f64>;
     fn draw(&mut self, uid: u64, renderer: &mut Renderer);
+    /// Run `f` (the draw of a Python-drawn axes) with the child axes `uids`
+    /// reachable from Python (see `figure::lent_take`).
+    fn lend(&mut self, _uids: &[u64], f: &mut dyn FnMut()) {
+        f()
+    }
 }
 
 pub struct NoChildAxes;
