@@ -308,5 +308,57 @@ impl PyRendererAgg {
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRendererAgg>()?;
+    m.add_class::<PyFont>()?;
     Ok(())
+}
+
+#[pyclass(name = "FT2Font", module = "matplotlib_rs._mplrs", unsendable)]
+pub struct PyFont {
+    inner: crate::font::FtFont,
+}
+
+#[pymethods]
+impl PyFont {
+    #[new]
+    fn new(path: &str) -> PyResult<Self> {
+        let bytes = std::fs::read(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let data = crate::font::FontData::from_bytes(bytes, 0).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyFont { inner: crate::font::FtFont::new(std::sync::Arc::new(data)) })
+    }
+
+    fn set_size(&mut self, ptsize: f64, dpi: f64) {
+        self.inner.set_size(ptsize, dpi);
+    }
+
+    fn _set_transform(&mut self, matrix: [[i64; 2]; 2], delta: [i64; 2]) {
+        let m = crate::font::outline::FtMatrix { xx: matrix[0][0], xy: matrix[0][1], yx: matrix[1][0], yy: matrix[1][1] };
+        self.inner.set_transform(m, (delta[0], delta[1]));
+    }
+
+    /// Returns (left, top, buffer[rows, width]).
+    fn _render_glyph<'py>(&self, py: Python<'py>, gid: u32) -> PyResult<(i32, i32, Bound<'py, numpy::PyArray2<u8>>)> {
+        let bm = self.inner.render_glyph(gid).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let arr = numpy::PyArray1::from_slice(py, &bm.buffer).reshape([bm.rows as usize, bm.width as usize])?;
+        Ok((bm.left, bm.top, arr))
+    }
+
+    /// Returns list of (glyph_index, x, y).
+    fn _layout(&self, text: &str) -> Vec<(u32, f64, f64)> {
+        let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+        self.inner.layout(&cps)
+    }
+
+    fn get_width_height_descent(&self, text: &str) -> (f64, f64, f64) {
+        let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+        self.inner.text_width_height_descent(&cps)
+    }
+
+    fn get_char_index(&self, c: u32) -> u32 {
+        self.inner.glyph_index(c)
+    }
+
+    fn outline_points(&self, gid: u32) -> PyResult<Vec<(i64, i64, u8)>> {
+        let o = self.inner.load_glyph(gid).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(o.points.iter().zip(o.tags.iter()).map(|(p, t)| (p.0, p.1, *t)).collect())
+    }
 }

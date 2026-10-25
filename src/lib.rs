@@ -2,4 +2,5 @@
 
 pub mod agg;
 pub mod backend;
+pub mod font;
 pub mod python;
