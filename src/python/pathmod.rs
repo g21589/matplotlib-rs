@@ -323,6 +323,119 @@ fn get_path_collection_extents<'py>(
     Ok((ext, minpos))
 }
 
+// ---------------------------------------------------------------------------
+// geometric queries (`_path.h`)
+
+use crate::backend::path_geom as geom;
+
+fn points_from_py(obj: &Bound<'_, PyAny>) -> PyResult<Vec<[f64; 2]>> {
+    let np = obj.py().import("numpy")?;
+    let a: PyReadonlyArray2<f64> = np
+        .call_method1("ascontiguousarray", (obj, "float64"))?
+        .call_method1("reshape", ((-1i64, 2i64),))?
+        .extract()?;
+    let s = a.as_slice()?;
+    Ok(s.chunks_exact(2).map(|c| [c[0], c[1]]).collect())
+}
+
+#[pyfunction]
+fn point_in_path(x: f64, y: f64, radius: f64, path: &Bound<'_, PyAny>, trans: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(geom::point_in_path(x, y, radius, &path_from_py(path)?, &trans_from_py(trans)?))
+}
+
+#[pyfunction]
+fn points_in_path<'py>(
+    py: Python<'py>,
+    points: &Bound<'py, PyAny>,
+    radius: f64,
+    path: &Bound<'py, PyAny>,
+    trans: &Bound<'py, PyAny>,
+) -> PyResult<Bound<'py, PyArray1<bool>>> {
+    let pts = points_from_py(points)?;
+    let r = geom::points_in_path(&pts, radius, &path_from_py(path)?, &trans_from_py(trans)?);
+    Ok(PyArray1::from_vec(py, r))
+}
+
+#[pyfunction]
+fn path_in_path(a: &Bound<'_, PyAny>, atrans: &Bound<'_, PyAny>, b: &Bound<'_, PyAny>, btrans: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(geom::path_in_path(&path_from_py(a)?, &trans_from_py(atrans)?, &path_from_py(b)?, &trans_from_py(btrans)?))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn point_in_path_collection<'py>(
+    py: Python<'py>,
+    x: f64,
+    y: f64,
+    radius: f64,
+    master_transform: &Bound<'py, PyAny>,
+    paths: &Bound<'py, PyAny>,
+    transforms: &Bound<'py, PyAny>,
+    offsets: &Bound<'py, PyAny>,
+    offset_trans: &Bound<'py, PyAny>,
+    filled: bool,
+) -> PyResult<Bound<'py, PyArray1<i64>>> {
+    let master = trans_from_py(master_transform)?;
+    let mut ps = Vec::new();
+    for p in paths.try_iter()? {
+        ps.push(path_from_py(&p?)?);
+    }
+    let np = py.import("numpy")?;
+    let t: PyReadonlyArray2<f64> = np
+        .call_method1("ascontiguousarray", (transforms, "float64"))?
+        .call_method1("reshape", ((-1i64, 9i64),))?
+        .extract()?;
+    let ts: Vec<TransAffine> = t
+        .as_slice()?
+        .chunks_exact(9)
+        .map(|m| TransAffine { sx: m[0], shx: m[1], tx: m[2], shy: m[3], sy: m[4], ty: m[5] })
+        .collect();
+    let offs = points_from_py(offsets)?;
+    let r = geom::point_in_path_collection(x, y, radius, &master, &ps, &ts, &offs, &trans_from_py(offset_trans)?, filled);
+    Ok(PyArray1::from_vec(py, r.into_iter().map(|i| i as i64).collect()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (path1, path2, filled=false))]
+fn path_intersects_path(path1: &Bound<'_, PyAny>, path2: &Bound<'_, PyAny>, filled: bool) -> PyResult<bool> {
+    let p1 = path_from_py(path1)?;
+    let p2 = path_from_py(path2)?;
+    let mut r = geom::path_intersects_path(&p1, &p2);
+    if filled {
+        let id = TransAffine::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0);
+        if !r {
+            r = geom::path_in_path(&p1, &id, &p2, &id);
+        }
+        if !r {
+            r = geom::path_in_path(&p2, &id, &p1, &id);
+        }
+    }
+    Ok(r)
+}
+
+#[pyfunction]
+#[pyo3(signature = (path, rect_x1, rect_y1, rect_x2, rect_y2, filled=false))]
+fn path_intersects_rectangle(path: &Bound<'_, PyAny>, rect_x1: f64, rect_y1: f64, rect_x2: f64, rect_y2: f64, filled: bool) -> PyResult<bool> {
+    Ok(geom::path_intersects_rectangle(&path_from_py(path)?, rect_x1, rect_y1, rect_x2, rect_y2, filled))
+}
+
+#[pyfunction]
+fn clip_path_to_rect<'py>(py: Python<'py>, path: &Bound<'py, PyAny>, rect: &Bound<'py, PyAny>, inside: bool) -> PyResult<Vec<Bound<'py, PyArray2<f64>>>> {
+    let r = points_from_py(rect)?;
+    if r.len() != 2 {
+        return Err(PyValueError::new_err("Invalid bounding box"));
+    }
+    let polys = geom::clip_path_to_rect(&path_from_py(path)?, (r[0][0], r[0][1], r[1][0], r[1][1]), inside);
+    polys
+        .into_iter()
+        .map(|p| {
+            let n = p.len();
+            let flat: Vec<f64> = p.into_iter().flatten().collect();
+            Ok(PyArray1::from_vec(py, flat).reshape([n, 2])?)
+        })
+        .collect()
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "_path")?;
     sub.add_function(wrap_pyfunction!(affine_transform, &sub)?)?;
@@ -331,6 +444,13 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sub.add_function(wrap_pyfunction!(cleanup_path, &sub)?)?;
     sub.add_function(wrap_pyfunction!(convert_path_to_polygons, &sub)?)?;
     sub.add_function(wrap_pyfunction!(get_path_collection_extents, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(point_in_path, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(points_in_path, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(path_in_path, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(point_in_path_collection, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(path_intersects_path, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(path_intersects_rectangle, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(clip_path_to_rect, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

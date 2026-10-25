@@ -47,11 +47,34 @@ class _FlushBboxTransformTo(mtransforms.BboxTransformTo):
         return super().invalidate()
 
 
+# the category the Rust figure gives to natively drawn artists
+_NATIVE_CATEGORY = {"Line2D": 2, "Patch": 3, "Text": 4}
+
+
+def _rs_fig_native(a, category):
+    if not _rs_native(a):
+        return False
+    return _NATIVE_CATEGORY.get(type(a._h).__name__) == category
+
+
+def _rs_fig_switch(rootref, category, a):
+    root = rootref()
+    native = _rs_fig_native(a, category)
+    if root is None or native == a.__dict__.get("_rs_native_in"):
+        return
+    old = a._h if a._rs_native_in else a
+    new = a._h if native else a
+    if root._rs.replace_artist(old, new):
+        a._rs_native_in = native
+
+
 def _rs_fig_attach(fig, a, category):
     """Add figure-level artist *a* to the Rust figure."""
+    import weakref
     root = fig.get_figure(root=True)
-    native = _rs_native(a)
+    native = _rs_fig_native(a, category)
     a._rs_native_in = native
+    a._rs_switch = functools.partial(_rs_fig_switch, weakref.ref(root), category)
     if native:
         martist._DIRTY.discard(a)
         a._rs_sync()

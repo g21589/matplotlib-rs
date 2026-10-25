@@ -950,6 +950,47 @@ impl PyFigure {
         Ok(())
     }
 
+    /// Replace figure child `old` by `new` at the same position.
+    fn replace_artist(&self, old: &Bound<'_, PyAny>, new: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let key = |o: &Bound<'_, PyAny>| -> usize {
+            if let Ok(t) = o.cast::<PyText>() {
+                Arc::as_ptr(&t.borrow().inner) as usize
+            } else if let Ok(l) = o.cast::<PyLine2D>() {
+                Arc::as_ptr(&l.borrow().inner) as usize
+            } else if let Ok(p) = o.cast::<PyPatch>() {
+                Arc::as_ptr(&p.borrow().inner) as usize
+            } else {
+                o.as_ptr() as usize
+            }
+        };
+        let ok = key(old);
+        let mut f = self.lk();
+        let pos = f.children.iter().position(|c| match c {
+            FigChild::Text(x) => Arc::as_ptr(x) as usize == ok,
+            FigChild::Line(x) => Arc::as_ptr(x) as usize == ok,
+            FigChild::Patch(x) => Arc::as_ptr(x) as usize == ok,
+            FigChild::Ext(e, _) => e.ident() == ok,
+            FigChild::Legend(_) => false,
+        });
+        let Some(i) = pos else { return Ok(false) };
+        let cat = match &f.children[i] {
+            FigChild::Ext(_, c) => *c,
+            FigChild::Line(_) => 2,
+            FigChild::Patch(_) => 3,
+            _ => 4,
+        };
+        f.children[i] = if let Ok(t) = new.cast::<PyText>() {
+            FigChild::Text(t.borrow().inner.clone())
+        } else if let Ok(l) = new.cast::<PyLine2D>() {
+            FigChild::Line(l.borrow().inner.clone())
+        } else if let Ok(p) = new.cast::<PyPatch>() {
+            FigChild::Patch(p.borrow().inner.clone())
+        } else {
+            FigChild::Ext(super::ext::ext_from(new), cat)
+        };
+        Ok(true)
+    }
+
     fn remove_artist(&self, a: &Bound<'_, PyAny>) -> PyResult<bool> {
         let mut f = self.lk();
         let before = f.children.len();
@@ -1410,6 +1451,20 @@ impl PyAxes {
             let n = a.children.len();
             a.children.retain(|x| !x.same(&c));
             n != a.children.len()
+        })
+    }
+
+    /// Replace child `old` by `new` at the same position (e.g. when an
+    /// artist switches between native and Python drawing).
+    fn replace_child(&self, old: &Bound<'_, PyAny>, new: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let o = child_from(old)?;
+        let n = child_from(new)?;
+        self.with(|a, _| match a.children.iter().position(|x| x.same(&o)) {
+            Some(i) => {
+                a.children[i] = n;
+                true
+            }
+            None => false,
         })
     }
 

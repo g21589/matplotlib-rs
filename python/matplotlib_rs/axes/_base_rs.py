@@ -44,7 +44,7 @@ def _rs_native(a):
         base = mlines.Line2D
     elif isinstance(a, mtext.Text):
         base = mtext.Text
-        if a.get_usetex() or (a.get_parse_math() and "$" in a.get_text()):
+        if a.get_usetex() or a._bbox_patch is not None:
             return False
     elif isinstance(a, mpatches.Patch):
         base = mpatches.Patch
@@ -61,6 +61,7 @@ def _rs_attach(ax, a):
     """Add child *a* (already in ``ax._children``) to the Rust axes."""
     native = _rs_native(a)
     a._rs_native_in = native
+    a._rs_switch = functools.partial(_rs_switch_child, weakref.ref(ax))
     if native:
         martist._DIRTY.discard(a)
         a._rs_sync()
@@ -68,6 +69,18 @@ def _rs_attach(ax, a):
     else:
         ax._rs.add_child_raw(a)
     a._remove_method = functools.partial(_rs_remove_child, ax)
+
+
+def _rs_switch_child(axref, a):
+    """Swap a child between native and Python drawing (keeping its place)."""
+    ax = axref()
+    native = _rs_native(a)
+    if ax is None or native == a.__dict__.get("_rs_native_in"):
+        return
+    old = a._h if a._rs_native_in else a
+    new = a._h if native else a
+    if ax._rs.replace_child(old, new):
+        a._rs_native_in = native
 
 
 def _rs_remove_child(ax, a):

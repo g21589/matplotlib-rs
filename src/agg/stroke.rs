@@ -950,3 +950,141 @@ pub fn conv_stroke<S: VertexSource>(source: S) -> ConvStroke<S> {
 pub fn conv_dash<S: VertexSource>(source: S) -> ConvDash<S> {
     ConvAdaptorVcgen::new(source, VcgenDash::default())
 }
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum ContourStatus {
+    Initial,
+    Ready,
+    Outline,
+    OutVertices,
+    EndPoly,
+    Stop,
+}
+
+/// `agg::vcgen_contour` (without orientation auto-detection).
+pub struct VcgenContour {
+    stroker: MathStroke,
+    width: f64,
+    src_vertices: VertexSequence,
+    out_vertices: Vec<PointD>,
+    status: ContourStatus,
+    src_vertex: usize,
+    out_vertex: usize,
+    closed: u32,
+    orientation: u32,
+}
+
+impl Default for VcgenContour {
+    fn default() -> Self {
+        VcgenContour {
+            stroker: MathStroke::default(),
+            width: 1.0,
+            src_vertices: VertexSequence::default(),
+            out_vertices: Vec::new(),
+            status: ContourStatus::Initial,
+            src_vertex: 0,
+            out_vertex: 0,
+            closed: 0,
+            orientation: 0,
+        }
+    }
+}
+
+impl VcgenContour {
+    pub fn width(&mut self, w: f64) {
+        self.width = w;
+        self.stroker.set_width(w);
+    }
+}
+
+impl Generator for VcgenContour {
+    fn remove_all(&mut self) {
+        self.src_vertices.remove_all();
+        self.closed = 0;
+        self.orientation = 0;
+        self.status = ContourStatus::Initial;
+    }
+
+    fn add_vertex(&mut self, x: f64, y: f64, cmd: u32) {
+        self.status = ContourStatus::Initial;
+        if is_move_to(cmd) {
+            self.src_vertices.modify_last(VertexDist::new(x, y));
+        } else if is_vertex(cmd) {
+            self.src_vertices.add(VertexDist::new(x, y));
+        } else if is_end_poly(cmd) {
+            self.closed = get_close_flag(cmd);
+            if self.orientation == PATH_FLAGS_NONE {
+                self.orientation = cmd & (PATH_FLAGS_CW | PATH_FLAGS_CCW);
+            }
+        }
+    }
+
+    fn rewind(&mut self, _path_id: u32) {
+        if self.status == ContourStatus::Initial {
+            self.src_vertices.close(true);
+            if self.orientation & (PATH_FLAGS_CW | PATH_FLAGS_CCW) != 0 {
+                let w = if self.orientation & PATH_FLAGS_CCW != 0 { self.width } else { -self.width };
+                self.stroker.set_width(w);
+            }
+        }
+        self.status = ContourStatus::Ready;
+        self.src_vertex = 0;
+    }
+
+    fn vertex(&mut self, x: &mut f64, y: &mut f64) -> u32 {
+        let mut cmd = PATH_CMD_LINE_TO;
+        while !is_stop(cmd) {
+            match self.status {
+                ContourStatus::Initial | ContourStatus::Ready => {
+                    if self.status == ContourStatus::Initial {
+                        self.rewind(0);
+                    }
+                    let min = 2 + usize::from(self.closed != 0);
+                    if self.src_vertices.len() < min {
+                        cmd = PATH_CMD_STOP;
+                        continue;
+                    }
+                    self.status = ContourStatus::Outline;
+                    cmd = PATH_CMD_MOVE_TO;
+                    self.src_vertex = 0;
+                    self.out_vertex = 0;
+                }
+                ContourStatus::Outline => {
+                    if self.src_vertex >= self.src_vertices.len() {
+                        self.status = ContourStatus::EndPoly;
+                        continue;
+                    }
+                    let i = self.src_vertex;
+                    let (prev, curr, next) =
+                        (*self.src_vertices.prev(i), *self.src_vertices.curr(i), *self.src_vertices.next(i));
+                    self.stroker.calc_join(&mut self.out_vertices, &prev, &curr, &next, prev.dist, curr.dist);
+                    self.src_vertex += 1;
+                    self.status = ContourStatus::OutVertices;
+                    self.out_vertex = 0;
+                }
+                ContourStatus::OutVertices => {
+                    if self.out_vertex >= self.out_vertices.len() {
+                        self.status = ContourStatus::Outline;
+                    } else {
+                        let c = self.out_vertices[self.out_vertex];
+                        self.out_vertex += 1;
+                        *x = c.x;
+                        *y = c.y;
+                        return cmd;
+                    }
+                }
+                ContourStatus::EndPoly => {
+                    if self.closed == 0 {
+                        return PATH_CMD_STOP;
+                    }
+                    self.status = ContourStatus::Stop;
+                    return PATH_CMD_END_POLY | PATH_FLAGS_CLOSE | PATH_FLAGS_CCW;
+                }
+                ContourStatus::Stop => return PATH_CMD_STOP,
+            }
+        }
+        cmd
+    }
+}
+
+pub type ConvContour<S> = ConvAdaptorVcgen<S, VcgenContour>;

@@ -123,6 +123,9 @@ def _sync_dirty():
             sync = getattr(a, "_rs_sync", None)
             if sync is not None:
                 sync()
+            switch = a.__dict__.get("_rs_switch")
+            if switch is not None:
+                switch(a)
 
 
 def _rs_base_props(a, d):

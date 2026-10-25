@@ -983,6 +983,7 @@ class Line2D(Artist):
         d["markerfacecoloralt"] = _rs_color(self._markerfacecoloralt)
         d["antialiased"] = bool(self._antialiased)
         d["drawstyle"] = self._drawstyle if self._drawstyle != "steps" else "steps-pre"
+        d["markevery"] = _rs_markevery(self._markevery, len(d["xdata"]))
         d["dash_capstyle"] = self._dashcapstyle.name
         d["solid_capstyle"] = self._solidcapstyle.name
         d["dash_joinstyle"] = self._dashjoinstyle.name
@@ -1810,6 +1811,23 @@ class VertexSelector:
         ind = sorted(self.ind)
         xdata, ydata = self.line.get_data()
         self.process_selected(ind, xdata[ind], ydata[ind])
+
+
+def _rs_markevery(markevery, n):
+    """``markevery`` as the Rust core's spec (see `_mark_every_path`)."""
+    if markevery is None:
+        return None
+    if isinstance(markevery, Integral):
+        return ("every", 0, int(markevery))
+    if isinstance(markevery, Real):
+        return ("fraction", 0.0, float(markevery))
+    if isinstance(markevery, tuple) and len(markevery) == 2:
+        start, step = markevery
+        if isinstance(step, Integral):
+            return ("every", int(start), int(step))
+        return ("fraction", float(start), float(step))
+    idx = np.arange(n)[markevery]
+    return ("indices", [int(i) for i in np.atleast_1d(idx)])
 
 
 _RS_NAMED_MARKERS = {

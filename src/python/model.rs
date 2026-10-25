@@ -245,6 +245,20 @@ fn line_set(l: &mut Line2D, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         "markerfacecolor" => l.markerfacecolor = color_from(v)?,
         "markerfacecoloralt" => l.markerfacecoloralt = color_from(v)?,
         "antialiased" => l.antialiased = v.extract()?,
+        "markevery" => {
+            use crate::mpl::lines::MarkEvery;
+            l.markevery = if v.is_none() {
+                None
+            } else {
+                let t = v.cast::<PyTuple>()?;
+                let kind: String = t.get_item(0)?.extract()?;
+                Some(match kind.as_str() {
+                    "every" => MarkEvery::Every(t.get_item(1)?.extract()?, t.get_item(2)?.extract()?),
+                    "fraction" => MarkEvery::Fraction(t.get_item(1)?.extract()?, t.get_item(2)?.extract()?),
+                    _ => MarkEvery::Indices(t.get_item(1)?.extract()?),
+                })
+            };
+        }
         "drawstyle" => {
             let s: String = v.extract()?;
             l.set_drawstyle(DrawStyle::parse(&s).ok_or_else(|| PyValueError::new_err("bad drawstyle"))?);

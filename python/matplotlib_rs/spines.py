@@ -613,5 +613,6 @@ class Spines(MutableMapping):
         return len(self._dict)
 
 
-from ._spines_rs import _patch_spines  # noqa: E402
+from ._spines_rs import _patch_spines, _patch_spines_container  # noqa: E402
 _patch_spines(Spine)
+_patch_spines_container(Spines, Spine)

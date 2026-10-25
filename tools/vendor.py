@@ -60,8 +60,9 @@ PATCHES = {
                "_patch_figure(FigureBase, Figure, SubFigure)\n"),
     ],
     "spines.py": [
-        (None, "\n\nfrom ._spines_rs import _patch_spines  # noqa: E402\n"
-               "_patch_spines(Spine)\n"),
+        (None, "\n\nfrom ._spines_rs import _patch_spines, _patch_spines_container  # noqa: E402\n"
+               "_patch_spines(Spine)\n"
+               "_patch_spines_container(Spines, Spine)\n"),
     ],
     "projections/__init__.py": [
         # the 3D toolkit imports matplotlib itself; not supported yet
