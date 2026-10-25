@@ -62,6 +62,124 @@ impl Outline {
         b
     }
 
+    /// `FT_Outline_Decompose` into matplotlib path vertices (in pixels) and
+    /// codes, as `FT2Font.get_path` builds them (CLOSEPOLY between contours
+    /// and at the end).
+    pub fn decompose(&self) -> Option<(Vec<[f64; 2]>, Vec<u8>)> {
+        const MOVETO: u8 = 1;
+        const LINETO: u8 = 2;
+        const CURVE3: u8 = 3;
+        const CURVE4: u8 = 4;
+        const CLOSEPOLY: u8 = 79;
+        let mut v: Vec<[f64; 2]> = Vec::new();
+        let mut c: Vec<u8> = Vec::new();
+        let px = |p: (i64, i64)| [p.0 as f64 * (1.0 / 64.0), p.1 as f64 * (1.0 / 64.0)];
+        let tag = |i: usize| self.tags[i] & 3;
+        let mut first = 0usize;
+        for &last in &self.contours {
+            let last = last as usize;
+            if last < first || last >= self.points.len() {
+                return None;
+            }
+            let mut limit = last;
+            let mut v_start = self.points[first];
+            let v_last = self.points[last];
+            let mut v_control: (i64, i64);
+            let mut point = first as isize;
+            if tag(first) == 2 {
+                return None;
+            }
+            if tag(first) == 0 {
+                if tag(last) == 1 {
+                    v_start = v_last;
+                    limit -= 1;
+                } else {
+                    v_start = ((v_start.0 + v_last.0) / 2, (v_start.1 + v_last.1) / 2);
+                }
+                point -= 1;
+            }
+            // move_to
+            if !v.is_empty() {
+                v.push([0.0, 0.0]);
+                c.push(CLOSEPOLY);
+            }
+            v.push(px(v_start));
+            c.push(MOVETO);
+            let mut closed = false;
+            while (point as usize) < limit || point < 0 {
+                point += 1;
+                let i = point as usize;
+                match tag(i) {
+                    1 => {
+                        v.push(px(self.points[i]));
+                        c.push(LINETO);
+                    }
+                    0 => {
+                        v_control = self.points[i];
+                        loop {
+                            if (point as usize) < limit {
+                                point += 1;
+                                let j = point as usize;
+                                let vec = self.points[j];
+                                if tag(j) == 1 {
+                                    v.push(px(v_control));
+                                    v.push(px(vec));
+                                    c.extend([CURVE3, CURVE3]);
+                                    break;
+                                }
+                                if tag(j) != 0 {
+                                    return None;
+                                }
+                                let mid = ((v_control.0 + vec.0) / 2, (v_control.1 + vec.1) / 2);
+                                v.push(px(v_control));
+                                v.push(px(mid));
+                                c.extend([CURVE3, CURVE3]);
+                                v_control = vec;
+                            } else {
+                                v.push(px(v_control));
+                                v.push(px(v_start));
+                                c.extend([CURVE3, CURVE3]);
+                                closed = true;
+                                break;
+                            }
+                        }
+                        if closed {
+                            break;
+                        }
+                    }
+                    _ => {
+                        if i + 1 > limit || tag(i + 1) != 2 {
+                            return None;
+                        }
+                        point += 2;
+                        let (v1, v2) = (self.points[i], self.points[i + 1]);
+                        v.push(px(v1));
+                        v.push(px(v2));
+                        if (point as usize) <= limit {
+                            v.push(px(self.points[point as usize]));
+                            c.extend([CURVE4, CURVE4, CURVE4]);
+                        } else {
+                            v.push(px(v_start));
+                            c.extend([CURVE4, CURVE4, CURVE4]);
+                            closed = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if !closed {
+                v.push(px(v_start));
+                c.push(LINETO);
+            }
+            first = last + 1;
+        }
+        if !v.is_empty() {
+            v.push([0.0, 0.0]);
+            c.push(CLOSEPOLY);
+        }
+        Some((v, c))
+    }
+
     /// Append another outline (used for composite glyphs).
     pub fn append(&mut self, other: &Outline) {
         let base = self.points.len() as u16;

@@ -409,6 +409,7 @@ fn matrix_check(m: &FtMatrix) -> bool {
 #[derive(Clone, Debug)]
 struct FontDict {
     charset_offset: i64,
+    encoding_offset: i64,
     charstrings_offset: i64,
     private_size: i64,
     private_offset: i64,
@@ -426,6 +427,7 @@ impl Default for FontDict {
     fn default() -> Self {
         FontDict {
             charset_offset: 0,
+            encoding_offset: 0,
             charstrings_offset: 0,
             private_size: 0,
             private_offset: 0,
@@ -448,6 +450,7 @@ fn parse_font_dict(d: &[u8], start: usize, end: usize) -> Result<FontDict, FontE
         let num = |i: usize| a.get(i).map(|&p| parse_num(d, p, limit)).unwrap_or(0);
         match op {
             15 if !a.is_empty() => fd.charset_offset = num(0),
+            16 if !a.is_empty() => fd.encoding_offset = num(0),
             17 if !a.is_empty() => fd.charstrings_offset = num(0),
             18 if a.len() >= 2 => {
                 fd.private_size = num(0);
@@ -620,6 +623,10 @@ pub struct CffFont {
     fd_select: Option<FdSelect>,
     /// Glyph SIDs (CIDs for CID-keyed fonts), when the charset has them.
     sids: Option<Vec<u16>>,
+    strings: Index,
+    pub is_cid: bool,
+    /// FreeType synthesizes a charmap from the CFF encoding
+    pub has_encoding_cmap: bool,
     pub num_glyphs: u32,
 }
 
@@ -634,7 +641,7 @@ impl CffFont {
         let hdr_size = d[2] as usize;
         let (names, p) = Index::parse(&d, hdr_size)?;
         let (top_dicts, p) = Index::parse(&d, p)?;
-        let (_strings, p) = Index::parse(&d, p)?;
+        let (strings, p) = Index::parse(&d, p)?;
         let (gsubrs, _) = Index::parse(&d, p)?;
         if names.count() == 0 || top_dicts.count() == 0 {
             return Err(err("empty CFF font"));
@@ -648,8 +655,8 @@ impl CffFont {
         let num_glyphs = charstrings.count();
         let charstring_type = top_dict.charstring_type;
         let is_cid = top_dict.is_cid;
-        let (fd_array_offset, fd_select_offset, charset_offset) =
-            (top_dict.fd_array_offset, top_dict.fd_select_offset, top_dict.charset_offset);
+        let (fd_array_offset, fd_select_offset, charset_offset, encoding_offset) =
+            (top_dict.fd_array_offset, top_dict.fd_select_offset, top_dict.charset_offset, top_dict.encoding_offset);
         let mut top = load_subfont(&d, top_dict)?;
 
         let mut subfonts = Vec::new();
@@ -767,6 +774,27 @@ impl CffFont {
             normalize_matrix(s);
         }
 
+        // cff_encoding_load: FreeType adds a charmap for an encoding with codes
+        let has_encoding_cmap = !is_cid
+            && match (&sids, encoding_offset) {
+                (Some(sids), 0) => {
+                    // the standard encoding, through the charset
+                    let mut cids = std::collections::HashMap::new();
+                    for (g, &s) in sids.iter().enumerate().rev() {
+                        cids.insert(s, g);
+                    }
+                    STANDARD_ENCODING.iter().any(|&sid| sid != 0 && cids.get(&sid).copied().unwrap_or(0) != 0)
+                }
+                (Some(_), 1) => false,
+                (Some(_), off) => {
+                    let p = off as usize;
+                    match (d.get(p), d.get(p + 1)) {
+                        (Some(f), Some(&n)) => f & 0x7f == 0 || n > 0,
+                        _ => false,
+                    }
+                }
+                (None, _) => false,
+            };
         let gsubrs_bias = compute_bias(charstring_type, gsubrs.count());
         Ok(CffFont {
             data: d,
@@ -777,6 +805,9 @@ impl CffFont {
             subfonts,
             fd_select,
             sids,
+            strings,
+            is_cid,
+            has_encoding_cmap,
             num_glyphs: num_glyphs as u32,
         })
     }
@@ -843,6 +874,19 @@ impl CffFont {
             p.1 = mul_fix(p.1, ys);
         }
         Ok(out)
+    }
+
+    /// `cff_get_glyph_name`: the charset name of a glyph (not for CID fonts).
+    pub fn glyph_name(&self, gid: u32) -> Option<String> {
+        if self.is_cid {
+            return None;
+        }
+        let sid = *self.sids.as_ref()?.get(gid as usize)? as usize;
+        if sid < 391 {
+            return Some(super::names::CFF_STANDARD_STRINGS[sid].to_string());
+        }
+        let (s, e) = self.strings.get(sid - 391)?;
+        Some(String::from_utf8_lossy(&self.data[s..e]).into_owned())
     }
 
     /// `cff_lookup_glyph_by_stdcharcode`.

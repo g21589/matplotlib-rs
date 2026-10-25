@@ -1101,7 +1101,7 @@ class AxisArtist(martist.Artist):
         # docstring inherited
         if not self.get_visible():
             return
-        renderer.open_group(__name__, gid=self.get_gid())
+        renderer.open_group('mpl_toolkits.axisartist.axis_artist', gid=self.get_gid())
         self._axis_artist_helper.update_lim(self.axes)
         self._draw_ticks(renderer)
         self._draw_line(renderer)

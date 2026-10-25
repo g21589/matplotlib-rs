@@ -211,6 +211,7 @@ class Text(Artist):
         %(Text:kwdoc)s
         """
         self._h = _mplrs.Text(0.0, 0.0, "")
+        self._h.set_owner(weakref.ref(self))
         super().__init__()
         self._x, self._y = x, y
         self._text = ''
@@ -2364,7 +2365,9 @@ class _RsText(artist._RsOwned, artist._RsOwnedTransformMixin, Text):
         artist._sync_dirty()
         fig = self.get_figure(root=True)
         owner = self._rs_owner
-        if dpi is None or fig is None or dpi == fig.dpi:
-            return Bbox.from_extents(*owner._rs.text_extent(self._h))
-        with cbook._setattr_cm(fig, dpi=dpi):
-            return Bbox.from_extents(*owner._rs.text_extent(self._h))
+        from ._foreign import metrics
+        with metrics(renderer):
+            if dpi is None or fig is None or dpi == fig.dpi:
+                return Bbox.from_extents(*owner._rs.text_extent(self._h))
+            with cbook._setattr_cm(fig, dpi=dpi):
+                return Bbox.from_extents(*owner._rs.text_extent(self._h))

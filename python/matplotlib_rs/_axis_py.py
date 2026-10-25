@@ -1473,7 +1473,7 @@ class Axis(martist.Artist):
 
         if not self.get_visible():
             return
-        renderer.open_group(__name__, gid=self.get_gid())
+        renderer.open_group('matplotlib.axis', gid=self.get_gid())
 
         ticks_to_draw = self._update_ticks()
         tlb1, tlb2 = self._get_ticklabel_bboxes(ticks_to_draw, renderer)

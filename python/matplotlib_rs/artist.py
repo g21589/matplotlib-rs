@@ -429,8 +429,10 @@ Supported properties are
     # Called by the Rust core for artists it does not draw itself; *target*
     # is the renderer of the figure being drawn.
     def _rs_draw(self, target):
-        from .backends.backend_agg import RendererAgg
-        self.draw(RendererAgg._for_target(target))
+        if isinstance(target, _mplrs.RendererAgg):
+            from .backends.backend_agg import RendererAgg
+            target = RendererAgg._for_target(target)
+        self.draw(target)
 
     def _rs_sticky_edges(self):
         se = self._sticky_edges
@@ -443,8 +445,10 @@ Supported properties are
             return None
         if for_axes and self._fully_clipped_to_axes():
             return None
-        from .backends.backend_agg import RendererAgg
-        bb = self.get_tightbbox(RendererAgg._for_target(target))
+        if isinstance(target, _mplrs.RendererAgg):
+            from .backends.backend_agg import RendererAgg
+            target = RendererAgg._for_target(target)
+        bb = self.get_tightbbox(target)
         if bb is None:
             return None
         return tuple(map(float, bb.extents))

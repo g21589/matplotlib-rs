@@ -361,6 +361,8 @@ pub struct Patch {
     pub dash_pattern: DashPattern,
     pub antialiased: bool,
     pub hatch: Option<String>,
+    /// the hatch is a `numpy.str_` in Python
+    pub hatch_np: bool,
     pub hatch_linewidth: f64,
     pub capstyle: LineCap,
     pub joinstyle: LineJoin,
@@ -393,6 +395,7 @@ impl Patch {
             dash_pattern: (0.0, None),
             antialiased: r.boolean("patch.antialiased"),
             hatch: None,
+            hatch_np: false,
             hatch_linewidth: r.num("hatch.linewidth"),
             capstyle: LineCap::Butt,
             joinstyle: LineJoin::MiterRevert,
@@ -625,6 +628,7 @@ impl Patch {
     }
 
     pub fn draw(&self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx) {
+        renderer.artist_start();
         if !self.base.visible {
             return;
         }
@@ -642,6 +646,7 @@ impl Patch {
         clip: &ClipCtx,
         args: &[(Path, super::transforms::Mat, Option<Rgba>)],
     ) {
+        renderer.open_group("patch", self.base.gid.as_deref());
         let mut gc = GcState::default();
         let mut lw = self.linewidth;
         if self.edgecolor.a == 0.0 || self.linestyle == "None" {
@@ -657,6 +662,8 @@ impl Patch {
         if let Some(h) = &self.hatch {
             if let Some(hp) = super::hatch::get_path(h, 6) {
                 gc.hatch = Some((hp, self.get_hatchcolor(), self.hatch_linewidth));
+                gc.hatch_pattern = Some(h.clone());
+                gc.hatch_np = self.hatch_np;
             }
         }
         gc.sketch = self.base.sketch;
@@ -679,6 +686,7 @@ impl Patch {
         for (p, t, f) in args {
             renderer.draw_path(&gc, p, t, *f);
         }
+        renderer.close_group("patch");
     }
 }
 

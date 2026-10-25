@@ -177,6 +177,12 @@ impl PyText {
         PyText { inner: shared(Text::new(x, y, text)) }
     }
 
+    /// The Python `Text` this text mirrors (a weak reference), passed as
+    /// `mtext` to renderers.
+    fn set_owner(&self, weak: Py<PyAny>) {
+        self.lk().owner = Some(super::foreign::owner_ref(weak));
+    }
+
     fn set(&self, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         text_set(&mut self.lk(), name, value)
     }
@@ -257,6 +263,7 @@ fn patch_set(p: &mut Patch, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         "fill" => p.set_fill(v.extract()?),
         "antialiased" => p.antialiased = v.extract()?,
         "hatch" => p.hatch = v.extract()?,
+        "hatch_np" => p.hatch_np = v.extract()?,
         "hatch_linewidth" => p.hatch_linewidth = v.extract()?,
         "capstyle" => p.capstyle = crate::mpl::artist::parse_capstyle(&v.extract::<String>()?),
         "joinstyle" => p.joinstyle = crate::mpl::artist::parse_joinstyle(&v.extract::<String>()?),
@@ -1200,6 +1207,19 @@ impl PyFigure {
             let mut t = target.borrow_mut();
             let r = t.r()?;
             self.lk().draw(r);
+        }
+        super::ext::take_error()
+    }
+
+    /// `Figure.draw(renderer)` into any other Python renderer (matplotlib's
+    /// vector backends): drawing calls and text metrics are forwarded to it.
+    fn draw_foreign(&self, renderer: &Bound<'_, PyAny>) -> PyResult<()> {
+        let fr = std::sync::Arc::new(super::foreign::PyForeign::new(renderer)?);
+        {
+            let mut f = self.lk();
+            let (w, h) = f.canvas_size();
+            let mut r = Renderer::foreign(fr, w as f64, h as f64, f.dpi);
+            f.draw(&mut r);
         }
         super::ext::take_error()
     }
@@ -2555,6 +2575,21 @@ impl PyAxes {
             let mut fig = self.lk();
             let _snap = fig.publish_snapshot();
             if !fig.draw_axes(self.uid, r) {
+                return Err(PyValueError::new_err("no such axes"));
+            }
+        }
+        super::ext::take_error()
+    }
+
+    /// `Axes.draw(renderer)` of this axes alone into any other Python renderer.
+    fn draw_foreign(&self, renderer: &Bound<'_, PyAny>) -> PyResult<()> {
+        let fr = std::sync::Arc::new(super::foreign::PyForeign::new(renderer)?);
+        {
+            let mut fig = self.lk();
+            let (w, h) = fig.canvas_size();
+            let mut r = Renderer::foreign(fr, w as f64, h as f64, fig.dpi);
+            let _snap = fig.publish_snapshot();
+            if !fig.draw_axes(self.uid, &mut r) {
                 return Err(PyValueError::new_err("no such axes"));
             }
         }

@@ -34,6 +34,9 @@ class _FlushBbox(mtransforms.Bbox):
         return super().invalidate()
 
 
+_FlushBbox.__name__ = "Bbox"  # (as printed by transforms)
+
+
 # methods whose overrides decide an artist's geometry, and the modules whose
 # artists keep it up to date by marking themselves stale
 _GEOMETRY_METHODS = ("get_path", "get_patch_transform", "get_xydata", "recache",
@@ -297,11 +300,14 @@ def _patch_axes_base(cls):
             return orig_draw(self, renderer)
         if not self.get_visible():
             return
-        self._rs_prepare_draw(renderer)
-        self.get_figure(root=True)._rs_sync_all()
-        target = getattr(renderer, "_renderer", None)
-        if isinstance(target, _mplrs.RendererAgg) and not renderer._rs_disabled:
-            self._rs.draw_into(target)
+        from .._foreign import is_foreign, metrics
+        with metrics(renderer):
+            self._rs_prepare_draw(renderer)
+            self.get_figure(root=True)._rs_sync_all()
+            if is_foreign(renderer):
+                self._rs.draw_foreign(renderer)
+            elif not renderer._rs_disabled:
+                self._rs.draw_into(renderer._renderer)
         self.stale = False
 
     cls.draw = martist.allow_rasterization(draw)

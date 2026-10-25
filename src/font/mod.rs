@@ -4,6 +4,7 @@
 pub mod cff;
 pub mod face;
 pub mod grays;
+pub mod names;
 pub mod outline;
 pub mod sfnt;
 

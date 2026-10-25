@@ -15,12 +15,10 @@ point_in_path_collection = _impl.point_in_path_collection
 path_intersects_path = _impl.path_intersects_path
 path_intersects_rectangle = _impl.path_intersects_rectangle
 clip_path_to_rect = _impl.clip_path_to_rect
+convert_to_string = _impl.convert_to_string
 
 
 def count_bboxes_overlapping_bbox(bbox, bboxes):
     return _impl.count_bboxes_overlapping_bbox(
         np.asarray(bbox, dtype=float), np.asarray(bboxes, dtype=float).reshape(-1, 2, 2))
 
-
-def convert_to_string(*args, **kwargs):
-    raise NotImplementedError("_path.convert_to_string is not implemented in matplotlib_rs yet")

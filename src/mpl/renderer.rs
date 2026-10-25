@@ -1,7 +1,9 @@
 //! Port of the Python half of `matplotlib.backends.backend_agg.RendererAgg`
 //! (text drawing, metrics) on top of the Rust Agg renderer.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use super::artist::GcState;
 use super::fonts::{resolve_font, FontProperties};
@@ -22,8 +24,85 @@ struct MetricsKey {
     hinting: String,
 }
 
+/// A renderer implemented outside the Rust core (matplotlib's vector
+/// backends): drawing calls, text metrics and groups are forwarded to it.
+pub trait ForeignRenderer: Send + Sync {
+    fn draw_path(&self, gc: &GcState, path: &Path, trans: &Mat, face: Option<Rgba>);
+    fn draw_markers(&self, gc: &GcState, marker: &Path, marker_trans: &Mat, path: &Path, trans: &Mat, face: Option<Rgba>);
+    #[allow(clippy::too_many_arguments)]
+    fn draw_path_collection(
+        &self,
+        gc: &GcState,
+        master_transform: &Mat,
+        paths: &[Path],
+        transforms: &[Mat],
+        offsets: &[[f64; 2]],
+        offset_trans: &Mat,
+        facecolors: &[Rgba],
+        edgecolors: &[Rgba],
+        linewidths: &[f64],
+        linestyles: &[(f64, Option<Vec<f64>>)],
+        antialiaseds: &[bool],
+    );
+    fn draw_image(&self, gc: &GcState, x: f64, y: f64, rgba: &[u8], w: usize, h: usize);
+    #[allow(clippy::too_many_arguments)]
+    fn draw_text(&self, gc: &GcState, x: f64, y: f64, s: &str, prop: &FontProperties, angle: f64, ismath: bool, mtext: Option<&MText<'_>>);
+    fn text_metrics(&self, s: &str, prop: &FontProperties, ismath: bool) -> (f64, f64, f64);
+    fn open_group(&self, name: &str, gid: Option<&str>);
+    fn close_group(&self, name: &str);
+    /// What matplotlib's `allow_rasterization` does before drawing a
+    /// non-rasterized artist (stop a pending rasterization).
+    fn artist_start(&self);
+    /// `flipy()` and the canvas height (for text positions).
+    fn flipy(&self) -> bool;
+    fn canvas_height(&self) -> f64;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+/// The `mtext` argument of `draw_text`: the text's mirrored object, if
+/// any, and what renderers use of it (anchor in display space, alignment).
+pub struct MText<'a> {
+    pub owner: Option<&'a OwnerRef>,
+    pub x: f64,
+    pub y: f64,
+    pub ha: &'a str,
+    pub va: &'a str,
+    pub rotation_mode: &'a str,
+}
+
+/// The object an artist mirrors (e.g. the Python `Text` passed as `mtext`).
+#[derive(Clone)]
+pub struct OwnerRef(pub Arc<dyn std::any::Any + Send + Sync>);
+
+impl std::fmt::Debug for OwnerRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OwnerRef")
+    }
+}
+
+thread_local! {
+    static FOREIGN: RefCell<Vec<Arc<dyn ForeignRenderer>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Make *f* the renderer whose metrics layout uses until [`pop_foreign`].
+pub fn push_foreign(f: Arc<dyn ForeignRenderer>) {
+    FOREIGN.with(|s| s.borrow_mut().push(f));
+}
+
+pub fn pop_foreign() {
+    FOREIGN.with(|s| {
+        s.borrow_mut().pop();
+    });
+}
+
+fn current_foreign() -> Option<Arc<dyn ForeignRenderer>> {
+    FOREIGN.with(|s| s.borrow().last().cloned())
+}
+
 pub struct Renderer {
     pub agg: RendererAgg,
+    /// drawing and text metrics go to this renderer instead of `agg`
+    pub foreign: Option<Arc<dyn ForeignRenderer>>,
     /// float canvas size (`RendererAgg.width/height` in Python)
     pub width: f64,
     pub height: f64,
@@ -43,6 +122,7 @@ impl Renderer {
     pub fn new(width: f64, height: f64, dpi: f64) -> Renderer {
         Renderer {
             agg: RendererAgg::new(width as u32, height as u32, dpi),
+            foreign: None,
             width,
             height,
             dpi,
@@ -51,9 +131,60 @@ impl Renderer {
         }
     }
 
-    /// A renderer used only for text metrics (no pixel buffer).
+    /// A renderer used only for text metrics (no pixel buffer); the metrics
+    /// are those of the current foreign renderer, if any.
     pub fn metrics_only(width: f64, height: f64, dpi: f64) -> Renderer {
-        Renderer { agg: RendererAgg::new(1, 1, dpi), width, height, dpi, metrics: HashMap::new(), disabled: true }
+        Renderer {
+            agg: RendererAgg::new(1, 1, dpi),
+            foreign: current_foreign(),
+            width,
+            height,
+            dpi,
+            metrics: HashMap::new(),
+            disabled: true,
+        }
+    }
+
+    /// A renderer forwarding everything to *f*.
+    pub fn foreign(f: Arc<dyn ForeignRenderer>, width: f64, height: f64, dpi: f64) -> Renderer {
+        Renderer { agg: RendererAgg::new(1, 1, dpi), foreign: Some(f), width, height, dpi, metrics: HashMap::new(), disabled: false }
+    }
+
+    /// `open_group` (a no-op for Agg).
+    pub fn open_group(&mut self, name: &str, gid: Option<&str>) {
+        if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.open_group(name, gid);
+        }
+    }
+
+    /// Called when a (non-rasterized) artist starts drawing.
+    pub fn artist_start(&mut self) {
+        if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.artist_start();
+        }
+    }
+
+    pub fn close_group(&mut self, name: &str) {
+        if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.close_group(name);
+        }
+    }
+
+    /// `flipy()` and `get_canvas_width_height()[1]`, for text positions.
+    pub fn text_flip(&self) -> Option<f64> {
+        match &self.foreign {
+            Some(f) => f.flipy().then(|| f.canvas_height()),
+            None => Some(self.height),
+        }
     }
 
     pub fn points_to_pixels(&self, points: f64) -> f64 {
@@ -68,6 +199,10 @@ impl Renderer {
         if self.disabled {
             return;
         }
+        if let Some(f) = &self.foreign {
+            f.draw_path(gc, path, trans, face);
+            return;
+        }
         let g = gc.to_agg();
         let face = gc.face(face, false);
         self.agg.draw_path(&g, path, &TransAffine::from_matrix(trans), face);
@@ -75,6 +210,10 @@ impl Renderer {
 
     pub fn draw_markers(&mut self, gc: &GcState, marker: &Path, marker_trans: &Mat, path: &Path, trans: &Mat, face: Option<Rgba>) {
         if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.draw_markers(gc, marker, marker_trans, path, trans, face);
             return;
         }
         let g = gc.to_agg();
@@ -105,6 +244,22 @@ impl Renderer {
         antialiaseds: &[bool],
     ) {
         if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.draw_path_collection(
+                gc,
+                master_transform,
+                paths,
+                transforms,
+                offsets,
+                offset_trans,
+                facecolors,
+                edgecolors,
+                linewidths,
+                linestyles,
+                antialiaseds,
+            );
             return;
         }
         let g = gc.to_agg();
@@ -139,6 +294,10 @@ impl Renderer {
         if self.disabled {
             return;
         }
+        if let Some(f) = &self.foreign {
+            f.draw_image(gc, x, y, rgba, w, h);
+            return;
+        }
         let g = gc.to_agg();
         self.agg.draw_image(&g, x, y, rgba, w, h);
     }
@@ -155,7 +314,10 @@ impl Renderer {
         if let Some(v) = self.metrics.get(&key) {
             return *v;
         }
-        let v = text_metrics(s, prop, ismath, self.dpi);
+        let v = match &self.foreign {
+            Some(f) => f.text_metrics(s, prop, ismath),
+            None => text_metrics(s, prop, ismath, self.dpi),
+        };
         self.metrics.insert(key, v);
         v
     }
@@ -163,7 +325,17 @@ impl Renderer {
     /// `draw_text` for plain (non-math) text.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_text(&mut self, gc: &GcState, x: f64, y: f64, s: &str, prop: &FontProperties, angle: f64, ismath: bool) {
+        self.draw_text_for(gc, x, y, s, prop, angle, ismath, None);
+    }
+
+    /// `draw_text` with the `mtext` argument of matplotlib's renderers.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_text_for(&mut self, gc: &GcState, x: f64, y: f64, s: &str, prop: &FontProperties, angle: f64, ismath: bool, mtext: Option<&MText<'_>>) {
         if self.disabled {
+            return;
+        }
+        if let Some(f) = &self.foreign {
+            f.draw_text(gc, x, y, s, prop, angle, ismath, mtext);
             return;
         }
         if ismath {

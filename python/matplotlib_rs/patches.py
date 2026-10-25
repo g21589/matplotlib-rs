@@ -144,6 +144,8 @@ class Patch(artist.Artist):
         d["dash_pattern"] = (float(dp[0]), None if dp[1] is None else [float(v) for v in dp[1]])
         d["antialiased"] = bool(self._antialiased)
         d["hatch"] = self._hatch
+        # (renderers may see the type, e.g. SVG's hatch ids hash its repr)
+        d["hatch_np"] = isinstance(self._hatch, np.str_)
         d["hatch_linewidth"] = float(self._hatch_linewidth)
         if self._hatch:
             d["hatchcolor_rgba"] = tuple(map(float, self.get_hatchcolor()))

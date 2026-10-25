@@ -100,6 +100,8 @@ pub struct Text {
     pub antialiased: bool,
     pub bbox_patch: Option<Box<TextBbox>>,
     pub url: Option<String>,
+    /// the object this text mirrors (the `mtext` of `draw_text`)
+    pub owner: Option<super::renderer::OwnerRef>,
 }
 
 impl Text {
@@ -126,6 +128,7 @@ impl Text {
             antialiased: rc.boolean("text.antialiased"),
             bbox_patch: None,
             url: None,
+            owner: None,
         }
     }
 
@@ -411,16 +414,19 @@ impl Text {
     }
 
     pub fn draw(&mut self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx) {
+        renderer.artist_start();
         if !self.base.visible || self.text.is_empty() {
             return;
         }
+        renderer.open_group("text", self.base.gid.as_deref());
         let layout = self.get_layout(renderer, ctx);
         let trans = ctx.resolve(&self.base.transform);
         let (posx, posy) = trans.transform_point(self.x, self.y);
         if !posx.is_finite() || !posy.is_finite() {
+            // (matplotlib returns without closing the group)
             return;
         }
-        let canvash = renderer.height;
+        let flip = renderer.text_flip();
         if self.bbox_patch.is_some() {
             self.update_bbox_position_size(renderer, ctx);
             if let Some(bp) = &self.bbox_patch {
@@ -434,12 +440,24 @@ impl Text {
         gc.snap = self.base.snap;
         gc.set_clip_from(&self.base, clip);
         let angle = self.get_rotation(ctx);
+        let mtext = super::renderer::MText {
+            owner: self.owner.as_ref(),
+            x: posx,
+            y: posy,
+            ha: &self.ha,
+            va: &self.va,
+            rotation_mode: &self.rotation_mode,
+        };
+        let mtext = if layout.lines.len() == 1 { Some(&mtext) } else { None };
         for line in &layout.lines {
             let x = line.xy.0 + posx;
             let mut y = line.xy.1 + posy;
-            y = canvash - y;
+            if let Some(canvash) = flip {
+                y = canvash - y;
+            }
             let (clean, ismath) = self.preprocess_math(&line.text);
-            renderer.draw_text(&gc, x, y, &clean, &self.fontproperties, angle, ismath);
+            renderer.draw_text_for(&gc, x, y, &clean, &self.fontproperties, angle, ismath, mtext);
         }
+        renderer.close_group("text");
     }
 }

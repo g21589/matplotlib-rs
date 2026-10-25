@@ -155,12 +155,7 @@ fn cleanup_path<'py>(
     let rect = if clip_rect.is_none() {
         RectD::new(0.0, 0.0, 0.0, 0.0)
     } else {
-        let r: Vec<f64> = clip_rect.call_method0("tolist").and_then(|l| l.extract()).or_else(|_| {
-            let v: Vec<Vec<f64>> = clip_rect.extract()?;
-            Ok::<Vec<f64>, PyErr>(v.into_iter().flatten().collect())
-        })?;
-        let r: Vec<f64> = if r.len() == 4 { r } else { vec![0.0; 4] };
-        RectD::new(r[0], r[1], r[2], r[3])
+        rect_from_py(py, clip_rect)?
     };
     let do_clip = rect.x1 < rect.x2 && rect.y1 < rect.y2;
     let sm = snap_mode_from(snap_mode)?;
@@ -436,6 +431,141 @@ fn clip_path_to_rect<'py>(py: Python<'py>, path: &Bound<'py, PyAny>, rect: &Boun
         .collect()
 }
 
+/// A clip rectangle given as 4 numbers or 2x2 (the `agg::rect_d` caster).
+fn rect_from_py(py: Python<'_>, r: &Bound<'_, PyAny>) -> PyResult<RectD> {
+    let a = py.import("numpy")?.call_method1("asarray", (r, "float64"))?;
+    let ndim: usize = a.getattr("ndim")?.extract()?;
+    let v: Vec<f64> = a.call_method0("ravel")?.call_method0("tolist")?.extract()?;
+    if !((ndim == 2 && v.len() == 4) || (ndim == 1 && v.len() == 4)) {
+        return Err(PyValueError::new_err("Invalid bounding box"));
+    }
+    Ok(RectD::new(v[0], v[1], v[2], v[3]))
+}
+
+/// `__add_number`: `'%.*f'` without trailing zeros and decimal point.
+fn add_number(val: f64, precision: i32, buf: &mut Vec<u8>) {
+    let s = if val.is_finite() { format!("{:.*}", precision.max(0) as usize, val) } else { format!("{val}") };
+    let b = s.as_bytes();
+    let mut end = b.len();
+    if b.contains(&b'.') {
+        while end > 0 && b[end - 1] == b'0' {
+            end -= 1;
+        }
+        if end > 0 && b[end - 1] == b'.' {
+            end -= 1;
+        }
+    }
+    buf.extend_from_slice(&b[..end]);
+}
+
+/// `__convert_to_string`.
+fn path_to_string<V: VertexSource>(path: &mut V, precision: i32, codes: &[Vec<u8>; 5], postfix: bool, buf: &mut Vec<u8>) -> bool {
+    const NUM_VERTICES: [usize; 5] = [0, 1, 1, 2, 3];
+    let (mut x, mut y) = ([0.0f64; 3], [0.0f64; 3]);
+    let (mut last_x, mut last_y) = (0.0, 0.0);
+    loop {
+        let mut code = path.vertex(&mut x[0], &mut y[0]);
+        if code == PATH_CMD_STOP {
+            return true;
+        }
+        if code == 0x4f {
+            buf.extend_from_slice(&codes[4]);
+        } else if code < 5 {
+            let mut size = NUM_VERTICES[code as usize];
+            for i in 1..size {
+                let sub = path.vertex(&mut x[i], &mut y[i]);
+                if sub != code {
+                    return false;
+                }
+            }
+            // formats without quadratic curves get cubic ones
+            if code == 3 && codes[2].is_empty() {
+                let (x0, y0, x1, y1, x2, y2) = (last_x, last_y, x[0], y[0], x[1], y[1]);
+                x[0] = x0 + 2. / 3. * (x1 - x0);
+                y[0] = y0 + 2. / 3. * (y1 - y0);
+                x[1] = x[0] + 1. / 3. * (x2 - x0);
+                y[1] = y[0] + 1. / 3. * (y2 - y0);
+                x[2] = x2;
+                y[2] = y2;
+                code += 1;
+                size = 3;
+            }
+            if !postfix {
+                buf.extend_from_slice(&codes[code as usize - 1]);
+                buf.push(b' ');
+            }
+            for i in 0..size {
+                add_number(x[i], precision, buf);
+                buf.push(b' ');
+                add_number(y[i], precision, buf);
+                buf.push(b' ');
+            }
+            if postfix {
+                buf.extend_from_slice(&codes[code as usize - 1]);
+            }
+            last_x = x[size - 1];
+            last_y = y[size - 1];
+        } else {
+            return false;
+        }
+        buf.push(b'\n');
+    }
+}
+
+/// `convert_to_string(path, trans, clip_rect, simplify, sketch, precision,
+/// codes, postfix)`: the path as the operators of a vector format.
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn convert_to_string<'py>(
+    py: Python<'py>,
+    path: &Bound<'py, PyAny>,
+    trans: &Bound<'py, PyAny>,
+    clip_rect: &Bound<'py, PyAny>,
+    simplify: Option<bool>,
+    sketch: &Bound<'py, PyAny>,
+    precision: i32,
+    codes: Vec<Bound<'py, PyAny>>,
+    postfix: bool,
+) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+    let p = path_from_py(path)?;
+    let t = trans_from_py(trans)?;
+    let rect = if clip_rect.is_none() { RectD::new(0.0, 0.0, 0.0, 0.0) } else { rect_from_py(py, clip_rect)? };
+    if codes.len() != 5 {
+        return Err(PyValueError::new_err("codes must be a sequence of 5 strings"));
+    }
+    let mut cs: [Vec<u8>; 5] = Default::default();
+    for (i, c) in codes.iter().enumerate() {
+        cs[i] = match c.extract::<Vec<u8>>() {
+            Ok(v) if !c.is_instance_of::<pyo3::types::PyString>() => v,
+            _ => c.extract::<String>()?.into_bytes(),
+        };
+    }
+    let sk = if sketch.is_none() { None } else { Some(sketch.extract::<(f64, f64, f64)>()?) };
+    let simplify = simplify.unwrap_or(p.should_simplify);
+    let mut buf = Vec::new();
+    let ok = if p.total_vertices() == 0 {
+        true
+    } else {
+        let do_clip = rect.x1 < rect.x2 && rect.y1 < rect.y2;
+        let tpath = ConvTransform::new(p.iter(), t);
+        let nan_removed = PathNanRemover::new(tpath, true, p.has_codes());
+        let clipped = PathClipper::from_rect(nan_removed, do_clip, rect);
+        let mut simplified = PathSimplifier::new(clipped, simplify, p.simplify_threshold);
+        match sk {
+            Some((scale, length, randomness)) if scale != 0.0 => {
+                let curve = ConvCurve::new(simplified);
+                let mut sketched = Sketch::new(curve, scale, length, randomness);
+                path_to_string(&mut sketched, precision, &cs, postfix, &mut buf)
+            }
+            _ => path_to_string(&mut simplified, precision, &cs, postfix, &mut buf),
+        }
+    };
+    if !ok {
+        return Err(PyValueError::new_err("Malformed path codes"));
+    }
+    Ok(pyo3::types::PyBytes::new(py, &buf))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "_path")?;
     sub.add_function(wrap_pyfunction!(affine_transform, &sub)?)?;
@@ -451,6 +581,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     sub.add_function(wrap_pyfunction!(path_intersects_path, &sub)?)?;
     sub.add_function(wrap_pyfunction!(path_intersects_rectangle, &sub)?)?;
     sub.add_function(wrap_pyfunction!(clip_path_to_rect, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(convert_to_string, &sub)?)?;
     m.add_submodule(&sub)?;
     Ok(())
 }

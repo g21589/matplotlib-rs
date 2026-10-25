@@ -1249,6 +1249,9 @@ impl Axes {
 
     /// Draw, with *kids* drawing the child axes (which the figure owns).
     pub fn draw_with(&mut self, renderer: &mut Renderer, fig: &FigCtx, kids: &mut dyn ChildAxesDraw) {
+        if self.ext_draw.is_none() {
+            renderer.artist_start();
+        }
         if !self.base.visible {
             return;
         }
@@ -1257,6 +1260,7 @@ impl Axes {
             return;
         }
         self.unstale_viewlim(fig);
+        renderer.open_group("axes", self.base.gid.as_deref());
         self.apply_aspect(None, fig);
         // children + spines + axes + titles + legend, sorted by zorder
         #[derive(Clone)]
@@ -1348,6 +1352,7 @@ impl Axes {
                 }
             }
         }
+        renderer.close_group("axes");
     }
 }
 

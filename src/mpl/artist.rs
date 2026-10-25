@@ -294,6 +294,12 @@ pub struct GcState {
     pub snap: Option<bool>,
     pub sketch: Option<(f64, f64, f64)>,
     pub hatch: Option<(MplPath, Rgba, f64)>,
+    /// the hatch pattern string of `hatch` (`gc.get_hatch()`)
+    pub hatch_pattern: Option<String>,
+    pub hatch_np: bool,
+    /// identity of the artist whose clip box this is (renderers that compare
+    /// clip boxes by identity see one object per artist)
+    pub clip_owner: usize,
 }
 
 impl Default for GcState {
@@ -312,6 +318,9 @@ impl Default for GcState {
             snap: None,
             sketch: None,
             hatch: None,
+            hatch_pattern: None,
+            hatch_np: false,
+            clip_owner: 0,
         }
     }
 }
@@ -348,6 +357,7 @@ impl GcState {
 
     /// Apply `Artist._set_gc_clip`.
     pub fn set_clip_from(&mut self, base: &ArtistBase, ctx: &ClipCtx) {
+        self.clip_owner = base as *const ArtistBase as usize;
         if base.clip_on {
             match &base.clip_box {
                 ClipBoxSpec::None => {}

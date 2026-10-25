@@ -5,7 +5,7 @@
 use numpy::{PyArray3, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyDictMethods};
+use pyo3::types::{PyBytes, PyDict, PyDictMethods};
 
 use crate::agg::pixfmt::Rgba;
 use crate::agg::stroke::{LineCap, LineJoin};
@@ -499,6 +499,8 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyclass(name = "FT2Font", module = "matplotlib_rs._mplrs", unsendable)]
 pub struct PyFont {
     inner: crate::font::FtFont,
+    /// the outline of the last `load` (`face->glyph->outline`)
+    last: Option<crate::font::outline::Outline>,
 }
 
 #[pymethods]
@@ -508,7 +510,67 @@ impl PyFont {
     fn new(path: &str, face_index: u32) -> PyResult<Self> {
         let data = crate::mpl::fonts::load_font_data(path, face_index)
             .ok_or_else(|| PyValueError::new_err(format!("cannot load font {path}")))?;
-        Ok(PyFont { inner: crate::font::FtFont::new(data) })
+        Ok(PyFont { inner: crate::font::FtFont::new(data), last: None })
+    }
+
+    /// A font from the bytes of a font file (`FT2Font(file-like)`).
+    #[staticmethod]
+    #[pyo3(signature = (data, face_index=0))]
+    fn from_bytes(data: Vec<u8>, face_index: u32) -> PyResult<Self> {
+        let d = crate::font::FontData::from_bytes(data, face_index).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok(PyFont { inner: crate::font::FtFont::new(std::sync::Arc::new(d)), last: None })
+    }
+
+    /// `load_glyph(gid, flags)` (unhinted; `no_scale` for `LoadFlags.NO_SCALE`):
+    /// (width, height, horiBearingX, horiBearingY, horiAdvance,
+    /// linearHoriAdvance, bbox).  The outline is kept for `get_path`.
+    #[allow(clippy::type_complexity)]
+    fn load(&mut self, gid: u32, no_scale: bool) -> PyResult<(i64, i64, i64, i64, i64, i64, (i64, i64, i64, i64))> {
+        let (o, m) = self.inner.load_glyph_full(gid, no_scale).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        self.last = Some(o);
+        Ok((m.width, m.height, m.hori_bearing_x, m.hori_bearing_y, m.hori_advance, m.linear_hori_advance,
+            (m.bbox.x_min, m.bbox.y_min, m.bbox.x_max, m.bbox.y_max)))
+    }
+
+    /// `get_path()` of the last loaded glyph: (vertices, codes).
+    fn get_path<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, numpy::PyArray2<f64>>, Bound<'py, numpy::PyArray1<u8>>)> {
+        let o = self.last.as_ref().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("No glyph loaded"))?;
+        let (v, c) = o.decompose().ok_or_else(|| pyo3::exceptions::PyRuntimeError::new_err("FT_Outline_Decompose failed"))?;
+        let n = v.len();
+        let flat: Vec<f64> = v.into_iter().flatten().collect();
+        Ok((numpy::PyArray1::from_vec(py, flat).reshape([n, 2])?, numpy::PyArray1::from_vec(py, c)))
+    }
+
+    /// `FT_Get_Glyph_Name` (None when the font has no glyph names).
+    fn glyph_name(&self, gid: u32) -> Option<String> {
+        self.inner.sfnt().glyph_name(gid)
+    }
+
+    /// The raw bytes of an SFNT table.
+    fn table<'py>(&self, py: Python<'py>, tag: &str) -> Option<Bound<'py, PyBytes>> {
+        let t: [u8; 4] = tag.as_bytes().try_into().ok()?;
+        self.inner.sfnt().table_data(&t).map(|d| PyBytes::new(py, d))
+    }
+
+    /// The `name` table records: (platform, encoding, language, name id, bytes).
+    fn name_records<'py>(&self, py: Python<'py>) -> Vec<(u16, u16, u16, u16, Bound<'py, PyBytes>)> {
+        self.inner.sfnt().names.iter().map(|(p, e, l, n, b)| (*p, *e, *l, *n, PyBytes::new(py, b))).collect()
+    }
+
+    /// Whether the font has CFF (not TrueType) outlines, is CID-keyed, and
+    /// has an encoding FreeType makes a charmap of.
+    fn cff_kind(&self) -> (bool, bool, bool) {
+        match &self.inner.sfnt().cff {
+            Some(c) => (true, c.is_cid, c.has_encoding_cmap),
+            None => (false, false, false),
+        }
+    }
+
+    /// libraqm's glyphs for *text*: (index, cluster, x_advance, y_advance,
+    /// x_offset, y_offset) in 26.6.
+    fn _shape(&self, text: &str) -> Vec<(u32, u32, i32, i32, i32, i32)> {
+        let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+        self.inner.shape(&cps).into_iter().map(|g| (g.index, g.cluster, g.x_advance, g.y_advance, g.x_offset, g.y_offset)).collect()
     }
 
     /// `load_glyph(gid, NO_HINTING)` metrics: (width, height, horiBearingX,

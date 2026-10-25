@@ -40,6 +40,13 @@ def compare_images(a, b):
     return None
 
 
+def normalized(path):
+    """File contents, without lines naming the output file (PostScript title)."""
+    with open(path, "rb") as fh:
+        data = fh.read()
+    return b"\n".join(line for line in data.split(b"\n") if not line.startswith(b"%%Title:"))
+
+
 def main():
     cases = sys.argv[1:] or sorted(glob.glob(os.path.join(here, "cases", "*.py")))
     failed = 0
@@ -72,6 +79,15 @@ def main():
             r = compare_images(os.path.join(dm, img), pr)
             if r:
                 problems.append(f"{img}: {r}")
+        for f in sorted(glob.glob(os.path.join(dm, "*"))):
+            base = os.path.basename(f)
+            if base.endswith(".png"):
+                continue
+            pr = os.path.join(dr, base)
+            if not os.path.exists(pr):
+                problems.append(f"{base}: missing")
+            elif normalized(f) != normalized(pr):
+                problems.append(f"{base}: differs")
         status = "OK  " if not problems else "DIFF"
         if problems:
             failed += 1

@@ -47,6 +47,12 @@ class _FlushBboxTransformTo(mtransforms.BboxTransformTo):
         return super().invalidate()
 
 
+# transforms print (and SVG hashes clip paths by) their class name: keep
+# matplotlib's names
+_FlushAffine2D.__name__ = "Affine2D"
+_FlushBboxTransformTo.__name__ = "BboxTransformTo"
+
+
 # the category the Rust figure gives to natively drawn artists
 _NATIVE_CATEGORY = {"Line2D": 2, "Patch": 3, "Text": 4}
 
@@ -155,7 +161,9 @@ def _patch_figure(FigureBase, Figure, SubFigure):
         # docstring inherited
         if not self.get_visible():
             return
-        with self._render_lock:
+        from ._foreign import is_foreign, metrics
+        foreign = is_foreign(renderer)
+        with self._render_lock, metrics(renderer):
             # applies the aspect of all axes (as matplotlib does)
             self._get_draw_artists(renderer)
             try:
@@ -171,10 +179,10 @@ def _patch_figure(FigureBase, Figure, SubFigure):
                     ax._rs_prepare_draw(renderer)
                 _rs_sync_subfigs(self)
                 self._rs_sync_all()
-                target = getattr(renderer, "_renderer", None)
-                if (isinstance(target, _mplrs.RendererAgg)
-                        and not getattr(renderer, "_rs_disabled", False)):
-                    self._rs.draw_into(target)
+                if foreign:
+                    self._rs.draw_foreign(renderer)
+                elif not getattr(renderer, "_rs_disabled", False):
+                    self._rs.draw_into(renderer._renderer)
                 else:
                     self._rs.draw_disabled()
                 renderer.close_group('figure')

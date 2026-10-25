@@ -426,6 +426,7 @@ impl Line2D {
     /// `Line2D.draw`.  `xbound` is `axes.get_xbound()` when the line lives
     /// in an Axes (for the subslice optimisation).
     pub fn draw(&mut self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx, xbound: Option<(f64, f64)>, subslice_ok: bool) {
+        renderer.artist_start();
         if !self.base.visible {
             return;
         }
@@ -450,6 +451,7 @@ impl Line2D {
         }
         let path: &Path = sub_path_store.as_ref().unwrap_or(&cache.path);
         let affine = transform.get_affine();
+        renderer.open_group("line2d", self.base.gid.as_deref());
 
         if self.linestyle != "None" {
             let tpath = if transform.is_affine() {
@@ -543,6 +545,7 @@ impl Line2D {
                 }
             }
         }
+        renderer.close_group("line2d");
     }
 }
 

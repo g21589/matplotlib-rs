@@ -33,6 +33,9 @@ MODULES = [
     "texmanager.py", "textpath.py", "typing.py", "units.py", "widgets.py",
     "axes/__init__.py", "axes/_axes.py", "axes/_base.py", "axes/_secondary_axes.py",
     "backends/__init__.py", "backends/registry.py",
+    "backends/_backend_pdf_ps.py", "backends/backend_mixed.py", "backends/backend_pdf.py",
+    "backends/backend_pgf.py", "backends/backend_ps.py", "backends/backend_svg.py",
+    "backends/backend_template.py",
     "projections/__init__.py", "projections/geo.py", "projections/polar.py",
     "style/__init__.py", "style/core.py",
     "tri/__init__.py", "tri/_triangulation.py", "tri/_tricontour.py",
@@ -299,6 +302,10 @@ def vendor(rel):
     else:
         src = (SRC / SOURCES.get(rel, rel)).read_text()
     s = HEADER + rewrite_imports(src)
+    # renderer groups named after the module keep matplotlib's module name
+    srcrel = rel if rel.startswith("mpl_toolkits/") else "matplotlib/" + SOURCES.get(rel, rel)
+    modname = srcrel[:-3].replace("/", ".").removesuffix(".__init__")
+    s = s.replace("open_group(__name__", f"open_group({modname!r}")
     for old, new, *count in PATCHES.get(rel, []):
         if old is None:
             s += new

@@ -378,12 +378,45 @@ impl SfntFace {
         }
     }
 
-    /// The scaled advance (`metrics.horiAdvance`) of an unhinted glyph load.
-    pub fn hori_advance(&self, gid: u32, x_scale: i64) -> i64 {
-        let (_, aw) = self.hmetrics(gid);
-        match &self.cff {
-            Some(cff) => cff.hori_advance(gid, aw as i64, x_scale),
-            None => mul_fix(aw as i64, x_scale),
+    /// `FT_Get_Glyph_Name`: the glyph's PostScript name (`post` table, or
+    /// the CFF charset).
+    pub fn glyph_name(&self, gid: u32) -> Option<String> {
+        if let Some(cff) = &self.cff {
+            return cff.glyph_name(gid);
+        }
+        let post = self.table(b"post")?;
+        let d = &self.data[post.offset..post.offset + post.len];
+        if d.len() < 32 {
+            return None;
+        }
+        let format = u32_at(d, 0);
+        let mac = |i: usize| super::names::MAC_GLYPH_NAMES.get(i).map(|s| s.to_string());
+        match format {
+            0x00010000 => mac(gid as usize).or_else(|| mac(0)),
+            0x00020000 => {
+                let n = u16_at(d, 32) as usize;
+                if gid as usize >= n || d.len() < 34 + 2 * n {
+                    return mac(0);
+                }
+                let idx = u16_at(d, 34 + 2 * gid as usize) as usize;
+                if idx < 258 {
+                    return mac(idx);
+                }
+                // Pascal strings after the index array
+                let mut p = 34 + 2 * n;
+                let mut k = 258;
+                while p < d.len() {
+                    let len = d[p] as usize;
+                    if k == idx {
+                        let end = (p + 1 + len).min(d.len());
+                        return Some(String::from_utf8_lossy(&d[p + 1..end]).into_owned());
+                    }
+                    p += 1 + len;
+                    k += 1;
+                }
+                Some(String::new())
+            }
+            _ => mac(0),
         }
     }
 
@@ -414,11 +447,18 @@ impl SfntFace {
     /// Load a glyph outline scaled by (x_scale, y_scale) (16.16), unhinted,
     /// exactly like `FT_Load_Glyph(..., FT_LOAD_NO_HINTING)` for TrueType.
     pub fn load_glyph(&self, gid: u32, x_scale: i64, y_scale: i64) -> Result<Outline, FontError> {
+        Ok(self.load_glyph_advance(gid, x_scale, y_scale)?.0)
+    }
+
+    /// `load_glyph` and the glyph's `metrics.horiAdvance` (for TrueType the
+    /// distance of the scaled phantom points).
+    pub fn load_glyph_advance(&self, gid: u32, x_scale: i64, y_scale: i64) -> Result<(Outline, i64), FontError> {
         if gid >= self.num_glyphs as u32 {
             return Err(FontError("invalid glyph index".into()));
         }
         if let Some(cff) = &self.cff {
-            return cff.load_glyph(gid, x_scale, y_scale);
+            let (_, aw) = self.hmetrics(gid);
+            return Ok((cff.load_glyph(gid, x_scale, y_scale)?, cff.hori_advance(gid, aw as i64, x_scale)));
         }
         let mut out = Outline::default();
         let mut pp = Phantom::default();
@@ -427,7 +467,7 @@ impl SfntFace {
         if pp.pp1x != 0 {
             out.translate(-pp.pp1x, 0);
         }
-        Ok(out)
+        Ok((out, pp.pp2x - pp.pp1x))
     }
 
     fn load_rec(

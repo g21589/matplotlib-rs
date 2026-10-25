@@ -24,7 +24,7 @@ thread_local! {
     static DRAW_ERROR: RefCell<Option<PyErr>> = const { RefCell::new(None) };
 }
 
-fn record_error(e: PyErr) {
+pub(crate) fn record_error(e: PyErr) {
     DRAW_ERROR.with(|d| {
         let mut d = d.borrow_mut();
         if d.is_none() {
@@ -42,10 +42,16 @@ pub fn take_error() -> PyResult<()> {
 }
 
 /// Run `f` with a Python proxy for `r`, invalidated when `f` returns.
-fn with_target<R>(py: Python<'_>, r: &mut Renderer, f: impl FnOnce(&Bound<'_, PyRendererAgg>) -> PyResult<R>) -> PyResult<R> {
+///
+/// A renderer forwarding to a Python renderer is passed as that renderer.
+fn with_target<R>(py: Python<'_>, r: &mut Renderer, f: impl FnOnce(&Bound<'_, PyAny>) -> PyResult<R>) -> PyResult<R> {
+    if let Some(fr) = r.foreign.as_ref().and_then(|f| f.as_any().downcast_ref::<super::foreign::PyForeign>()) {
+        let target = fr.renderer(py)?;
+        return f(&target);
+    }
     let alive = Rc::new(Cell::new(true));
     let t = Bound::new(py, PyRendererAgg::borrowed(r, alive.clone()))?;
-    let res = f(&t);
+    let res = f(t.as_any());
     alive.set(false);
     res
 }

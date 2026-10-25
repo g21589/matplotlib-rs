@@ -147,27 +147,32 @@ impl FtFont {
     /// Metrics of `FT_Load_Glyph(gid, FT_LOAD_NO_HINTING)` as matplotlib's
     /// `FT2Font.load_glyph` reports them (26.6, `linearHoriAdvance` 16.16).
     pub fn glyph_metrics(&self, gid: u32) -> Result<GlyphMetrics, FontError> {
-        let o = self.sfnt().load_glyph(gid, self.size.x_scale, self.size.y_scale)?;
+        Ok(self.load_glyph_full(gid, false)?.1)
+    }
+
+    /// `FT_Load_Glyph` with or without `FT_LOAD_NO_SCALE`: the outline (after
+    /// the face transform) and its metrics; unscaled values are in font units.
+    pub fn load_glyph_full(&self, gid: u32, no_scale: bool) -> Result<(Outline, GlyphMetrics), FontError> {
+        let (xs, ys) = if no_scale { (0x10000, 0x10000) } else { (self.size.x_scale, self.size.y_scale) };
+        let (mut o, advance) = self.sfnt().load_glyph_advance(gid, xs, ys)?;
         let cb = if o.points.is_empty() { BBox::default() } else { o.cbox() };
-        let (lsb, aw) = self.sfnt().hmetrics(gid);
-        let _ = lsb;
+        let (_, aw) = self.sfnt().hmetrics(gid);
         let linear = super::outline::mul_div(aw as i64, self.size.x_scale, 64);
-        // the glyph image after the face transform
-        let mut t = o.clone();
         if self.transform_flags != 0 {
-            t.transform(&self.matrix);
-            t.translate(self.delta.0, self.delta.1);
+            o.transform(&self.matrix);
+            o.translate(self.delta.0, self.delta.1);
         }
-        let bbox = if t.points.is_empty() { BBox::default() } else { t.cbox() };
-        Ok(GlyphMetrics {
+        let bbox = if o.points.is_empty() { BBox::default() } else { o.cbox() };
+        let m = GlyphMetrics {
             width: cb.x_max - cb.x_min,
             height: cb.y_max - cb.y_min,
             hori_bearing_x: cb.x_min,
             hori_bearing_y: cb.y_max,
-            hori_advance: self.sfnt().hori_advance(gid, self.size.x_scale),
+            hori_advance: advance,
             linear_hori_advance: linear,
             bbox,
-        })
+        };
+        Ok((o, m))
     }
 
     /// `FT_Get_Kerning` (mode 0 default, 1 unfitted, 2 unscaled), 26.6.

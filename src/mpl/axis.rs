@@ -438,15 +438,18 @@ impl Tick {
         self.tickdir = src.tickdir.clone();
     }
 
-    pub fn draw(&self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx) {
+    pub fn draw(&self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx, name: &str) {
+        renderer.artist_start();
         if !self.visible {
             return;
         }
+        renderer.open_group(name, None);
         self.gridline.lk().draw(renderer, ctx, clip, None, false);
         self.tick1line.lk().draw(renderer, ctx, clip, None, false);
         self.tick2line.lk().draw(renderer, ctx, clip, None, false);
         self.label1.lk().draw(renderer, ctx, clip);
         self.label2.lk().draw(renderer, ctx, clip);
+        renderer.close_group(name);
     }
 }
 
@@ -1034,13 +1037,16 @@ impl Axis {
 
     /// `Axis.draw` given the spine extent on the label side.
     pub fn draw(&mut self, renderer: &mut Renderer, ctx: &AxisCtx, clip: &ClipCtx, spine_bb: impl FnOnce(&mut Axis) -> Bbox) {
+        renderer.artist_start();
         if !self.visible {
             return;
         }
+        renderer.open_group("matplotlib.axis", None);
         let sel = self.update_ticks(ctx);
         let (tlb1, tlb2) = self.ticklabel_bboxes(&sel, renderer, ctx.trans);
+        let name = if self.is_x { "xtick" } else { "ytick" };
         for t in self.ticks_iter(&sel) {
-            t.draw(renderer, ctx.trans, clip);
+            t.draw(renderer, ctx.trans, clip, name);
         }
         // _update_label_position: tick boxes of the (unaligned) siblings,
         // i.e. this axis again
@@ -1053,6 +1059,7 @@ impl Axis {
         let off = self.major_formatter.get_offset();
         self.offset_text.lk().text = off;
         self.offset_text.lk().draw(renderer, ctx.trans, clip);
+        renderer.close_group("matplotlib.axis");
     }
 
     /// `get_tightbbox`.

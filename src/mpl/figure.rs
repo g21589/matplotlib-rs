@@ -612,10 +612,12 @@ impl Figure {
                     if !s.visible {
                         continue;
                     }
+                    renderer.open_group("subfigure", None);
                     if let Some(p) = s.patch.clone() {
                         p.lk().draw(renderer, tc, &clip);
                     }
                     self.draw_container(renderer, fig, tc, Some(u));
+                    renderer.close_group("subfigure");
                 }
             }
         }
