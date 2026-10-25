@@ -154,6 +154,10 @@ def _get_text_metrics_function(input_renderer, _cache=weakref.WeakKeyDictionary(
     return _text_metrics
 
 
+# texts that may be wrapped: re-mirrored with the renderer of every draw
+_WRAPPED = weakref.WeakSet()
+
+
 @_docstring.interpd
 @_api.define_aliases({
     "color": ["c"],
@@ -169,6 +173,7 @@ def _get_text_metrics_function(input_renderer, _cache=weakref.WeakKeyDictionary(
     "verticalalignment": ["va"],
     "multialignment": ["ma"],
 })
+
 class Text(Artist):
     """Handle storing and drawing of text in window or data coordinates."""
 
@@ -373,11 +378,11 @@ class Text(Artist):
         d["x"] = x
         d["y"] = y
         text = self.get_text()
-        if self._wrap:
-            try:
-                text = self._get_wrapped_text()
-            except Exception:
-                pass
+        if self._wrap and self._renderer is not None:
+            # (as Text.draw does; this may set the rotation mode, which is
+            # read below, and marks the text stale)
+            text = self._get_wrapped_text()
+            artist._DIRTY.discard(self)
         d["text"] = text
         d["wrap"] = False
         d["color"] = mcolors.to_rgba(self.get_color())
@@ -791,6 +796,8 @@ class Text(Artist):
         wrapping.
         """
         self._wrap = wrap
+        if wrap:
+            _WRAPPED.add(self)
 
     def _get_wrap_line_width(self):
         """

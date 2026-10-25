@@ -373,6 +373,47 @@ impl PyRendererAgg {
         Ok(())
     }
 
+    /// `copy_from_bbox((x1, y1, x2, y2))`.
+    fn copy_from_bbox(&mut self, x1: f64, y1: f64, x2: f64, y2: f64) -> PyResult<PyBufferRegion> {
+        let r = &self.r()?.agg;
+        let (w, h) = (r.width as i32, r.height as i32);
+        let rect = [x1 as i32, h - y2 as i32, x2 as i32, h - y1 as i32];
+        let (rw, rh) = (rect[2] - rect[0], rect[3] - rect[1]);
+        let mut data = vec![0u8; (rw.max(0) * rh.max(0) * 4) as usize];
+        copy_rgba(&mut data, rw, rh, &r.pixf.buf, w, h, Some(rect), -rect[0], -rect[1]);
+        Ok(PyBufferRegion { rect, width: rw, height: rh, data })
+    }
+
+    /// `restore_region(region)` or `restore_region(region, x1, y1, x2, y2,
+    /// x, y)` (the part x1..x2, y1..y2 of the region, placed at x, y).
+    #[pyo3(signature = (region, x1=None, y1=None, x2=None, y2=None, x=None, y=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn restore_region(
+        &mut self,
+        region: &PyBufferRegion,
+        x1: Option<i32>,
+        y1: Option<i32>,
+        x2: Option<i32>,
+        y2: Option<i32>,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) -> PyResult<()> {
+        let Some(r) = self.agg()? else { return Ok(()) };
+        let (w, h) = (r.width as i32, r.height as i32);
+        let rr = region.rect;
+        match (x1, y1, x2, y2, x, y) {
+            (Some(x1), Some(y1), Some(x2), Some(y2), Some(x), Some(y)) => {
+                let rect = [x1 - rr[0], y1 - rr[1], x2 - rr[0], y2 - rr[1]];
+                copy_rgba(&mut r.pixf.buf, w, h, &region.data, region.width, region.height, Some(rect), x, y);
+            }
+            (None, None, None, None, None, None) => {
+                copy_rgba(&mut r.pixf.buf, w, h, &region.data, region.width, region.height, None, rr[0], rr[1]);
+            }
+            _ => return Err(PyValueError::new_err("restore_region takes a region and optionally 6 integers")),
+        }
+        Ok(())
+    }
+
     /// `RendererAgg.draw_gouraud_triangles(gc, points (N, 3, 2), colors
     /// (N, 3, 4), transform)`.
     fn draw_gouraud_triangles(
@@ -619,8 +660,98 @@ fn take_missing_glyphs() -> Vec<(u32, String)> {
     crate::mpl::renderer::take_missing_glyphs()
 }
 
+/// `renderer_base::copy_from(src, rect_src, dx, dy)` between RGBA32
+/// buffers, clipped to the destination buffer.
+#[allow(clippy::too_many_arguments)]
+fn copy_rgba(dst: &mut [u8], dw: i32, dh: i32, src: &[u8], sw: i32, sh: i32, rect: Option<[i32; 4]>, dx: i32, dy: i32) {
+    let mut rsrc = [0, 0, sw, sh];
+    if let Some(r) = rect {
+        rsrc = [r[0], r[1], r[2] + 1, r[3] + 1];
+    }
+    let mut rdst = [rsrc[0] + dx, rsrc[1] + dy, rsrc[2] + dx, rsrc[3] + dy];
+    // clip_rect_area
+    let cb = [0, 0, dw, dh];
+    if rsrc[0] < 0 {
+        rdst[0] -= rsrc[0];
+        rsrc[0] = 0;
+    }
+    if rsrc[1] < 0 {
+        rdst[1] -= rsrc[1];
+        rsrc[1] = 0;
+    }
+    rsrc[2] = rsrc[2].min(sw);
+    rsrc[3] = rsrc[3].min(sh);
+    if rdst[0] < cb[0] {
+        rsrc[0] += cb[0] - rdst[0];
+        rdst[0] = cb[0];
+    }
+    if rdst[1] < cb[1] {
+        rsrc[1] += cb[1] - rdst[1];
+        rdst[1] = cb[1];
+    }
+    rdst[2] = rdst[2].min(cb[2]);
+    rdst[3] = rdst[3].min(cb[3]);
+    let w = (rdst[2] - rdst[0]).min(rsrc[2] - rsrc[0]);
+    let h = (rdst[3] - rdst[1]).min(rsrc[3] - rsrc[1]);
+    if w <= 0 {
+        return;
+    }
+    for k in 0..h.max(0) {
+        let (sy, ty) = ((rsrc[1] + k) as usize, (rdst[1] + k) as usize);
+        let s = (sy * sw as usize + rsrc[0] as usize) * 4;
+        let t = (ty * dw as usize + rdst[0] as usize) * 4;
+        let n = w as usize * 4;
+        dst[t..t + n].copy_from_slice(&src[s..s + n]);
+    }
+}
+
+/// `BufferRegion`: a copy of part of a renderer's buffer.
+#[pyclass(name = "BufferRegion", module = "matplotlib_rs._mplrs")]
+pub struct PyBufferRegion {
+    rect: [i32; 4],
+    width: i32,
+    height: i32,
+    data: Vec<u8>,
+}
+
+#[pymethods]
+impl PyBufferRegion {
+    fn set_x(&mut self, x: i32) {
+        self.rect[0] = x;
+    }
+
+    fn set_y(&mut self, y: i32) {
+        self.rect[1] = y;
+    }
+
+    fn get_extents(&self) -> (i32, i32, i32, i32) {
+        (self.rect[0], self.rect[1], self.rect[2], self.rect[3])
+    }
+
+    #[pyo3(signature = (dtype=None, copy=None))]
+    fn __array__<'py>(
+        &self,
+        py: Python<'py>,
+        dtype: Option<&Bound<'py, PyAny>>,
+        copy: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let _ = copy;
+        let a = numpy::ndarray::Array3::from_shape_vec(
+            (self.height.max(0) as usize, self.width.max(0) as usize, 4),
+            self.data.clone(),
+        )
+        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+        let arr = numpy::PyArray3::from_owned_array(py, a).into_any();
+        match dtype {
+            Some(d) => arr.call_method1("astype", (d,)),
+            None => Ok(arr),
+        }
+    }
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRendererAgg>()?;
+    m.add_class::<PyBufferRegion>()?;
     m.add_class::<PyFont>()?;
     m.add_function(wrap_pyfunction!(layout_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(set_text_fonts, m)?)?;

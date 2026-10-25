@@ -213,6 +213,8 @@ pub struct Figure {
     /// all subfigures (any depth), and the uids of the top-level ones
     pub subfigs: Vec<SubFig>,
     pub root_subfigs: Vec<u64>,
+    /// `canvas.is_saving()` during the current draw
+    pub saving: bool,
 }
 
 impl Figure {
@@ -264,6 +266,7 @@ impl Figure {
             key: 0,
             subfigs: Vec::new(),
             root_subfigs: Vec::new(),
+            saving: false,
         }
     }
 
@@ -273,7 +276,7 @@ impl Figure {
     }
 
     pub fn ctx(&self) -> FigCtx {
-        FigCtx::new(self.figsize, self.dpi, self.boxout)
+        FigCtx { saving: self.saving, ..FigCtx::new(self.figsize, self.dpi, self.boxout) }
     }
 
     pub fn trans_ctx(&self) -> TransCtx {
@@ -696,6 +699,22 @@ impl Figure {
                     None => continue,
                 },
             };
+            // (the figure never draws its animated artists)
+            let animated = match &it {
+                Item::Axes(i) => self.axes[*i].base.animated,
+                Item::LocalAxes(u) => self.detached.iter().any(|a| a.uid == *u && a.base.animated),
+                Item::Child(i) => match &children[*i] {
+                    FigChild::Text(t) => t.lk().base.animated,
+                    FigChild::Line(l) => l.lk().base.animated,
+                    FigChild::Patch(p) => p.lk().base.animated,
+                    FigChild::Legend(_) => false,
+                    FigChild::Ext(e, _) => e.animated(),
+                },
+                Item::Subfig(_) => false,
+            };
+            if animated {
+                continue;
+            }
             items.push((z, seq, it));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal).then(a.1.cmp(&b.1)));

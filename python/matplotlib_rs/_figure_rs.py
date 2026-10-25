@@ -140,8 +140,15 @@ def _patch_figure(FigureBase, Figure, SubFigure):
 
     Figure._rs_sync = _rs_sync
 
-    def _rs_sync_all(self):
+    def _rs_sync_all(self, renderer=None):
         martist._DIRTY.add(self)
+        self._rs.set_saving(bool(self.canvas.is_saving()))
+        if renderer is not None:
+            from .text import _WRAPPED
+            for t in list(_WRAPPED):
+                if t._wrap and t.get_figure(root=True) is self:
+                    t._renderer = renderer
+                    martist._DIRTY.add(t)
         martist._sync_dirty()
 
     Figure._rs_sync_all = _rs_sync_all
@@ -178,7 +185,7 @@ def _patch_figure(FigureBase, Figure, SubFigure):
                 for ax in _rs_all_axes(self):
                     ax._rs_prepare_draw(renderer)
                 _rs_sync_subfigs(self)
-                self._rs_sync_all()
+                self._rs_sync_all(renderer)
                 with martist._rs_drawing():
                     if foreign:
                         self._rs.draw_foreign(renderer)

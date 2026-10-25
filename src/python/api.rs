@@ -1235,6 +1235,13 @@ impl PyFigure {
         f.layout = LayoutEngine::None;
     }
 
+    /// `canvas.is_saving()` for the next draws (unchanged while one runs).
+    fn set_saving(&self, saving: bool) {
+        if self.snap().is_none() {
+            self.lk().saving = saving;
+        }
+    }
+
     #[pyo3(signature = (kind, pad=1.08, h_pad=None, w_pad=None, rect=None))]
     fn set_layout(&self, kind: &str, pad: f64, h_pad: Option<f64>, w_pad: Option<f64>, rect: Option<(f64, f64, f64, f64)>) {
         self.lk().layout = match kind {

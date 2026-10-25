@@ -65,6 +65,10 @@ impl ExtArtist for PyExt {
         Python::attach(|py| self.obj.bind(py).call_method0("get_visible").and_then(|v| v.extract()).unwrap_or(true))
     }
 
+    fn animated(&self) -> bool {
+        Python::attach(|py| self.obj.bind(py).call_method0("get_animated").and_then(|v| v.extract()).unwrap_or(false))
+    }
+
     fn draw(&self, r: &mut Renderer) {
         Python::attach(|py| {
             if let Err(e) = with_target(py, r, |t| self.obj.bind(py).call_method1("_rs_draw", (t,)).map(|_| ())) {

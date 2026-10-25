@@ -472,6 +472,10 @@ impl<T> Lock<T> for Shared<T> {
 pub trait ExtArtist: Send + Sync + std::fmt::Debug {
     fn zorder(&self) -> f64;
     fn visible(&self) -> bool;
+    /// `get_animated()`
+    fn animated(&self) -> bool {
+        false
+    }
     fn draw(&self, renderer: &mut super::renderer::Renderer);
     /// Identity of the underlying object (for removal).
     fn ident(&self) -> usize;

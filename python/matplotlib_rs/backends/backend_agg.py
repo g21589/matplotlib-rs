@@ -336,10 +336,50 @@ class RendererAgg(RendererBase):
         return False
 
     def copy_from_bbox(self, bbox):
-        raise NotImplementedError("matplotlib_rs does not support blitting yet")
+        r = np.asarray(bbox, dtype=float)
+        if r.shape == (2, 2):
+            (x1, y1), (x2, y2) = r
+        elif r.shape == (4,):
+            x1, y1, x2, y2 = r
+        else:
+            raise ValueError("Invalid bounding box")
+        return self._renderer.copy_from_bbox(
+            float(x1), float(y1), float(x2), float(y2))
 
     def restore_region(self, region, bbox=None, xy=None):
-        raise NotImplementedError("matplotlib_rs does not support blitting yet")
+        """
+        Restore the saved region. If bbox (instance of BboxBase, or
+        its extents) is given, only the region specified by the bbox
+        will be restored. *xy* (a pair of floats) optionally
+        specifies the new position (the LLC of the original region,
+        not the LLC of the bbox) where the region will be restored.
+
+        >>> region = renderer.copy_from_bbox()
+        >>> x1, y1, x2, y2 = region.get_extents()
+        >>> renderer.restore_region(region, bbox=(x1+dx, y1, x2, y2),
+        ...                         xy=(x1-dx, y1))
+
+        """
+        if bbox is not None or xy is not None:
+            if bbox is None:
+                x1, y1, x2, y2 = region.get_extents()
+            elif isinstance(bbox, BboxBase):
+                x1, y1, x2, y2 = bbox.extents
+            else:
+                x1, y1, x2, y2 = bbox
+
+            if xy is None:
+                ox, oy = x1, y1
+            else:
+                ox, oy = xy
+
+            # The incoming data is float, but the _renderer type-checking wants
+            # to see integers.
+            self._renderer.restore_region(region, int(x1), int(y1),
+                                          int(x2), int(y2), int(ox), int(oy))
+
+        else:
+            self._renderer.restore_region(region)
 
     def start_filter(self):
         """

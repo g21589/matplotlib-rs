@@ -307,7 +307,7 @@ def _patch_axes_base(cls):
         from .._foreign import is_foreign, metrics
         with metrics(renderer):
             self._rs_prepare_draw(renderer)
-            self.get_figure(root=True)._rs_sync_all()
+            self.get_figure(root=True)._rs_sync_all(renderer)
             with martist._rs_drawing():
                 if is_foreign(renderer):
                     self._rs.draw_foreign(renderer)

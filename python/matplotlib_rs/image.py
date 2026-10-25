@@ -13,17 +13,22 @@ import numpy as np
 import sys
 
 
-class _LazyPIL:
-    """Pillow, imported when first used."""
+import PIL
 
-    def __getattr__(self, name):
+
+def _pil_getattr(name):
+    # matplotlib imports PIL.Image and PIL.PngImagePlugin when imported, so
+    # scripts may use them after a bare ``import PIL``; they are imported
+    # on first access here instead (PEP 562), which keeps startup fast.
+    if name in ("Image", "PngImagePlugin"):
         import PIL.Image
         import PIL.PngImagePlugin
-        globals()['PIL'] = PIL
         return getattr(PIL, name)
+    raise AttributeError(f"module 'PIL' has no attribute {name!r}")
 
 
-PIL = _LazyPIL()
+if not hasattr(PIL, "__getattr__"):
+    PIL.__getattr__ = _pil_getattr
 
 import matplotlib_rs as mpl
 from matplotlib_rs import _api, cbook

@@ -173,6 +173,7 @@ def _rs_base_props(a, d):
     d["sketch_params"] = a._sketch
     d["gid"] = None if a._gid is None else str(a._gid)
     d["url"] = None if a._url is None else str(a._url)
+    d["animated"] = bool(a._animated)
     if a._transformSet or a._transform is not None:
         try:
             d["transform"] = tspec(a.get_transform())
@@ -1392,6 +1393,8 @@ Supported properties are
         if self._animated != b:
             self._animated = b
             self.pchanged()
+            if self.__dict__.get("_h") is not None:
+                _DIRTY.add(self)
 
     def set_in_layout(self, in_layout):
         """

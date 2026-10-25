@@ -41,6 +41,17 @@ impl Child {
         }
     }
 
+    pub fn animated(&self) -> bool {
+        match self {
+            Child::Line(a) => a.lk().base.animated,
+            Child::Patch(a) => a.lk().base.animated,
+            Child::Text(a) => a.lk().base.animated,
+            Child::Collection(a) => a.lk().base.animated,
+            Child::Image(a) => a.lk().base.animated,
+            Child::Ext(e) => e.animated(),
+        }
+    }
+
     pub fn same(&self, o: &Child) -> bool {
         match (self, o) {
             (Child::Line(a), Child::Line(b)) => std::sync::Arc::ptr_eq(a, b),
@@ -218,6 +229,8 @@ pub struct FigCtx {
     pub figsize: (f64, f64),
     /// `transFigure._boxout` override (bbox_inches adjustment)
     pub boxout: Option<Bbox>,
+    /// `canvas.is_saving()` (axes draw their animated artists only then)
+    pub saving: bool,
 }
 
 impl FigCtx {
@@ -225,7 +238,7 @@ impl FigCtx {
         let dpi_scale = Transform::Affine(super::transforms::Affine2D::identity().scale(dpi, dpi).0);
         let fig_bbox = Bbox::from_bounds(0.0, 0.0, figsize.0, figsize.1).transformed_bbox(&dpi_scale);
         let trans_figure = Transform::bbox_to(boxout.as_ref().unwrap_or(&fig_bbox));
-        FigCtx { dpi, trans_figure, dpi_scale, fig_bbox, figsize, boxout }
+        FigCtx { dpi, trans_figure, dpi_scale, fig_bbox, figsize, boxout, saving: false }
     }
 
     /// The context with the figure dpi set to `dpi` (as `MixedModeRenderer`
@@ -235,7 +248,7 @@ impl FigCtx {
             let s = dpi / self.dpi;
             Bbox::new(b.x0 * s, b.y0 * s, b.x1 * s, b.y1 * s)
         });
-        FigCtx::new(self.figsize, dpi, boxout)
+        FigCtx { saving: self.saving, ..FigCtx::new(self.figsize, dpi, boxout) }
     }
 }
 
@@ -1299,6 +1312,9 @@ impl Axes {
         }
         let mut items: Vec<(f64, Item)> = Vec::new();
         for c in &self.children {
+            if !fig.saving && c.animated() {
+                continue;
+            }
             items.push((c.zorder(), Item::Child(c.clone())));
         }
         if self.axison && self.frameon {
