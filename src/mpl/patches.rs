@@ -2,7 +2,7 @@
 
 use std::f64::consts::SQRT_2;
 
-use super::artist::{ArtistBase, ClipCtx, GcState, TSpec, TransCtx};
+use super::artist::{ArtistBase, ClipCtx, GcState, TransCtx};
 use super::colors::ColorSpec;
 use super::lines::{get_dash_pattern, inverse_dash_pattern, normalize_dashes, scale_dashes, DashPattern};
 use super::path::{self as mpath, closed_path, new_path, Path, SimplifyParams, CLOSEPOLY, CURVE3, CURVE4, LINETO, MOVETO};

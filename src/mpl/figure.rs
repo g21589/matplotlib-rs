@@ -256,8 +256,9 @@ impl Figure {
         if need[0] || need[1] {
             let sx = ax.shared_x.clone();
             let sy = ax.shared_y.clone();
+            let me = ax.uid;
             for a in self.axes.iter_mut() {
-                if sx.contains(&a.uid) || a.uid == self.axes[i].uid {
+                if sx.contains(&a.uid) || a.uid == me {
                     a.stale_viewlims[0] = false;
                 }
             }
