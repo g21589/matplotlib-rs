@@ -257,6 +257,8 @@ def _rs_transform_from_spec(spec, axes, figure):
         m = np.eye(3)
         m[:2] = spec[1]
         return mtransforms.Affine2D(m)
+    if kind == "py":
+        return spec[1].t
     if kind == "scaled_translation":
         return mtransforms.ScaledTranslation(spec[1], spec[2], figure.dpi_scale_trans)
     if kind == "then":

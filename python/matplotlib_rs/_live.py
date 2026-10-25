@@ -145,6 +145,25 @@ class LiveBbox(BboxBase):
     __hash__ = object.__hash__
 
 
+class PyTransformRef:
+    """A transform handed to the Rust core by reference (compared by identity,
+    so that replacing it by an equal transform is still pushed)."""
+
+    __slots__ = ("t",)
+
+    def __init__(self, t):
+        self.t = t
+
+    def get_matrix(self):
+        return self.t.get_matrix()
+
+    def __eq__(self, other):
+        return isinstance(other, PyTransformRef) and other.t is self.t
+
+    def __hash__(self):
+        return id(self.t)
+
+
 def tspec(t):
     """The Rust transform specification of a Transform object."""
     if t is None:
@@ -168,6 +187,6 @@ def tspec(t):
         if bs is not None:
             return bs
     if not hasattr(t, "_as_mpl_transform") and t.is_affine:
-        m = t.get_matrix()
-        return ("affine", [list(map(float, m[0])), list(map(float, m[1]))])
+        # evaluated by the Rust core when drawing (it may change at any time)
+        return ("py", PyTransformRef(t))
     raise NotImplementedError(f"matplotlib_rs cannot use transform {t!r} yet")

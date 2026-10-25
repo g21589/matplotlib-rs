@@ -29,6 +29,19 @@ pub enum FigChild {
     Ext(std::sync::Arc<dyn ExtArtist>, u8),
 }
 
+/// A `SubFigure`: its patch, figure-level artists, local axes (kept among the
+/// figure's detached axes) and nested subfigures.
+#[derive(Debug)]
+pub struct SubFig {
+    pub uid: u64,
+    pub patch: Option<Shared<Patch>>,
+    pub zorder: f64,
+    pub visible: bool,
+    pub children: Vec<FigChild>,
+    pub axes: Vec<u64>,
+    pub subfigs: Vec<u64>,
+}
+
 /// Draws child axes (which live among the figure's detached axes).
 struct DetachedAxesDraw<'a> {
     detached: &'a mut Vec<Axes>,
@@ -72,6 +85,9 @@ pub struct Figure {
     pub boxout: Option<Bbox>,
     /// identity of the owning handle (set by the Python layer; 0 if none)
     pub key: usize,
+    /// all subfigures (any depth), and the uids of the top-level ones
+    pub subfigs: Vec<SubFig>,
+    pub root_subfigs: Vec<u64>,
 }
 
 impl Figure {
@@ -121,6 +137,8 @@ impl Figure {
             visible: true,
             boxout: None,
             key: 0,
+            subfigs: Vec::new(),
+            root_subfigs: Vec::new(),
         }
     }
 
@@ -194,6 +212,9 @@ impl Figure {
         self.axstack.retain(|&u| u != uid);
         for a in self.axes.iter_mut().chain(self.detached.iter_mut()) {
             a.child_axes.retain(|&u| u != uid);
+        }
+        for s in self.subfigs.iter_mut() {
+            s.axes.retain(|&u| u != uid);
         }
     }
 
@@ -417,11 +438,27 @@ impl Figure {
         let _snap = self.publish_snapshot();
         let clip = ClipCtx { axes_bbox: None, trans: &tc };
         self.patch.draw(renderer, &tc, &clip);
-        // artists sorted by zorder, in `get_children` order:
-        // [*artists, *axes, *lines, *patches, *texts, *images, *legends]
+        self.draw_container(renderer, &fig, &tc, None);
+    }
+
+    /// Draw the artists, axes and subfigures of the figure (`sf` None) or of
+    /// a subfigure, sorted by zorder in `get_children` order:
+    /// `[*artists, *axes, *lines, *patches, *texts, *images, *legends,
+    /// *subfigs]`.
+    fn draw_container(&mut self, renderer: &mut Renderer, fig: &FigCtx, tc: &TransCtx, sf: Option<u64>) {
+        let clip = ClipCtx { axes_bbox: None, trans: tc };
+        let (children, local_axes, subfigs) = match sf {
+            None => (self.children.clone(), None, self.root_subfigs.clone()),
+            Some(id) => match self.subfigs.iter().find(|s| s.uid == id) {
+                Some(s) => (s.children.clone(), Some(s.axes.clone()), s.subfigs.clone()),
+                None => return,
+            },
+        };
         enum Item {
             Axes(usize),
+            LocalAxes(u64),
             Child(usize),
+            Subfig(u64),
         }
         let order = |c: &FigChild| match c {
             FigChild::Line(_) => 2,
@@ -431,23 +468,43 @@ impl Figure {
             FigChild::Ext(_, cat) => *cat,
         };
         let mut keyed: Vec<(u8, usize, Item)> = Vec::new();
-        for (i, c) in self.children.iter().enumerate() {
+        for (i, c) in children.iter().enumerate() {
             keyed.push((order(c), i, Item::Child(i)));
         }
-        for i in 0..self.axes.len() {
-            keyed.push((1, i, Item::Axes(i)));
+        match &local_axes {
+            None => {
+                for i in 0..self.axes.len() {
+                    keyed.push((1, i, Item::Axes(i)));
+                }
+            }
+            Some(uids) => {
+                for (i, &u) in uids.iter().enumerate() {
+                    keyed.push((1, i, Item::LocalAxes(u)));
+                }
+            }
+        }
+        for (i, &u) in subfigs.iter().enumerate() {
+            keyed.push((7, i, Item::Subfig(u)));
         }
         keyed.sort_by_key(|k| (k.0, k.1));
         let mut items: Vec<(f64, usize, Item)> = Vec::new();
         for (seq, (_, _, it)) in keyed.into_iter().enumerate() {
             let z = match &it {
                 Item::Axes(i) => self.axes[*i].base.zorder,
-                Item::Child(i) => match &self.children[*i] {
+                Item::LocalAxes(u) => match self.detached.iter().find(|a| a.uid == *u) {
+                    Some(a) => a.base.zorder,
+                    None => continue,
+                },
+                Item::Child(i) => match &children[*i] {
                     FigChild::Text(t) => t.lk().base.zorder,
                     FigChild::Line(l) => l.lk().base.zorder,
                     FigChild::Patch(p) => p.lk().base.zorder,
                     FigChild::Legend(l) => l.lk().zorder,
                     FigChild::Ext(e, _) => e.zorder(),
+                },
+                Item::Subfig(u) => match self.subfigs.iter().find(|s| s.uid == *u) {
+                    Some(s) => s.zorder,
+                    None => continue,
                 },
             };
             items.push((z, seq, it));
@@ -456,13 +513,17 @@ impl Figure {
         for (_, _, it) in items {
             match it {
                 Item::Axes(i) => {
-                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
-                    self.axes[i].draw_with(renderer, &fig, &mut kids);
+                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig };
+                    self.axes[i].draw_with(renderer, fig, &mut kids);
                 }
-                Item::Child(i) => match &self.children[i] {
-                    FigChild::Text(t) => t.lk().draw(renderer, &tc, &clip),
-                    FigChild::Line(l) => l.lk().draw(renderer, &tc, &clip, None, false),
-                    FigChild::Patch(p) => p.lk().draw(renderer, &tc, &clip),
+                Item::LocalAxes(u) => {
+                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig };
+                    kids.draw(u, renderer);
+                }
+                Item::Child(i) => match &children[i] {
+                    FigChild::Text(t) => t.lk().draw(renderer, tc, &clip),
+                    FigChild::Line(l) => l.lk().draw(renderer, tc, &clip, None, false),
+                    FigChild::Patch(p) => p.lk().draw(renderer, tc, &clip),
                     FigChild::Legend(_) => {}
                     FigChild::Ext(e, _) => {
                         if e.visible() {
@@ -470,7 +531,79 @@ impl Figure {
                         }
                     }
                 },
+                Item::Subfig(u) => {
+                    let Some(s) = self.subfigs.iter().find(|s| s.uid == u) else { continue };
+                    if !s.visible {
+                        continue;
+                    }
+                    if let Some(p) = s.patch.clone() {
+                        p.lk().draw(renderer, tc, &clip);
+                    }
+                    self.draw_container(renderer, fig, tc, Some(u));
+                }
             }
+        }
+    }
+
+    // -- subfigures ---------------------------------------------------------
+
+    /// Add a subfigure to the figure (`parent` None) or to subfigure `parent`.
+    pub fn new_subfig(&mut self, parent: Option<u64>) -> u64 {
+        let uid = super::axes::next_uid();
+        self.subfigs.push(SubFig {
+            uid,
+            patch: None,
+            zorder: 0.0,
+            visible: true,
+            children: Vec::new(),
+            axes: Vec::new(),
+            subfigs: Vec::new(),
+        });
+        match parent.and_then(|p| self.subfigs.iter_mut().find(|s| s.uid == p)) {
+            Some(p) => p.subfigs.push(uid),
+            None => self.root_subfigs.push(uid),
+        }
+        uid
+    }
+
+    pub fn subfig_mut(&mut self, uid: u64) -> Option<&mut SubFig> {
+        self.subfigs.iter_mut().find(|s| s.uid == uid)
+    }
+
+    pub fn remove_subfig(&mut self, uid: u64) {
+        self.subfigs.retain(|s| s.uid != uid);
+        self.root_subfigs.retain(|&u| u != uid);
+        for s in self.subfigs.iter_mut() {
+            s.subfigs.retain(|&u| u != uid);
+        }
+    }
+
+    /// The figure-level artists of the figure or of a subfigure.
+    pub fn children_of_mut(&mut self, sf: Option<u64>) -> Option<&mut Vec<FigChild>> {
+        match sf {
+            None => Some(&mut self.children),
+            Some(u) => self.subfig_mut(u).map(|s| &mut s.children),
+        }
+    }
+
+    /// Make axes `uid` a local axes of subfigure `sf` (drawn by it).
+    pub fn subfig_add_axes(&mut self, sf: u64, uid: u64) -> bool {
+        if let Some(i) = self.axes.iter().position(|a| a.uid == uid) {
+            let ax = self.axes.remove(i);
+            self.detached.push(ax);
+        }
+        if !self.detached.iter().any(|a| a.uid == uid) {
+            return false;
+        }
+        match self.subfig_mut(sf) {
+            Some(s) => {
+                s.axes.retain(|&u| u != uid);
+                s.axes.push(uid);
+                self.axstack.retain(|&u| u != uid);
+                self.axstack.push(uid);
+                true
+            }
+            None => false,
         }
     }
 

@@ -57,37 +57,49 @@ def _rs_fig_native(a, category):
     return _NATIVE_CATEGORY.get(type(a._h).__name__) == category
 
 
-def _rs_fig_switch(rootref, category, a):
+def _rs_fig_switch(rootref, category, sfid, a):
     root = rootref()
     native = _rs_fig_native(a, category)
     if root is None or native == a.__dict__.get("_rs_native_in"):
         return
     old = a._h if a._rs_native_in else a
     new = a._h if native else a
-    if root._rs.replace_artist(old, new):
+    if root._rs.replace_artist(old, new, sfid):
         a._rs_native_in = native
 
 
 def _rs_fig_attach(fig, a, category):
-    """Add figure-level artist *a* to the Rust figure."""
+    """Add figure-level artist *a* of (sub)figure *fig* to the Rust figure."""
     import weakref
     root = fig.get_figure(root=True)
+    sfid = fig.__dict__.get("_rs_sfid")
     native = _rs_fig_native(a, category)
     a._rs_native_in = native
-    a._rs_switch = functools.partial(_rs_fig_switch, weakref.ref(root), category)
+    a._rs_switch = functools.partial(_rs_fig_switch, weakref.ref(root), category, sfid)
     if native:
         martist._DIRTY.discard(a)
         a._rs_sync()
-        root._rs.add_artist(a._h, category)
+        root._rs.add_artist(a._h, category, sfid)
     else:
-        root._rs.add_artist(a, category)
+        root._rs.add_artist(a, category, sfid)
     owner_list = a._remove_method
 
     def remove(artist):
         owner_list(artist)
-        root._rs.remove_artist(artist._h if artist.__dict__.get("_rs_native_in") else artist)
+        root._rs.remove_artist(
+            artist._h if artist.__dict__.get("_rs_native_in") else artist, sfid)
 
     a._remove_method = remove
+
+
+def _rs_sync_subfigs(fig):
+    """Mirror the zorder and visibility of the subfigures of *fig*."""
+    root = fig.get_figure(root=True)
+    for sf in fig.subfigs:
+        sfid = sf.__dict__.get("_rs_sfid")
+        if sfid is not None:
+            root._rs.subfig_state(sfid, float(sf.zorder), bool(sf.get_visible()))
+            _rs_sync_subfigs(sf)
 
 
 def _patch_figure(FigureBase, Figure, SubFigure):
@@ -157,6 +169,7 @@ def _patch_figure(FigureBase, Figure, SubFigure):
                     # want to fail to draw the figure.
                 for ax in _rs_all_axes(self):
                     ax._rs_prepare_draw(renderer)
+                _rs_sync_subfigs(self)
                 self._rs_sync_all()
                 target = getattr(renderer, "_renderer", None)
                 if (isinstance(target, _mplrs.RendererAgg)
@@ -181,7 +194,12 @@ def _patch_figure(FigureBase, Figure, SubFigure):
         ret = orig_add_axes_internal(self, ax, key)
         rs = ax.__dict__.get("_rs")
         if rs is not None:
-            self.get_figure(root=True)._rs.attach_axes(rs.uid)
+            root = self.get_figure(root=True)
+            sfid = self.__dict__.get("_rs_sfid")
+            if sfid is None:
+                root._rs.attach_axes(rs.uid)
+            else:
+                root._rs.subfig_add_axes(sfid, rs.uid)
         return ret
 
     FigureBase._add_axes_internal = _add_axes_internal
@@ -223,6 +241,28 @@ def _patch_figure(FigureBase, Figure, SubFigure):
         return ret
 
     Figure.figimage = figimage
+
+    # -- subfigures -------------------------------------------------------------
+    orig_add_subfigure = FigureBase.add_subfigure
+
+    @functools.wraps(orig_add_subfigure)
+    def add_subfigure(self, subplotspec, **kwargs):
+        sf = orig_add_subfigure(self, subplotspec, **kwargs)
+        root = self.get_figure(root=True)
+        sfid = root._rs.new_subfigure(self.__dict__.get("_rs_sfid"))
+        sf._rs_sfid = sfid
+        root._rs.subfig_set_patch(sfid, sf.patch._h)
+        martist._DIRTY.add(sf.patch)
+        owner_remove = sf._remove_method
+
+        def remove(s):
+            owner_remove(s)
+            root._rs.remove_subfigure(sfid)
+
+        sf._remove_method = remove
+        return sf
+
+    FigureBase.add_subfigure = add_subfigure
 
     orig_clear = Figure.clear
 

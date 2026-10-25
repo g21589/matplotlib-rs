@@ -884,6 +884,8 @@ impl PyFigure {
         f.axes.clear();
         f.axstack.clear();
         f.children.clear();
+        f.subfigs.clear();
+        f.root_subfigs.clear();
         f.suptitle = None;
         f.supxlabel = None;
         f.supylabel = None;
@@ -935,23 +937,58 @@ impl PyFigure {
     /// Add a figure-level artist: a text, line or patch handle, or any
     /// Python artist (drawn by its own `draw`), with its `get_children`
     /// category (0 artists, 2 lines, 3 patches, 4 texts, 5 images, 6 legends).
-    #[pyo3(signature = (a, category=0))]
-    fn add_artist(&self, a: &Bound<'_, PyAny>, category: u8) -> PyResult<()> {
-        let mut f = self.lk();
-        if let Ok(t) = a.cast::<PyText>() {
-            f.children.push(FigChild::Text(t.borrow().inner.clone()));
+    #[pyo3(signature = (a, category=0, subfig=None))]
+    fn add_artist(&self, a: &Bound<'_, PyAny>, category: u8, subfig: Option<u64>) -> PyResult<()> {
+        let c = if let Ok(t) = a.cast::<PyText>() {
+            FigChild::Text(t.borrow().inner.clone())
         } else if let Ok(l) = a.cast::<PyLine2D>() {
-            f.children.push(FigChild::Line(l.borrow().inner.clone()));
+            FigChild::Line(l.borrow().inner.clone())
         } else if let Ok(p) = a.cast::<PyPatch>() {
-            f.children.push(FigChild::Patch(p.borrow().inner.clone()));
+            FigChild::Patch(p.borrow().inner.clone())
         } else {
-            f.children.push(FigChild::Ext(super::ext::ext_from(a), category));
-        }
+            FigChild::Ext(super::ext::ext_from(a), category)
+        };
+        let mut f = self.lk();
+        let children = f.children_of_mut(subfig).ok_or_else(|| PyValueError::new_err("no such subfigure"))?;
+        children.push(c);
         Ok(())
     }
 
+    /// `add_subfigure`: a new subfigure of the figure or of subfigure
+    /// *parent*; returns its id.
+    #[pyo3(signature = (parent=None))]
+    fn new_subfigure(&self, parent: Option<u64>) -> u64 {
+        self.lk().new_subfig(parent)
+    }
+
+    fn remove_subfigure(&self, uid: u64) {
+        self.lk().remove_subfig(uid)
+    }
+
+    fn subfig_set_patch(&self, uid: u64, patch: &PyPatch) -> PyResult<()> {
+        let p = patch.inner.clone();
+        let mut f = self.lk();
+        let s = f.subfig_mut(uid).ok_or_else(|| PyValueError::new_err("no such subfigure"))?;
+        s.patch = Some(p);
+        Ok(())
+    }
+
+    fn subfig_state(&self, uid: u64, zorder: f64, visible: bool) -> PyResult<()> {
+        let mut f = self.lk();
+        let s = f.subfig_mut(uid).ok_or_else(|| PyValueError::new_err("no such subfigure"))?;
+        s.zorder = zorder;
+        s.visible = visible;
+        Ok(())
+    }
+
+    /// Make axes *uid* a local axes of subfigure *sf*.
+    fn subfig_add_axes(&self, sf: u64, uid: u64) -> bool {
+        self.lk().subfig_add_axes(sf, uid)
+    }
+
     /// Replace figure child `old` by `new` at the same position.
-    fn replace_artist(&self, old: &Bound<'_, PyAny>, new: &Bound<'_, PyAny>) -> PyResult<bool> {
+    #[pyo3(signature = (old, new, subfig=None))]
+    fn replace_artist(&self, old: &Bound<'_, PyAny>, new: &Bound<'_, PyAny>, subfig: Option<u64>) -> PyResult<bool> {
         let key = |o: &Bound<'_, PyAny>| -> usize {
             if let Ok(t) = o.cast::<PyText>() {
                 Arc::as_ptr(&t.borrow().inner) as usize
@@ -965,7 +1002,8 @@ impl PyFigure {
         };
         let ok = key(old);
         let mut f = self.lk();
-        let pos = f.children.iter().position(|c| match c {
+        let Some(children) = f.children_of_mut(subfig) else { return Ok(false) };
+        let pos = children.iter().position(|c| match c {
             FigChild::Text(x) => Arc::as_ptr(x) as usize == ok,
             FigChild::Line(x) => Arc::as_ptr(x) as usize == ok,
             FigChild::Patch(x) => Arc::as_ptr(x) as usize == ok,
@@ -973,13 +1011,13 @@ impl PyFigure {
             FigChild::Legend(_) => false,
         });
         let Some(i) = pos else { return Ok(false) };
-        let cat = match &f.children[i] {
+        let cat = match &children[i] {
             FigChild::Ext(_, c) => *c,
             FigChild::Line(_) => 2,
             FigChild::Patch(_) => 3,
             _ => 4,
         };
-        f.children[i] = if let Ok(t) = new.cast::<PyText>() {
+        children[i] = if let Ok(t) = new.cast::<PyText>() {
             FigChild::Text(t.borrow().inner.clone())
         } else if let Ok(l) = new.cast::<PyLine2D>() {
             FigChild::Line(l.borrow().inner.clone())
@@ -991,23 +1029,25 @@ impl PyFigure {
         Ok(true)
     }
 
-    fn remove_artist(&self, a: &Bound<'_, PyAny>) -> PyResult<bool> {
+    #[pyo3(signature = (a, subfig=None))]
+    fn remove_artist(&self, a: &Bound<'_, PyAny>, subfig: Option<u64>) -> PyResult<bool> {
         let mut f = self.lk();
-        let before = f.children.len();
+        let Some(children) = f.children_of_mut(subfig) else { return Ok(false) };
+        let before = children.len();
         if let Ok(t) = a.cast::<PyText>() {
             let p = t.borrow().inner.clone();
-            f.children.retain(|c| !matches!(c, FigChild::Text(x) if Arc::ptr_eq(x, &p)));
+            children.retain(|c| !matches!(c, FigChild::Text(x) if Arc::ptr_eq(x, &p)));
         } else if let Ok(l) = a.cast::<PyLine2D>() {
             let p = l.borrow().inner.clone();
-            f.children.retain(|c| !matches!(c, FigChild::Line(x) if Arc::ptr_eq(x, &p)));
+            children.retain(|c| !matches!(c, FigChild::Line(x) if Arc::ptr_eq(x, &p)));
         } else if let Ok(pp) = a.cast::<PyPatch>() {
             let p = pp.borrow().inner.clone();
-            f.children.retain(|c| !matches!(c, FigChild::Patch(x) if Arc::ptr_eq(x, &p)));
+            children.retain(|c| !matches!(c, FigChild::Patch(x) if Arc::ptr_eq(x, &p)));
         } else {
             let id = a.as_ptr() as usize;
-            f.children.retain(|c| !matches!(c, FigChild::Ext(e, _) if e.ident() == id));
+            children.retain(|c| !matches!(c, FigChild::Ext(e, _) if e.ident() == id));
         }
-        Ok(f.children.len() != before)
+        Ok(children.len() != before)
     }
 
     /// Render and return the RGBA buffer (h, w, 4).
@@ -2365,6 +2405,19 @@ impl PyAxes {
             a.clear();
             a.child_axes.clear();
         })
+    }
+
+    /// `transSubfigure` of the subfigure holding this axes (a `("py", t)`
+    /// transform spec), or None for the figure's.
+    fn set_trans_subfigure(&self, spec: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let t = match spec {
+            Some(s) => match super::model::tspec_from(s)? {
+                crate::mpl::artist::TSpec::Ext(e) => Some(e),
+                _ => return Err(PyValueError::new_err("expected a ('py', transform) spec")),
+            },
+            None => None,
+        };
+        self.with(|a, _| a.trans_subfigure = t)
     }
 
     /// `add_child_axes`: draw the axes *uid* among this axes' children.

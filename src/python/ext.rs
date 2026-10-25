@@ -109,3 +109,39 @@ pub fn py_object(e: &Arc<dyn ExtArtist>) -> Option<&Py<PyAny>> {
 pub fn ext_from(obj: &Bound<'_, PyAny>) -> Arc<dyn ExtArtist> {
     Arc::new(PyExt { obj: obj.clone().unbind() })
 }
+
+/// A Python transform (any object with `get_matrix()`), evaluated when the
+/// Rust core draws an artist using it.
+pub struct PyTransform {
+    pub obj: Py<PyAny>,
+}
+
+impl crate::mpl::artist::ExtTransform for PyTransform {
+    fn matrix(&self) -> Option<crate::mpl::transforms::Mat> {
+        Python::attach(|py| {
+            let r = self
+                .obj
+                .bind(py)
+                .call_method0("get_matrix")
+                .and_then(|m| m.extract::<numpy::PyReadonlyArray2<f64>>().map(|a| a.as_array().to_owned()));
+            match r {
+                Ok(a) if a.shape() == [3, 3] => {
+                    Some([[a[[0, 0]], a[[0, 1]], a[[0, 2]]], [a[[1, 0]], a[[1, 1]], a[[1, 2]]], [0.0, 0.0, 1.0]])
+                }
+                Ok(_) => None,
+                Err(e) => {
+                    record_error(e);
+                    None
+                }
+            }
+        })
+    }
+
+    fn ident(&self) -> usize {
+        self.obj.as_ptr() as usize
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}

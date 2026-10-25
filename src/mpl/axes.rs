@@ -427,6 +427,8 @@ pub struct Axes {
     pub twinned: Vec<u64>,
     /// child axes (`Axes.child_axes`, e.g. insets), drawn among the children
     pub child_axes: Vec<u64>,
+    /// `transSubfigure` of the subfigure holding the axes (None: the figure's)
+    pub trans_subfigure: Option<super::artist::ExtT>,
     pub prop_cycle_index: usize,
     pub patch_cycle_index: usize,
     pub name: String,
@@ -497,6 +499,7 @@ impl Axes {
             shared_y: Vec::new(),
             twinned: Vec::new(),
             child_axes: Vec::new(),
+            trans_subfigure: None,
             prop_cycle_index: 0,
             patch_cycle_index: 0,
             name: "rectilinear".into(),
@@ -637,7 +640,13 @@ impl Axes {
 
     /// `self.bbox` (TransformedBbox(position, transSubfigure)).
     pub fn bbox(&self, fig: &FigCtx) -> Bbox {
-        self.position.transformed_bbox(&fig.trans_figure)
+        match &self.trans_subfigure {
+            Some(t) => match t.0.matrix() {
+                Some(m) => self.position.transformed_bbox(&Transform::Affine(m)),
+                None => self.position.transformed_bbox(&fig.trans_figure),
+            },
+            None => self.position.transformed_bbox(&fig.trans_figure),
+        }
     }
 
     pub fn trans_scale(&self) -> Transform {

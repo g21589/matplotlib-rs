@@ -50,7 +50,7 @@ pub fn opt_f64(obj: &Bound<'_, PyAny>) -> PyResult<Option<f64>> {
     }
 }
 
-fn tspec_from(obj: &Bound<'_, PyAny>) -> PyResult<TSpec> {
+pub fn tspec_from(obj: &Bound<'_, PyAny>) -> PyResult<TSpec> {
     if let Ok(s) = obj.extract::<String>() {
         return Ok(match s.as_str() {
             "data" => TSpec::Data,
@@ -73,6 +73,9 @@ fn tspec_from(obj: &Bound<'_, PyAny>) -> PyResult<TSpec> {
         "then" => TSpec::Then(Box::new(tspec_from(&t.get_item(1)?)?), Box::new(tspec_from(&t.get_item(2)?)?)),
         "blend" => TSpec::Blend(Box::new(tspec_from(&t.get_item(1)?)?), Box::new(tspec_from(&t.get_item(2)?)?)),
         "scaled_translation" => TSpec::ScaledTranslation(t.get_item(1)?.extract()?, t.get_item(2)?.extract()?),
+        "py" => TSpec::Ext(crate::mpl::artist::ExtT(std::sync::Arc::new(super::ext::PyTransform {
+            obj: t.get_item(1)?.unbind(),
+        }))),
         _ => return Err(PyValueError::new_err(format!("unknown transform kind {kind}"))),
     })
 }
@@ -108,6 +111,10 @@ pub fn tspec_to<'py>(py: Python<'py>, t: &TSpec) -> PyResult<Bound<'py, PyAny>> 
             ("affine", vec![m[0].to_vec(), m[1].to_vec()]).into_pyobject(py)?.into_any()
         }
         TSpec::Spine(i) => ("spine", *i).into_pyobject(py)?.into_any(),
+        TSpec::Ext(e) => match e.0.as_any().downcast_ref::<super::ext::PyTransform>() {
+            Some(p) => ("py", p.obj.bind(py).clone()).into_pyobject(py)?.into_any(),
+            None => "identity".into_pyobject(py)?.into_any(),
+        },
     })
 }
 

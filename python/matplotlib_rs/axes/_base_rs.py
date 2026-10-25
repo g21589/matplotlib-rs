@@ -167,6 +167,9 @@ def _patch_axes_base(cls):
             uid = root._rs.new_axes(tuple(map(float, self._position.bounds)))
             self._rs = root._rs.axes(uid)
         self._position = _FlushBbox(self._position.get_points(), self)
+        if fig.transSubfigure is not fig.get_figure(root=True).transFigure:
+            from .._live import PyTransformRef
+            self._rs.set_trans_subfigure(("py", PyTransformRef(fig.transSubfigure)))
         self.bbox = mtransforms.TransformedBbox(self._position, fig.transSubfigure)
         self.bbox._rs_clip_spec = "axes"
         self.bbox._rs_bbox_spec = "axes"

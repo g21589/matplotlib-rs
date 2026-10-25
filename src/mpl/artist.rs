@@ -15,6 +15,31 @@ pub enum Which {
     Tick2,
 }
 
+/// An affine transform owned by the embedding layer (a Python transform),
+/// evaluated when drawing.
+pub trait ExtTransform: Send + Sync {
+    /// The current 3x3 matrix (None if it cannot be evaluated).
+    fn matrix(&self) -> Option<Mat>;
+    /// Identity of the underlying object.
+    fn ident(&self) -> usize;
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+#[derive(Clone)]
+pub struct ExtT(pub std::sync::Arc<dyn ExtTransform>);
+
+impl PartialEq for ExtT {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ident() == other.0.ident()
+    }
+}
+
+impl std::fmt::Debug for ExtT {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ExtT({:#x})", self.0.ident())
+    }
+}
+
 /// Symbolic transform, resolved against a [`TransCtx`] when drawing.
 #[derive(Clone, Debug, PartialEq)]
 pub enum TSpec {
@@ -44,6 +69,8 @@ pub enum TSpec {
     Fixed(Transform),
     /// `spine.get_spine_transform()` for spine 0..4 (left, right, bottom, top).
     Spine(usize),
+    /// An affine transform evaluated by the embedding layer at draw time.
+    Ext(ExtT),
 }
 
 impl TSpec {
@@ -181,6 +208,7 @@ impl TransCtx {
             TSpec::Blend(x, y) => Transform::blend(&self.resolve(x), &self.resolve(y)),
             TSpec::Fixed(t) => t.clone(),
             TSpec::Spine(i) => self.spine_transform(*i),
+            TSpec::Ext(e) => Transform::Affine(e.0.matrix().unwrap_or(IDENTITY)),
         }
     }
 }
