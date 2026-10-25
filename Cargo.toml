@@ -1,0 +1,20 @@
+[package]
+name = "matplotlib-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust reimplementation of matplotlib's rendering pipeline with a drop-in Python API"
+license = "PSF-2.0"
+
+[lib]
+name = "_mplrs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.30", features = ["extension-module"] }
+numpy = "0.30"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "unwind"
