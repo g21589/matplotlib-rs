@@ -630,4 +630,10 @@ impl PyFont {
         let o = self.inner.load_glyph(gid).map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(o.points.iter().zip(o.tags.iter()).map(|(p, t)| (p.0, p.1, *t)).collect())
     }
+
+    /// The loaded outline as (points, tags, contour ends), in 26.6.
+    fn outline(&self, gid: u32) -> PyResult<(Vec<(i64, i64)>, Vec<u8>, Vec<u16>)> {
+        let o = self.inner.load_glyph(gid).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok((o.points, o.tags, o.contours))
+    }
 }

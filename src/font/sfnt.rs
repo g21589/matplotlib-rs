@@ -1,6 +1,7 @@
 //! Minimal SFNT/TrueType table access and FreeType-compatible unhinted
 //! glyph loading (`ttgload.c` semantics for `FT_LOAD_NO_HINTING`).
 
+use super::cff::CffFont;
 use super::outline::{hypot, mul_fix, FtMatrix, Outline};
 
 #[derive(Debug)]
@@ -50,6 +51,8 @@ pub struct SfntFace {
     hmtx: TableRange,
     loca: TableRange,
     glyf: TableRange,
+    /// CFF outlines (OpenType `CFF ` table) instead of `glyf`.
+    pub cff: Option<CffFont>,
     pub family_name: String,
     pub style_name: String,
     pub postscript_name: String,
@@ -137,8 +140,9 @@ impl SfntFace {
         let hmtx = find(b"hmtx").ok_or_else(|| err("missing hmtx table"))?;
         let loca = find(b"loca").unwrap_or_default();
         let glyf = find(b"glyf").unwrap_or_default();
-        if glyf.len == 0 {
-            return Err(err("only TrueType (glyf) outlines are supported"));
+        let cff_table = find(b"CFF ").unwrap_or_default();
+        if glyf.len == 0 && cff_table.len == 0 {
+            return Err(err("only TrueType (glyf) and CFF outlines are supported"));
         }
 
         let h = head.offset;
@@ -154,6 +158,13 @@ impl SfntFace {
         let line_gap = i16_at(&data, hh + 8);
         let max_advance_width = u16_at(&data, hh + 10);
         let num_hmetrics = u16_at(&data, hh + 34);
+        let cff = if glyf.len == 0 {
+            let t = data.get(cff_table.offset..cff_table.offset + cff_table.len).ok_or_else(|| err("bad CFF table"))?;
+            Some(CffFont::parse(t, units_per_em)?)
+        } else {
+            None
+        };
+        let num_glyphs = cff.as_ref().map(|c| c.num_glyphs as u16).unwrap_or(num_glyphs);
 
         let mut face = SfntFace {
             data,
@@ -171,6 +182,7 @@ impl SfntFace {
             hmtx,
             loca,
             glyf,
+            cff,
             family_name: String::new(),
             style_name: String::new(),
             postscript_name: String::new(),
@@ -366,6 +378,15 @@ impl SfntFace {
         }
     }
 
+    /// The scaled advance (`metrics.horiAdvance`) of an unhinted glyph load.
+    pub fn hori_advance(&self, gid: u32, x_scale: i64) -> i64 {
+        let (_, aw) = self.hmetrics(gid);
+        match &self.cff {
+            Some(cff) => cff.hori_advance(gid, aw as i64, x_scale),
+            None => mul_fix(aw as i64, x_scale),
+        }
+    }
+
     /// Location (offset, length) of a glyph within the glyf table.
     fn glyph_location(&self, gid: u32) -> (usize, usize) {
         let d = &self.data;
@@ -395,6 +416,9 @@ impl SfntFace {
     pub fn load_glyph(&self, gid: u32, x_scale: i64, y_scale: i64) -> Result<Outline, FontError> {
         if gid >= self.num_glyphs as u32 {
             return Err(FontError("invalid glyph index".into()));
+        }
+        if let Some(cff) = &self.cff {
+            return cff.load_glyph(gid, x_scale, y_scale);
         }
         let mut out = Outline::default();
         let mut pp = Phantom::default();

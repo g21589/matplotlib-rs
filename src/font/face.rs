@@ -164,7 +164,7 @@ impl FtFont {
             height: cb.y_max - cb.y_min,
             hori_bearing_x: cb.x_min,
             hori_bearing_y: cb.y_max,
-            hori_advance: mul_fix(aw as i64, self.size.x_scale),
+            hori_advance: self.sfnt().hori_advance(gid, self.size.x_scale),
             linear_hori_advance: linear,
             bbox,
         })

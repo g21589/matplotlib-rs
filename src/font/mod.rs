@@ -1,6 +1,7 @@
 //! Font engine: FreeType-compatible TrueType loading and rasterization and
 //! libraqm/HarfBuzz-compatible text layout.
 
+pub mod cff;
 pub mod face;
 pub mod grays;
 pub mod outline;

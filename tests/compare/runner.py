@@ -12,7 +12,8 @@ import sys
 import time
 
 here = os.path.dirname(os.path.abspath(__file__))
-os.environ["MATPLOTLIBRC"] = os.path.join(here, "..", "mplrc")
+# COMPARE_RC selects another matplotlibrc directory (e.g. the system one)
+os.environ["MATPLOTLIBRC"] = os.environ.get("COMPARE_RC") or os.path.join(here, "..", "mplrc")
 os.environ.setdefault("MPLBACKEND", "Agg")
 
 impl, script, outdir = sys.argv[1:4]
