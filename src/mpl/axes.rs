@@ -429,6 +429,9 @@ pub struct Axes {
     pub child_axes: Vec<u64>,
     /// `transSubfigure` of the subfigure holding the axes (None: the figure's)
     pub trans_subfigure: Option<super::artist::ExtT>,
+    /// Axes drawn entirely by the embedding layer (non-rectilinear
+    /// projections such as polar axes).
+    pub ext_draw: Option<std::sync::Arc<dyn super::artist::ExtArtist>>,
     pub prop_cycle_index: usize,
     pub patch_cycle_index: usize,
     pub name: String,
@@ -500,6 +503,7 @@ impl Axes {
             twinned: Vec::new(),
             child_axes: Vec::new(),
             trans_subfigure: None,
+            ext_draw: None,
             prop_cycle_index: 0,
             patch_cycle_index: 0,
             name: "rectilinear".into(),
@@ -1246,6 +1250,10 @@ impl Axes {
     /// Draw, with *kids* drawing the child axes (which the figure owns).
     pub fn draw_with(&mut self, renderer: &mut Renderer, fig: &FigCtx, kids: &mut dyn ChildAxesDraw) {
         if !self.base.visible {
+            return;
+        }
+        if let Some(e) = self.ext_draw.clone() {
+            e.draw(renderer);
             return;
         }
         self.unstale_viewlim(fig);

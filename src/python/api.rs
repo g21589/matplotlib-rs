@@ -532,6 +532,9 @@ impl ExternalLocator for PyLocator {
     fn is_null(&self) -> bool {
         Python::attach(|py| self.obj.bind(py).getattr("rs_is_null").and_then(|v| v.extract()).unwrap_or(false))
     }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -554,6 +557,9 @@ impl ExternalFormatter for PyFormatter {
     }
     fn get_offset(&self) -> String {
         Python::attach(|py| self.obj.bind(py).call_method0("rs_get_offset").and_then(|v| v.extract()).unwrap_or_default())
+    }
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -730,6 +736,9 @@ fn gridkw_from(d: &Bound<'_, PyDict>) -> PyResult<GridKw> {
 #[pyclass(name = "Figure", module = "matplotlib_rs._mplrs")]
 pub struct PyFigure {
     pub inner: Shared<Figure>,
+    /// Whether this is the figure's own handle (the one created by the
+    /// Python Figure), which alone reports its Python objects to the GC.
+    primary: bool,
 }
 
 fn axes_mut<'a>(f: &'a mut Figure, uid: u64) -> PyResult<&'a mut Axes> {
@@ -761,6 +770,56 @@ impl PyFigure {
 
 #[pymethods]
 impl PyFigure {
+    /// Expose the Python objects held by the Rust figure (Python-drawn
+    /// artists and axes, tick helpers, transforms) to the garbage collector:
+    /// they usually refer back to the figure.  The figure is skipped while
+    /// it is locked (e.g. being drawn), which only makes the collector more
+    /// conservative.
+    fn __traverse__(&self, visit: pyo3::PyVisit<'_>) -> Result<(), pyo3::PyTraverseError> {
+        use crate::mpl::figure::ExtRef;
+        if !self.primary {
+            return Ok(());
+        }
+        let Ok(f) = self.inner.try_lock() else { return Ok(()) };
+        let mut seen = std::collections::HashSet::new();
+        let mut objs: Vec<&Py<PyAny>> = Vec::new();
+        f.visit_ext(&mut |r| {
+            let (holder, obj): (usize, Option<&Py<PyAny>>) = match r {
+                ExtRef::Artist(e) => {
+                    let o = e.as_any().downcast_ref::<super::ext::PyExt>().map(|p| &p.obj);
+                    (Arc::as_ptr(e) as *const () as usize, o)
+                }
+                ExtRef::Locator(e) => (Arc::as_ptr(e) as *const () as usize, e.as_any().downcast_ref::<PyLocator>().map(|p| &p.obj)),
+                ExtRef::Formatter(e) => {
+                    (Arc::as_ptr(e) as *const () as usize, e.as_any().downcast_ref::<PyFormatter>().map(|p| &p.obj))
+                }
+                ExtRef::Transform(t) => (
+                    Arc::as_ptr(&t.0) as *const () as usize,
+                    t.0.as_any().downcast_ref::<super::ext::PyTransform>().map(|p| &p.obj),
+                ),
+            };
+            if let Some(o) = obj {
+                if seen.insert(holder) {
+                    // SAFETY: the reference lives as long as the figure guard.
+                    objs.push(unsafe { &*(o as *const Py<PyAny>) });
+                }
+            }
+        });
+        for o in objs {
+            visit.call(o)?;
+        }
+        Ok(())
+    }
+
+    fn __clear__(&mut self) {
+        if !self.primary {
+            return;
+        }
+        if let Ok(mut f) = self.inner.try_lock() {
+            f.release_ext();
+        }
+    }
+
     #[new]
     #[pyo3(signature = (figsize=None, dpi=None, facecolor=None, edgecolor=None, linewidth=0.0, frameon=None))]
     fn new(
@@ -775,7 +834,7 @@ impl PyFigure {
         let ec = edgecolor.map(color_from).transpose()?;
         let inner = shared(Figure::new(figsize, dpi, fc, ec, linewidth, frameon));
         Lock::lk(&inner).key = Arc::as_ptr(&inner) as usize;
-        Ok(PyFigure { inner })
+        Ok(PyFigure { inner, primary: true })
     }
 
     /// add_subplot(nrows, ncols, num1, num2[, gridspec params]) -> uid
@@ -2420,6 +2479,12 @@ impl PyAxes {
         self.with(|a, _| a.trans_subfigure = t)
     }
 
+    /// Have the axes drawn by *obj*'s `_rs_draw` (None: by the Rust core).
+    fn set_ext_draw(&self, obj: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let e = obj.map(super::ext::ext_from);
+        self.with(|a, _| a.ext_draw = e)
+    }
+
     /// `add_child_axes`: draw the axes *uid* among this axes' children.
     fn add_child_axes(&self, uid: u64) -> PyResult<()> {
         self.with(|a, _| {
@@ -2476,7 +2541,7 @@ impl PyAxes {
 
     #[getter]
     fn figure(&self) -> PyFigure {
-        PyFigure { inner: self.fig.clone() }
+        PyFigure { inner: self.fig.clone(), primary: false }
     }
 }
 

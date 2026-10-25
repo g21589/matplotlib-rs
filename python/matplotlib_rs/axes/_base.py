@@ -4699,7 +4699,7 @@ class _AxesBase(martist.Artist):
         # always include types that do not internally implement clipping
         # to Axes. may have clip_on set to True and clip_box equivalent
         # to ax.bbox but then ignore these properties during draws.
-        noclip = (_AxesBase, maxis.Axis,
+        noclip = (_AxesBase, maxis.Axis, *maxis._rs_other_axis_classes,
                   offsetbox.AnnotationBbox, offsetbox.OffsetBox)
         return [a for a in artists if a.get_visible() and a.get_in_layout()
                 and (isinstance(a, noclip) or not a._fully_clipped_to_axes())]

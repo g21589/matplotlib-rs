@@ -154,7 +154,14 @@ def _rs_attr(name, push):
     return property(getter, setter)
 
 
+def _rs_py_drawn(ax):
+    """Whether *ax* is drawn by matplotlib's Python code (non-rectilinear
+    projections: polar, geo) rather than by the Rust core."""
+    return ax.name != "rectilinear"
+
+
 def _patch_axes_base(cls):
+    orig_draw = cls.draw
     orig_set_figure = cls.set_figure
     orig_set_lim_and_transforms = cls._set_lim_and_transforms
     orig_clear = cls._AxesBase__clear
@@ -166,6 +173,8 @@ def _patch_axes_base(cls):
             root = fig.get_figure(root=True)
             uid = root._rs.new_axes(tuple(map(float, self._position.bounds)))
             self._rs = root._rs.axes(uid)
+            if _rs_py_drawn(self):
+                self._rs.set_ext_draw(self)
         self._position = _FlushBbox(self._position.get_points(), self)
         if fig.transSubfigure is not fig.get_figure(root=True).transFigure:
             from .._live import PyTransformRef
@@ -186,6 +195,8 @@ def _patch_axes_base(cls):
 
     def _set_lim_and_transforms(self):
         orig_set_lim_and_transforms(self)
+        if _rs_py_drawn(self):
+            return
         self.transAxes._rs_spec = "axes"
         self.transData._rs_spec = "data"
 
@@ -210,8 +221,9 @@ def _patch_axes_base(cls):
             rs.set_title_handle(loc, t._h)
         # matplotlib sets the spine positions when it creates the first
         # ticks; the Rust core creates the ticks itself.
-        for spine in self.spines.values():
-            spine._ensure_position_is_set()
+        if not _rs_py_drawn(self):
+            for spine in self.spines.values():
+                spine._ensure_position_is_set()
         self.patch.__dict__["_h"] = mpatches._RsPatchHandle(rs)
         martist._DIRTY.add(self.patch)
         martist._DIRTY.add(self)
@@ -234,6 +246,9 @@ def _patch_axes_base(cls):
 
     def _rs_prepare_draw(self, renderer):
         """What matplotlib's ``Axes.draw`` does before drawing children."""
+        if _rs_py_drawn(self):
+            martist._DIRTY.add(self)
+            return
         self._unstale_viewLim()
         locator = self.get_axes_locator()
         self.apply_aspect(locator(self, renderer) if locator else None)
@@ -245,6 +260,8 @@ def _patch_axes_base(cls):
 
     def draw(self, renderer):
         # Normally drawn by the Rust core as part of the figure.
+        if _rs_py_drawn(self):
+            return orig_draw(self, renderer)
         if not self.get_visible():
             return
         self._rs_prepare_draw(renderer)

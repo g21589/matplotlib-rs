@@ -29,6 +29,15 @@ pub enum FigChild {
     Ext(std::sync::Arc<dyn ExtArtist>, u8),
 }
 
+/// An object of the embedding layer held by the figure (see
+/// [`Figure::visit_ext`]).
+pub enum ExtRef<'a> {
+    Artist(&'a std::sync::Arc<dyn super::artist::ExtArtist>),
+    Locator(&'a std::sync::Arc<dyn super::ticker::ExternalLocator>),
+    Formatter(&'a std::sync::Arc<dyn super::ticker::ExternalFormatter>),
+    Transform(&'a super::artist::ExtT),
+}
+
 /// A `SubFigure`: its patch, figure-level artists, local axes (kept among the
 /// figure's detached axes) and nested subfigures.
 #[derive(Debug)]
@@ -165,6 +174,73 @@ impl Figure {
     pub fn canvas_size(&self) -> (u32, u32) {
         let b = self.fig_bbox();
         (b.xmax() as u32, b.ymax() as u32)
+    }
+
+    /// Visit the embedding-layer objects held by the figure: external
+    /// artists, Python-drawn axes, Python tick helpers and subfigure
+    /// transforms (used to expose them to Python's garbage collector).
+    pub fn visit_ext(&self, f: &mut dyn FnMut(ExtRef<'_>)) {
+        use super::axes::Child;
+        use super::ticker::{Formatter, Locator};
+        let children = self.children.iter().chain(self.subfigs.iter().flat_map(|s| s.children.iter()));
+        for c in children {
+            if let FigChild::Ext(e, _) = c {
+                f(ExtRef::Artist(e));
+            }
+        }
+        for a in self.axes.iter().chain(self.detached.iter()) {
+            for c in &a.children {
+                if let Child::Ext(e) = c {
+                    f(ExtRef::Artist(e));
+                }
+            }
+            if let Some(e) = &a.ext_draw {
+                f(ExtRef::Artist(e));
+            }
+            if let Some(t) = &a.trans_subfigure {
+                f(ExtRef::Transform(t));
+            }
+            for axis in [&a.xaxis, &a.yaxis] {
+                for l in [&axis.major_locator, &axis.minor_locator] {
+                    if let Locator::External(e) = l {
+                        f(ExtRef::Locator(e));
+                    }
+                }
+                for fm in [&axis.major_formatter, &axis.minor_formatter] {
+                    if let Formatter::External(e) = fm {
+                        f(ExtRef::Formatter(e));
+                    }
+                }
+            }
+        }
+    }
+
+    /// Drop every embedding-layer object visited by [`Figure::visit_ext`]
+    /// (breaking reference cycles of a figure being garbage collected).
+    pub fn release_ext(&mut self) {
+        use super::axes::Child;
+        use super::ticker::{Formatter, Locator};
+        self.children.retain(|c| !matches!(c, FigChild::Ext(..)));
+        for s in self.subfigs.iter_mut() {
+            s.children.retain(|c| !matches!(c, FigChild::Ext(..)));
+        }
+        for a in self.axes.iter_mut().chain(self.detached.iter_mut()) {
+            a.children.retain(|c| !matches!(c, Child::Ext(_)));
+            a.ext_draw = None;
+            a.trans_subfigure = None;
+            for axis in [&mut a.xaxis, &mut a.yaxis] {
+                for l in [&mut axis.major_locator, &mut axis.minor_locator] {
+                    if matches!(l, Locator::External(_)) {
+                        *l = Locator::Null;
+                    }
+                }
+                for fm in [&mut axis.major_formatter, &mut axis.minor_formatter] {
+                    if matches!(fm, Formatter::External(_)) {
+                        *fm = Formatter::Null;
+                    }
+                }
+            }
+        }
     }
 
     /// The attached and the detached (e.g. child) axes.

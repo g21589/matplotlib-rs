@@ -38,7 +38,15 @@ MODULES = [
     "tri/__init__.py", "tri/_triangulation.py", "tri/_tricontour.py",
     "tri/_trifinder.py", "tri/_triinterpolate.py", "tri/_tripcolor.py",
     "tri/_triplot.py", "tri/_trirefine.py", "tri/_tritools.py",
+    "_axis_py.py",
 ]
+
+# vendored under another name: {destination: source}
+SOURCES = {
+    # matplotlib's own Axis (Python ticks), for the projections whose axes
+    # are drawn in Python (polar, geo); rectilinear axes use axis.py
+    "_axis_py.py": "axis.py",
+}
 
 PATCHES = {
     "backend_bases.py": [
@@ -51,6 +59,8 @@ PATCHES = {
                "                     for k, v in _default_backends.items()}\n"),
     ],
     "axes/_base.py": [
+        ("noclip = (_AxesBase, maxis.Axis,",
+         "noclip = (_AxesBase, maxis.Axis, *maxis._rs_other_axis_classes,"),
         # Rust-backed state and drawing (see axes/_base_rs.py)
         (None, "\n\nfrom ._base_rs import _patch_axes_base  # noqa: E402\n"
                "_patch_axes_base(_AxesBase)\n"),
@@ -63,6 +73,16 @@ PATCHES = {
                "    self._set_scale()\n"
                "    super(SecondaryAxis, self)._rs_prepare_draw(renderer)\n\n\n"
                "SecondaryAxis._rs_prepare_draw = _rs_prepare_draw\n"),
+    ],
+    "_axis_py.py": [
+        (None, "\n\nfrom . import axis as _rs_axis  # noqa: E402\n"
+               "_rs_axis._rs_other_axis_classes.append(Axis)\n"),
+    ],
+    "projections/polar.py": [
+        ("import matplotlib_rs.axis as maxis", "import matplotlib_rs._axis_py as maxis"),
+    ],
+    "projections/geo.py": [
+        ("import matplotlib_rs.axis as maxis", "import matplotlib_rs._axis_py as maxis"),
     ],
     "figure.py": [
         (None, "\n\nfrom ._figure_rs import _patch_figure  # noqa: E402\n"
@@ -114,7 +134,7 @@ def rewrite_imports(s):
 
 
 def vendor(rel):
-    src = (SRC / rel).read_text()
+    src = (SRC / SOURCES.get(rel, rel)).read_text()
     s = HEADER + rewrite_imports(src)
     for old, new, *count in PATCHES.get(rel, []):
         if old is None:

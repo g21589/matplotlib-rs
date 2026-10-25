@@ -31,11 +31,13 @@ pub trait ExternalLocator: Send + Sync + std::fmt::Debug {
     fn is_null(&self) -> bool {
         false
     }
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 pub trait ExternalFormatter: Send + Sync + std::fmt::Debug {
     fn format_ticks(&self, values: &[f64], info: &AxisInfo) -> Vec<String>;
     fn get_offset(&self) -> String;
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// `transforms._nonsingular`.

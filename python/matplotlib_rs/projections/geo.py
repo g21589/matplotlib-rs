@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib_rs as mpl
 from matplotlib_rs import _api
 from matplotlib_rs.axes import Axes
-import matplotlib_rs.axis as maxis
+import matplotlib_rs._axis_py as maxis
 from matplotlib_rs.patches import Circle
 from matplotlib_rs.path import Path
 import matplotlib_rs.spines as mspines

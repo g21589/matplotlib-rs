@@ -321,6 +321,11 @@ def _rs_prop(name, axis_key, conv=lambda v: v, default=None):
     return property(getter, setter)
 
 
+# Axis classes of other implementations (the Python one used by polar and
+# geo axes, see _axis_py.py); matplotlib treats them like Axis.
+_rs_other_axis_classes = []
+
+
 class Axis(martist.Artist):
     """
     Base class for `.XAxis` and `.YAxis`.

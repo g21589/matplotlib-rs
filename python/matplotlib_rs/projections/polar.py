@@ -7,7 +7,7 @@ import numpy as np
 import matplotlib_rs as mpl
 from matplotlib_rs import _api, cbook
 from matplotlib_rs.axes import Axes
-import matplotlib_rs.axis as maxis
+import matplotlib_rs._axis_py as maxis
 import matplotlib_rs.markers as mmarkers
 import matplotlib_rs.patches as mpatches
 from matplotlib_rs.path import Path

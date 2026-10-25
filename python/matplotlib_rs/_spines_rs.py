@@ -47,7 +47,7 @@ def _patch_spines(Spine):
     def __init__(self, axes, spine_type, path, **kwargs):
         orig_init(self, axes, spine_type, path, **kwargs)
         rs = getattr(axes, "_rs", None)
-        if rs is not None and spine_type in _SPINES:
+        if rs is not None and spine_type in _SPINES and axes.name == "rectilinear":
             self.__dict__["_h"] = _RsSpineHandle(rs, spine_type)
             martist._DIRTY.add(self)
 
