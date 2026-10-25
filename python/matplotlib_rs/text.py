@@ -20,7 +20,15 @@ from . import _api, artist, cbook, _docstring, colors as mcolors
 from .artist import Artist
 from .font_manager import FontProperties, fontManager, get_font
 from .patches import FancyArrowPatch, FancyBboxPatch, Rectangle
-from .textpath import TextPath, TextToPath  # noqa # Logically located here
+
+
+def __getattr__(name):
+    # TextPath and TextToPath logically live here, but importing textpath
+    # (mathtext's parser, dviread) is deferred until they are used.
+    if name in ("TextPath", "TextToPath"):
+        from . import textpath
+        return getattr(textpath, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 from .transforms import (
     Affine2D, Bbox, BboxBase, BboxTransformTo, IdentityTransform, Transform)
 

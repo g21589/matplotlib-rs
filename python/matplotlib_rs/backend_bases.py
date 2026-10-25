@@ -55,7 +55,6 @@ from matplotlib_rs.backend_managers import ToolManager
 from matplotlib_rs.cbook import _setattr_cm
 from matplotlib_rs.layout_engine import ConstrainedLayoutEngine
 from matplotlib_rs.path import Path
-from matplotlib_rs.texmanager import TexManager
 from matplotlib_rs.transforms import Affine2D
 from matplotlib_rs._enums import JoinStyle, CapStyle
 
@@ -155,9 +154,19 @@ class RendererBase:
     def __init__(self):
         super().__init__()
         self._texmanager = None
-        self._text2path = text.TextToPath()
         self._raster_depth = 0
         self._rasterizing = False
+
+    @property
+    def _text2path(self):
+        t = self.__dict__.get('_rs_text2path')
+        if t is None:
+            t = self.__dict__['_rs_text2path'] = text.TextToPath()
+        return t
+
+    @_text2path.setter
+    def _text2path(self, value):
+        self.__dict__['_rs_text2path'] = value
 
     def open_group(self, s, gid=None):
         """
@@ -622,6 +631,7 @@ class RendererBase:
     def get_texmanager(self):
         """Return the `.TexManager` instance."""
         if self._texmanager is None:
+            from matplotlib_rs.texmanager import TexManager
             self._texmanager = TexManager()
         return self._texmanager
 

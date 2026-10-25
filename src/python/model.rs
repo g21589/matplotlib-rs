@@ -344,8 +344,28 @@ pub struct PyLine2D {
     pub inner: Shared<Line2D>,
 }
 
+/// A fingerprint of a value's state (its `Debug` form, hashed as written).
+pub fn state_hash<T: std::fmt::Debug>(v: &T) -> u64 {
+    use std::hash::Hasher;
+    struct W(std::collections::hash_map::DefaultHasher);
+    impl std::fmt::Write for W {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.0.write(s.as_bytes());
+            Ok(())
+        }
+    }
+    let mut w = W(std::collections::hash_map::DefaultHasher::new());
+    let _ = std::fmt::write(&mut w, format_args!("{v:?}"));
+    w.0.finish()
+}
+
 #[pymethods]
 impl PyLine2D {
+    /// A fingerprint of the line's state (changes whenever the line does).
+    fn state_hash(&self) -> u64 {
+        state_hash(&*self.inner.lk())
+    }
+
     #[new]
     fn new(x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<Self> {
         Ok(PyLine2D { inner: shared(Line2D::new(f64_vec(x)?, f64_vec(y)?)) })

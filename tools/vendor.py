@@ -64,6 +64,24 @@ SOURCES = {
 
 PATCHES = {
     "backend_bases.py": [
+        # import time: texmanager pulls in dviread and fontTools; load it on use
+        ("from matplotlib_rs.texmanager import TexManager\n", ""),
+        ("            self._texmanager = TexManager()",
+         "            from matplotlib_rs.texmanager import TexManager\n"
+         "            self._texmanager = TexManager()"),
+        # ... and the text-to-path converter (mathtext's parser) as well
+        ("        self._text2path = text.TextToPath()\n", ""),
+        ("    def open_group(self, s, gid=None):",
+         "    @property\n"
+         "    def _text2path(self):\n"
+         "        t = self.__dict__.get('_rs_text2path')\n"
+         "        if t is None:\n"
+         "            t = self.__dict__['_rs_text2path'] = text.TextToPath()\n"
+         "        return t\n\n"
+         "    @_text2path.setter\n"
+         "    def _text2path(self, value):\n"
+         "        self.__dict__['_rs_text2path'] = value\n\n"
+         "    def open_group(self, s, gid=None):"),
         # file formats are served by matplotlib_rs' own backends
         ("_default_backends = {", "_default_backends = {  # matplotlib_rs backends"),
         ('if mod.startswith(("matplotlib.", "mpl_toolkits.")):',

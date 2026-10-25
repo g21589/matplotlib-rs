@@ -166,6 +166,11 @@ impl PyText {
 
 #[pymethods]
 impl PyText {
+    /// A fingerprint of the text's state (changes whenever the text does).
+    fn state_hash(&self) -> u64 {
+        super::model::state_hash(&*self.inner.lk())
+    }
+
     #[new]
     #[pyo3(signature = (x=0.0, y=0.0, text=""))]
     fn new(x: f64, y: f64, text: &str) -> Self {
@@ -2202,6 +2207,43 @@ impl PyAxes {
                 collect(&t, n);
             }
             out
+        })
+    }
+
+    /// Update the ticks (as `get_ticklabels` does) and return a fingerprint
+    /// of the tick objects: their identities and states.  Equal fingerprints
+    /// mean the tick handles and everything about them are unchanged.
+    #[pyo3(signature = (axis, major=true))]
+    fn ticks_signature(&self, axis: &str, major: bool) -> PyResult<u64> {
+        use std::hash::{Hash, Hasher};
+        let x = axis_of(axis)?;
+        self.unstaled(|a, ctx| {
+            let tc = a.trans_ctx(ctx);
+            let ac = a.axis_ctx(x, &tc, ctx);
+            let ax = if x { &mut a.xaxis } else { &mut a.yaxis };
+            ax.update_ticks(&ac);
+            let (n, ticks) = if major {
+                let n = ax.get_majorticklocs(&ac).len();
+                ax.ensure_major_ticks(n);
+                (n, ax.major_ticks.clone().unwrap_or_default())
+            } else {
+                let n = ax.get_minorticklocs(&ac).len();
+                ax.ensure_minor_ticks(n);
+                (n, ax.minor_ticks.clone().unwrap_or_default())
+            };
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            n.hash(&mut h);
+            for t in ticks.iter().take(n) {
+                for p in [&t.label1, &t.label2] {
+                    (Arc::as_ptr(p) as usize).hash(&mut h);
+                    super::model::state_hash(&*p.lk()).hash(&mut h);
+                }
+                for p in [&t.tick1line, &t.tick2line, &t.gridline] {
+                    (Arc::as_ptr(p) as usize).hash(&mut h);
+                    super::model::state_hash(&*p.lk()).hash(&mut h);
+                }
+            }
+            h.finish()
         })
     }
 

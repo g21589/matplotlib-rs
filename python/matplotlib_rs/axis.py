@@ -153,16 +153,40 @@ class Tick:
     are views of the Rust artists, so changes to them are drawn.
     """
 
-    def __init__(self, axis, idx, major, tick1line, tick2line, gridline, label1, label2):
+    def __init__(self, axis, idx, major, line_handles, label1, label2):
         self._axis_proxy = axis
         self._idx = idx
         self._major = major
-        self.tick1line = tick1line
-        self.tick2line = tick2line
-        self.gridline = gridline
+        # Rust handles of tick1line, tick2line and gridline; their Python
+        # views are made when first used
+        self._rs_line_handles = line_handles
+        self._rs_line_views = {}
         self.label1 = label1
         self.label2 = label2
         self.axes = axis.axes
+
+    def _rs_line(self, i):
+        v = self._rs_line_views.get(i)
+        if v is not None and v._h is self._rs_line_handles[i]:
+            v._rs_refresh()
+            return v
+        v = _wrap_rs_line(self._axis_proxy._line_cache, self._rs_line_handles[i], self.axes)
+        self._rs_line_views[i] = v
+        return v
+
+    def _rs_line_property(i):
+        def fget(self):
+            return self._rs_line(i)
+
+        def fset(self, line):
+            self._rs_line_views[i] = line
+
+        return property(fget, fset)
+
+    tick1line = _rs_line_property(0)
+    tick2line = _rs_line_property(1)
+    gridline = _rs_line_property(2)
+    del _rs_line_property
 
     def __repr__(self):
         return f"<{type(self).__name__} {self._idx} of {self._axis_proxy}>"
@@ -1012,14 +1036,25 @@ class Axis(martist.Artist):
 
     def _make_ticks(self, major, n):
         self._rs_prepare()
+        rs = self.axes._rs
+        # reuse the tick views while the Rust ticks are unchanged
+        sig = rs.ticks_signature(self.axis_name, major)
+        made = self.__dict__.setdefault("_rs_made_ticks", {})
+        prev = made.get(major)
+        if prev is not None and prev[0] == sig:
+            ticks = prev[1]
+            return ticks[:n] if n is not None else ticks
+        ticks = self._make_ticks_from_rs(major)
+        made[major] = (sig, ticks)
+        return ticks[:n] if n is not None else ticks
+
+    def _make_ticks_from_rs(self, major):
         which = "major" if major else "minor"
         rs = self.axes._rs
         labels = [_wrap_rs_text(self._text_cache, h, self.axes)
                   for h in rs.get_ticklabels(self.axis_name, which, False)]
-        lines = [_wrap_rs_line(self._line_cache, h, self.axes)
-                 for h in rs.get_ticklines(self.axis_name, not major)]
-        grids = [_wrap_rs_line(self._line_cache, h, self.axes)
-                 for h in rs.get_gridlines(self.axis_name, not major)]
+        lines = rs.get_ticklines(self.axis_name, not major)
+        grids = rs.get_gridlines(self.axis_name, not major)
         nt = len(grids)
         cls = self._tick_class or Tick
         cache = self.__dict__.setdefault("_tick_cache", {})
@@ -1027,13 +1062,16 @@ class Axis(martist.Artist):
         for i in range(nt):
             key = (major, labels[i]._h.ident())
             t = cache.get(key)
-            if t is None or t.label1 is not labels[i] or t.gridline is not grids[i]:
-                t = cls(self, i, major, lines[2 * i], lines[2 * i + 1], grids[i],
-                        labels[i], labels[nt + i])
+            handles = (lines[2 * i], lines[2 * i + 1], grids[i])
+            if (t is None or t.label1 is not labels[i]
+                    or t._rs_line_handles[2].ident() != grids[i].ident()):
+                t = cls(self, i, major, handles, labels[i], labels[nt + i])
+            else:
+                t._rs_line_handles = handles
                 cache[key] = t
             t._idx = i
             ticks.append(t)
-        return ticks[:n] if n is not None else ticks
+        return ticks
 
     def _update_ticks(self):
         """
