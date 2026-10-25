@@ -203,6 +203,7 @@ fn default_bool(key: &str) -> bool {
     matches!(
         key,
         "axes.formatter.useoffset"
+            | "font.enable_last_resort"
             | "axes.unicode_minus"
             | "path.simplify"
             | "lines.scale_dashes"

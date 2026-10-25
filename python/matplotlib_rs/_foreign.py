@@ -16,6 +16,15 @@ from .path import Path
 from .transforms import Affine2D, Bbox, TransformedPath
 
 
+def warn_missing_glyphs():
+    """Issue the "Glyph ... missing" warnings of text laid out by the Rust core."""
+    missing = _mplrs.take_missing_glyphs()
+    if missing:
+        from ._text_helpers import warn_on_missing_glyph
+        for codepoint, fonts in missing:
+            warn_on_missing_glyph(codepoint, fonts)
+
+
 def is_foreign(renderer):
     """Whether *renderer* is not backed by the Rust Agg renderer."""
     return renderer is not None and not isinstance(

@@ -546,6 +546,28 @@ pub fn load_font_data(path: &str, index: u32) -> Option<Arc<FontData>> {
 pub struct ResolvedFont {
     pub fonts: Vec<Arc<FontData>>,
     pub paths: Vec<(String, u32)>,
+    /// index of matplotlib's Last Resort font in `fonts` (used with its
+    /// first charmap; glyphs from it are reported as missing)
+    pub last_resort: Option<usize>,
+}
+
+impl ResolvedFont {
+    /// FreeType-like font objects at `size` points and `dpi`, with the Last
+    /// Resort font on its first charmap (as `font_manager._get_font` does).
+    pub fn ft_fonts(&self, size: f64, dpi: f64) -> Vec<crate::font::FtFont> {
+        self.fonts
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let mut f = crate::font::FtFont::new(d.clone());
+                if Some(i) == self.last_resort && !d.cmaps.is_empty() {
+                    f.charmap = Some(0);
+                }
+                f.set_size(size, dpi);
+                f
+            })
+            .collect()
+    }
 }
 
 static RESOLVED: LazyLock<Mutex<HashMap<(FontProperties, u64), Arc<ResolvedFont>>>> =
@@ -569,7 +591,27 @@ pub fn resolve_font(prop: &FontProperties) -> Option<Arc<ResolvedFont>> {
     if fonts.is_empty() {
         return None;
     }
-    let r = Arc::new(ResolvedFont { fonts, paths: ok_paths });
+    // font_manager._get_font: the Last Resort font is always available
+    let lr_path = FONT_MANAGER
+        .read()
+        .unwrap()
+        .ttflist
+        .iter()
+        .find(|e| e.fname.ends_with("/LastResortHE-Regular.ttf") && e.fname.contains("mpl-data"))
+        .map(|e| e.fname.clone());
+    let mut last_resort = None;
+    if let Some(lr) = lr_path {
+        if let Some(i) = ok_paths.iter().position(|(p, i)| *p == lr && *i == 0) {
+            last_resort = Some(i);
+        } else if super::rc::rc().boolean("font.enable_last_resort") {
+            if let Some(d) = load_font_data(&lr, 0) {
+                fonts.push(d);
+                ok_paths.push((lr, 0));
+                last_resort = Some(fonts.len() - 1);
+            }
+        }
+    }
+    let r = Arc::new(ResolvedFont { fonts, paths: ok_paths, last_resort });
     let mut cache = RESOLVED.lock().unwrap();
     if cache.len() > 4096 {
         cache.clear();

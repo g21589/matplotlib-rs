@@ -189,6 +189,8 @@ def _patch_figure(FigureBase, Figure, SubFigure):
             finally:
                 self.stale = False
 
+            from ._foreign import warn_missing_glyphs
+            warn_missing_glyphs()
             DrawEvent("draw_event", self.canvas, renderer)._process()
 
     draw.__doc__ = Figure.draw.__doc__

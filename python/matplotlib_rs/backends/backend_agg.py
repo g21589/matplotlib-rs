@@ -267,7 +267,10 @@ class RendererAgg(RendererBase):
             parse = self.mathtext_parser.parse(s, self.dpi, prop)
             return parse.width, parse.height, parse.depth
 
-        return self._renderer.get_text_width_height_descent(s, _fontprops(prop), False)
+        whd = self._renderer.get_text_width_height_descent(s, _fontprops(prop), False)
+        from .._foreign import warn_missing_glyphs
+        warn_missing_glyphs()
+        return whd
 
     def draw_tex(self, gc, x, y, s, prop, angle, *, mtext=None):
         raise NotImplementedError("matplotlib_rs does not support usetex yet")

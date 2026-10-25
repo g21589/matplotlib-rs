@@ -343,13 +343,12 @@ impl Renderer {
             return;
         }
         let Some(font) = resolve_font(prop) else { return };
-        let mut ft = FtFont::new(font.fonts[0].clone());
-        ft.set_size(prop.size, self.dpi);
+        let fts = font.ft_fonts(prop.size, self.dpi);
+        let refs: Vec<&FtFont> = fts.iter().collect();
         let cps: Vec<u32> = s.chars().map(|c| c as u32).collect();
-        let items = ft.layout(&cps);
-        let glyphs: Vec<GlyphDraw> = items
+        let glyphs: Vec<GlyphDraw> = crate::font::face::layout_items_with_fallbacks(&refs, &cps)
             .into_iter()
-            .map(|(gid, dx, dy)| GlyphDraw { font: 0, size: prop.size, gid, slant: 0.0, extend: 1.0, dx, dy })
+            .map(|(f, gid, dx, dy)| GlyphDraw { font: f, size: prop.size, gid, slant: 0.0, extend: 1.0, dx, dy })
             .collect();
         self.draw_text_glyphs_and_boxes(gc, x, y, angle, &font.fonts, &glyphs, &[]);
     }
@@ -451,8 +450,31 @@ pub fn text_metrics(s: &str, prop: &FontProperties, ismath: bool, dpi: f64) -> (
         return super::mathtext::mathtext_metrics(s, prop, dpi);
     }
     let Some(font) = resolve_font(prop) else { return (0.0, 0.0, 0.0) };
-    let mut ft = FtFont::new(font.fonts[0].clone());
-    ft.set_size(prop.size, dpi);
+    let fts = font.ft_fonts(prop.size, dpi);
+    let refs: Vec<&FtFont> = fts.iter().collect();
+    let warn: Vec<bool> = (0..fts.len()).map(|i| Some(i) == font.last_resort).collect();
     let cps: Vec<u32> = s.chars().map(|c| c as u32).collect();
-    ft.text_width_height_descent(&cps)
+    let (adv, bbox, missing, seen) = crate::font::face::set_text_with_fallbacks(&refs, &cps, &warn);
+    note_missing_glyphs(&missing, &seen, &fts);
+    (adv as f64 / 64.0, (bbox.y_max - bbox.y_min) as f64 / 64.0, (-bbox.y_min) as f64 / 64.0)
+}
+
+thread_local! {
+    /// "Glyph missing" warnings to issue (codepoint, font names), like
+    /// `FT2Font::set_text`'s `ft_glyph_warn`.
+    static MISSING_GLYPHS: RefCell<Vec<(u32, String)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn note_missing_glyphs(missing: &[u32], seen: &[usize], fts: &[FtFont]) {
+    if missing.is_empty() {
+        return;
+    }
+    let names: Vec<String> = seen.iter().map(|&i| fts[i].sfnt().family_name.clone()).collect();
+    let names = names.join(", ");
+    MISSING_GLYPHS.with(|m| m.borrow_mut().extend(missing.iter().map(|&c| (c, names.clone()))));
+}
+
+/// The missing-glyph warnings recorded since the last call.
+pub fn take_missing_glyphs() -> Vec<(u32, String)> {
+    MISSING_GLYPHS.with(|m| std::mem::take(&mut *m.borrow_mut()))
 }

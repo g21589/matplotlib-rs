@@ -53,11 +53,16 @@ pub struct SizeMetrics {
 pub struct FontData {
     pub sfnt: SfntFace,
     pub hb_font: harfrust::Font,
+    /// the `cmap` subtables (FreeType's charmaps) and the default one
+    pub cmaps: Vec<super::cmap::Subtable>,
+    pub default_cmap: Option<usize>,
 }
 
 /// An `FT2Font`-like object; cheap to create from shared [`FontData`].
 pub struct FtFont {
     pub data: Arc<FontData>,
+    /// the selected charmap (`FT_Set_Charmap`)
+    pub charmap: Option<usize>,
     pub size: SizeMetrics,
     pub matrix: FtMatrix,
     pub delta: (i64, i64),
@@ -69,7 +74,9 @@ impl FontData {
         let hb_font = harfrust::Font::new(bytes.clone(), index)
             .ok_or_else(|| FontError("could not parse font for shaping".into()))?;
         let sfnt = SfntFace::parse(bytes, index)?;
-        Ok(FontData { sfnt, hb_font })
+        let cmaps = sfnt.table_data(b"cmap").map(super::cmap::subtables).unwrap_or_default();
+        let default_cmap = super::cmap::default_charmap(&cmaps);
+        Ok(FontData { sfnt, hb_font, cmaps, default_cmap })
     }
 }
 
@@ -81,11 +88,20 @@ impl<'a> harfrust::FontFuncs for HbFtFuncs<'a> {
     fn glyph_h_advance(&self, _font: &harfrust::ShaperFont, glyph: harfrust::GlyphId) -> i32 {
         self.font.hb_ft_advance(glyph.to_u32())
     }
+
+    /// hb-ft: `FT_Get_Char_Index` on the selected charmap.
+    fn nominal_glyph(&self, _font: &harfrust::ShaperFont, c: u32) -> Option<harfrust::GlyphId> {
+        match self.font.glyph_index(c) {
+            0 => None,
+            g => Some(harfrust::GlyphId::new(g)),
+        }
+    }
 }
 
 impl FtFont {
     pub fn new(data: Arc<FontData>) -> Self {
-        FtFont { data, size: SizeMetrics::default(), matrix: FtMatrix::IDENTITY, delta: (0, 0), transform_flags: 0 }
+        let charmap = data.default_cmap;
+        FtFont { data, charmap, size: SizeMetrics::default(), matrix: FtMatrix::IDENTITY, delta: (0, 0), transform_flags: 0 }
     }
 
     #[inline]
@@ -212,49 +228,21 @@ impl FtFont {
         (xs, ys)
     }
 
+    /// `FT_Get_Char_Index`.
     pub fn glyph_index(&self, c: u32) -> u32 {
-        let shaper = harfrust::ShaperFont::new(&self.data.hb_font);
-        shaper.default_nominal_glyph(c).map(|g| g.to_u32()).unwrap_or(0)
+        let Some(i) = self.charmap else { return 0 };
+        let Some(cmap) = self.sfnt().table_data(b"cmap") else { return 0 };
+        let g = super::cmap::char_index(cmap, &self.data.cmaps[i], c);
+        if g >= self.sfnt().num_glyphs as u32 {
+            0
+        } else {
+            g
+        }
     }
 
     /// libraqm layout of `text` (LTR, single font): glyph ids and 26.6 positions.
     pub fn shape(&self, text: &[u32]) -> Vec<ShapedGlyph> {
-        if text.is_empty() {
-            return Vec::new();
-        }
-        let funcs = HbFtFuncs { font: self };
-        let (xs, ys) = self.hb_scale();
-        let shaper = harfrust::ShaperFont::new(&self.data.hb_font)
-            .with_scale_separate(xs, ys)
-            .with_font_funcs(Some(&funcs));
-
-        let mut out = Vec::with_capacity(text.len());
-        for (start, end, script) in resolve_script_runs(text) {
-            let mut buffer = harfrust::Buffer::new();
-            // raqm adds the full text, shaping only the run (context is kept).
-            buffer.set_pre_context_codepoints(&text[..start]);
-            for (i, &c) in text.iter().enumerate().take(end).skip(start) {
-                buffer.push(c, i as u32);
-            }
-            buffer.set_post_context_codepoints(&text[end..]);
-            buffer.set_direction(harfrust::Direction::LeftToRight);
-            buffer.set_script(Some(script));
-            buffer.set_flags(harfrust::BufferFlags::BEGINNING_OF_TEXT | harfrust::BufferFlags::END_OF_TEXT);
-            if harfrust::shape(&shaper, &mut buffer, harfrust::ShapeOptions::new()).is_err() {
-                continue;
-            }
-            for (info, pos) in buffer.glyph_infos().iter().zip(buffer.glyph_positions().iter()) {
-                out.push(ShapedGlyph {
-                    index: info.glyph_id,
-                    cluster: info.cluster,
-                    x_advance: pos.x_advance,
-                    y_advance: pos.y_advance,
-                    x_offset: pos.x_offset,
-                    y_offset: pos.y_offset,
-                });
-            }
-        }
-        out
+        shape_with(&[self], text, &vec![0; text.len()]).into_iter().map(|(_, g)| g).collect()
     }
 
     /// `FT2Font::set_text` with angle 0: returns (advance, bbox) in 26.6.
@@ -304,6 +292,151 @@ impl FtFont {
         }
         items
     }
+}
+
+/// libraqm's layout of `text` where character `i` uses `fonts[face_of[i]]`:
+/// runs split by script and by font, each shaped with the whole text as
+/// context (LTR).  Returns (font, glyph) pairs.
+pub fn shape_with(fonts: &[&FtFont], text: &[u32], face_of: &[usize]) -> Vec<(usize, ShapedGlyph)> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    let funcs: Vec<HbFtFuncs> = fonts.iter().map(|f| HbFtFuncs { font: f }).collect();
+    let shapers: Vec<harfrust::ShaperFont> = fonts
+        .iter()
+        .zip(funcs.iter())
+        .map(|(f, funcs)| {
+            let (xs, ys) = f.hb_scale();
+            harfrust::ShaperFont::new(&f.data.hb_font).with_scale_separate(xs, ys).with_font_funcs(Some(funcs))
+        })
+        .collect();
+    let mut out = Vec::with_capacity(text.len());
+    for (sstart, send, script) in resolve_script_runs(text) {
+        let mut start = sstart;
+        while start < send {
+            let face = face_of[start];
+            let mut end = start + 1;
+            while end < send && face_of[end] == face {
+                end += 1;
+            }
+            let mut buffer = harfrust::Buffer::new();
+            // raqm adds the full text, shaping only the run (context is kept).
+            buffer.set_pre_context_codepoints(&text[..start]);
+            for (i, &c) in text.iter().enumerate().take(end).skip(start) {
+                buffer.push(c, i as u32);
+            }
+            buffer.set_post_context_codepoints(&text[end..]);
+            buffer.set_direction(harfrust::Direction::LeftToRight);
+            buffer.set_script(Some(script));
+            buffer.set_flags(harfrust::BufferFlags::BEGINNING_OF_TEXT | harfrust::BufferFlags::END_OF_TEXT);
+            if harfrust::shape(&shapers[face], &mut buffer, harfrust::ShapeOptions::new()).is_ok() {
+                for (info, pos) in buffer.glyph_infos().iter().zip(buffer.glyph_positions().iter()) {
+                    out.push((
+                        face,
+                        ShapedGlyph {
+                            index: info.glyph_id,
+                            cluster: info.cluster,
+                            x_advance: pos.x_advance,
+                            y_advance: pos.y_advance,
+                            x_offset: pos.x_offset,
+                            y_offset: pos.y_offset,
+                        },
+                    ));
+                }
+            }
+            start = end;
+        }
+    }
+    out
+}
+
+/// `FT2Font::layout` with a fallback list (`fonts[1..]`): clusters with a
+/// missing glyph go to the next fallback, and the text is laid out again,
+/// until nothing is missing or the fallbacks run out.
+pub fn layout_with_fallbacks(fonts: &[&FtFont], text: &[u32]) -> Vec<(usize, ShapedGlyph)> {
+    layout_with_fallbacks_used(fonts, text).0
+}
+
+/// [`layout_with_fallbacks`] and the fallbacks that were used.
+pub fn layout_with_fallbacks_used(fonts: &[&FtFont], text: &[u32]) -> (Vec<(usize, ShapedGlyph)>, Vec<usize>) {
+    let mut used_fallbacks = Vec::new();
+    let mut face_of = vec![0usize; text.len()];
+    let mut glyphs = shape_with(fonts, text, &face_of);
+    for fb in 1..fonts.len() {
+        let mut clusters: std::collections::BTreeMap<u32, bool> = std::collections::BTreeMap::new();
+        for (_, g) in &glyphs {
+            *clusters.entry(g.cluster).or_insert(false) |= g.index == 0;
+        }
+        let keys: Vec<(u32, bool)> = clusters.into_iter().collect();
+        let mut used = false;
+        for (k, &(cluster, missing)) in keys.iter().enumerate() {
+            if missing {
+                let next = keys.get(k + 1).map(|c| c.0 as usize).unwrap_or(text.len());
+                for f in face_of.iter_mut().take(next).skip(cluster as usize) {
+                    *f = fb;
+                }
+                used = true;
+            }
+        }
+        if !used {
+            break;
+        }
+        used_fallbacks.push(fb);
+        glyphs = shape_with(fonts, text, &face_of);
+    }
+    (glyphs, used_fallbacks)
+}
+
+/// `FT2Font::set_text` with fallbacks and angle 0: (advance, bbox) in 26.6,
+/// the characters of missing glyphs or glyphs from fonts flagged as last
+/// resort (`warn[font]`), and the fonts named in the warning (matplotlib's
+/// `glyph_seen_fonts`: the used fallbacks, then the primary font).
+pub fn set_text_with_fallbacks(fonts: &[&FtFont], text: &[u32], warn: &[bool]) -> (i64, BBox, Vec<u32>, Vec<usize>) {
+    let (glyphs, used) = layout_with_fallbacks_used(fonts, text);
+    let mut seen: Vec<usize> = used.into_iter().filter(|&f| !warn.get(f).copied().unwrap_or(false)).collect();
+    seen.push(0);
+    let mut bbox = BBox { x_min: 32000, y_min: 32000, x_max: -32000, y_max: -32000 };
+    let mut pen = (0i64, 0i64);
+    let mut missing = Vec::new();
+    for (f, g) in &glyphs {
+        if g.index == 0 {
+            missing.push(text[g.cluster as usize]);
+            continue;
+        }
+        if warn.get(*f).copied().unwrap_or(false) {
+            missing.push(text[g.cluster as usize]);
+        }
+        let Ok(mut o) = fonts[*f].sfnt().load_glyph(g.index, fonts[*f].size.x_scale, fonts[*f].size.y_scale) else {
+            continue;
+        };
+        pen.0 += g.x_offset as i64;
+        pen.1 += g.y_offset as i64;
+        o.translate(pen.0, pen.1);
+        let gb = o.cbox();
+        bbox.x_min = bbox.x_min.min(gb.x_min);
+        bbox.x_max = bbox.x_max.max(gb.x_max);
+        bbox.y_min = bbox.y_min.min(gb.y_min);
+        bbox.y_max = bbox.y_max.max(gb.y_max);
+        pen.0 += (g.x_advance - g.x_offset) as i64;
+        pen.1 += (g.y_advance - g.y_offset) as i64;
+    }
+    if bbox.x_min > bbox.x_max {
+        bbox = BBox::default();
+    }
+    (pen.0, bbox, missing, seen)
+}
+
+/// `FT2Font._layout` with fallbacks: (font, glyph index, x, y) in pixels.
+pub fn layout_items_with_fallbacks(fonts: &[&FtFont], text: &[u32]) -> Vec<(usize, u32, f64, f64)> {
+    let glyphs = layout_with_fallbacks(fonts, text);
+    let mut items = Vec::with_capacity(glyphs.len());
+    let (mut x, mut y) = (0i64, 0i64);
+    for (f, g) in &glyphs {
+        items.push((*f, g.index, (x + g.x_offset as i64) as f64 / 64.0, (y + g.y_offset as i64) as f64 / 64.0));
+        x += g.x_advance as i64;
+        y += g.y_advance as i64;
+    }
+    items
 }
 
 /// `ft_glyphslot_preset_bitmap` + `ft_smooth_render` for NORMAL mode.

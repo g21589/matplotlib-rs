@@ -2,6 +2,7 @@
 //! libraqm/HarfBuzz-compatible text layout.
 
 pub mod cff;
+pub mod cmap;
 pub mod face;
 pub mod grays;
 pub mod names;

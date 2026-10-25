@@ -490,9 +490,42 @@ impl PyRendererAgg {
     }
 }
 
+/// `FT2Font.layout` with a fallback list: (font index, glyph index, cluster,
+/// x_advance, y_advance, x_offset, y_offset) for each glyph.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn layout_fonts(fonts: Vec<PyRef<'_, PyFont>>, text: &str) -> Vec<(usize, u32, u32, i32, i32, i32, i32)> {
+    let refs: Vec<&crate::font::FtFont> = fonts.iter().map(|f| &f.inner).collect();
+    let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+    crate::font::face::layout_with_fallbacks(&refs, &cps)
+        .into_iter()
+        .map(|(f, g)| (f, g.index, g.cluster, g.x_advance, g.y_advance, g.x_offset, g.y_offset))
+        .collect()
+}
+
+/// `FT2Font.set_text` with a fallback list: (width, height, descent) in
+/// pixels and the characters to warn about (`warn[i]`: last-resort font).
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn set_text_fonts(fonts: Vec<PyRef<'_, PyFont>>, text: &str, warn: Vec<bool>) -> ((f64, f64, f64), Vec<u32>, Vec<usize>) {
+    let refs: Vec<&crate::font::FtFont> = fonts.iter().map(|f| &f.inner).collect();
+    let cps: Vec<u32> = text.chars().map(|c| c as u32).collect();
+    let (adv, bbox, missing, seen) = crate::font::face::set_text_with_fallbacks(&refs, &cps, &warn);
+    ((adv as f64 / 64.0, (bbox.y_max - bbox.y_min) as f64 / 64.0, (-bbox.y_min) as f64 / 64.0), missing, seen)
+}
+
+/// Missing-glyph warnings recorded by the Rust text engine: (codepoint, fonts).
+#[pyfunction]
+fn take_missing_glyphs() -> Vec<(u32, String)> {
+    crate::mpl::renderer::take_missing_glyphs()
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRendererAgg>()?;
     m.add_class::<PyFont>()?;
+    m.add_function(wrap_pyfunction!(layout_fonts, m)?)?;
+    m.add_function(wrap_pyfunction!(set_text_fonts, m)?)?;
+    m.add_function(wrap_pyfunction!(take_missing_glyphs, m)?)?;
     Ok(())
 }
 
@@ -686,6 +719,15 @@ impl PyFont {
 
     fn get_char_index(&self, c: u32) -> u32 {
         self.inner.glyph_index(c)
+    }
+
+    /// `set_charmap(i)`.
+    fn set_charmap(&mut self, i: usize) -> PyResult<()> {
+        if i >= self.inner.data.cmaps.len() {
+            return Err(PyValueError::new_err("Could not set the charmap"));
+        }
+        self.inner.charmap = Some(i);
+        Ok(())
     }
 
     fn outline_points(&self, gid: u32) -> PyResult<Vec<(i64, i64, u8)>> {

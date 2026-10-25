@@ -200,7 +200,7 @@ class FT2Font:
         self.num_faces = 1
 
     def set_charmap(self, i):
-        pass
+        self._f.set_charmap(int(i))
 
     def select_charmap(self, i):
         pass
@@ -210,6 +210,11 @@ class FT2Font:
 
     def set_size(self, ptsize, dpi):
         self._f.set_size(float(ptsize), float(dpi))
+        for f in self._fallback_list:
+            f.set_size(ptsize, dpi)
+
+    def _fonts(self):
+        return [self, *self._fallback_list]
 
     def _set_transform(self, matrix, delta):
         self._f._set_transform([[int(v) for v in row] for row in matrix], [int(v) for v in delta])
@@ -248,18 +253,20 @@ class FT2Font:
 
     def _layout(self, text, flags, *, features=None, language=None):
         items = []
-        glyphs = self._f._shape(text)
-        clusters = sorted({g[1] for g in glyphs})
+        fonts = self._fonts()
+        glyphs = _mplrs.layout_fonts([f._f for f in fonts], text)
+        clusters = sorted({g[2] for g in glyphs})
         x = y = 0
         prev_advance = None
         prev_x = 0
-        for gid, cluster, xa, ya, xo, yo in glyphs:
-            g = self.load_glyph(gid, flags)
+        for fi, gid, cluster, xa, ya, xo, yo in glyphs:
+            font = fonts[fi]
+            g = font.load_glyph(gid, flags)
             prev_kern = 0.0
             if prev_advance is not None:
                 prev_kern = (x + xo) - prev_x - prev_advance
             nxt = next((c for c in clusters if c > cluster), len(text))
-            items.append(LayoutItem(self, text[cluster:nxt], gid, (x + xo) / 64.0,
+            items.append(LayoutItem(font, text[cluster:nxt], gid, (x + xo) / 64.0,
                                     (y + yo) / 64.0, prev_kern / 64.0))
             prev_x = x + xo
             x += xa
@@ -268,7 +275,14 @@ class FT2Font:
         return items
 
     def set_text(self, string, angle=0.0, flags=LoadFlags.DEFAULT, **kwargs):
-        self._last = self._f.get_width_height_descent(string)
+        fonts = self._fonts()
+        self._last, warn, seen = _mplrs.set_text_fonts(
+            [f._f for f in fonts], string, [f._warn_if_used for f in fonts])
+        if warn:
+            from ._text_helpers import warn_on_missing_glyph
+            names = ", ".join(fonts[i].family_name for i in seen)
+            for c in warn:
+                warn_on_missing_glyph(c, names)
         import numpy as np
         return np.array([(it.x, it.y) for it in self._layout(string, flags)],
                         dtype=float).reshape(-1, 2)
