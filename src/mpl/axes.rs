@@ -425,6 +425,8 @@ pub struct Axes {
     pub shared_x: Vec<u64>,
     pub shared_y: Vec<u64>,
     pub twinned: Vec<u64>,
+    /// child axes (`Axes.child_axes`, e.g. insets), drawn among the children
+    pub child_axes: Vec<u64>,
     pub prop_cycle_index: usize,
     pub patch_cycle_index: usize,
     pub name: String,
@@ -494,6 +496,7 @@ impl Axes {
             shared_x: Vec::new(),
             shared_y: Vec::new(),
             twinned: Vec::new(),
+            child_axes: Vec::new(),
             prop_cycle_index: 0,
             patch_cycle_index: 0,
             name: "rectilinear".into(),
@@ -1228,6 +1231,11 @@ impl Axes {
 
     /// `Axes.draw`.
     pub fn draw(&mut self, renderer: &mut Renderer, fig: &FigCtx) {
+        self.draw_with(renderer, fig, &mut NoChildAxes)
+    }
+
+    /// Draw, with *kids* drawing the child axes (which the figure owns).
+    pub fn draw_with(&mut self, renderer: &mut Renderer, fig: &FigCtx, kids: &mut dyn ChildAxesDraw) {
         if !self.base.visible {
             return;
         }
@@ -1240,6 +1248,7 @@ impl Axes {
             Spine(usize),
             Axis(bool),
             Title(usize),
+            ChildAxes(u64),
             Legend,
         }
         let mut items: Vec<(f64, Item)> = Vec::new();
@@ -1259,6 +1268,11 @@ impl Axes {
         items.push((self.title.lk().base.zorder, Item::Title(0)));
         items.push((self.left_title.lk().base.zorder, Item::Title(1)));
         items.push((self.right_title.lk().base.zorder, Item::Title(2)));
+        for &uid in &self.child_axes {
+            if let Some(z) = kids.zorder(uid) {
+                items.push((z, Item::ChildAxes(uid)));
+            }
+        }
         if let Some(l) = &self.legend {
             items.push((l.lk().zorder, Item::Legend));
         }
@@ -1308,6 +1322,7 @@ impl Axes {
                     let t = [&self.title, &self.left_title, &self.right_title][i].clone();
                     t.lk().draw(renderer, &tc, &clip);
                 }
+                Item::ChildAxes(uid) => kids.draw(uid, renderer),
                 Item::Legend => {
                     if let Some(l) = self.legend.clone() {
                         let bbox = self.bbox(fig);
@@ -1317,7 +1332,24 @@ impl Axes {
             }
         }
     }
+}
 
+/// Draws child axes for [`Axes::draw_with`].
+pub trait ChildAxesDraw {
+    fn zorder(&self, uid: u64) -> Option<f64>;
+    fn draw(&mut self, uid: u64, renderer: &mut Renderer);
+}
+
+pub struct NoChildAxes;
+
+impl ChildAxesDraw for NoChildAxes {
+    fn zorder(&self, _uid: u64) -> Option<f64> {
+        None
+    }
+    fn draw(&mut self, _uid: u64, _renderer: &mut Renderer) {}
+}
+
+impl Axes {
     /// `apply_aspect(position)`.
     pub fn apply_aspect(&mut self, position: Option<Bbox>, fig: &FigCtx) {
         if self.aspect_frozen {

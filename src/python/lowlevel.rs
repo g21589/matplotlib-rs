@@ -296,6 +296,8 @@ impl PyRendererAgg {
 
     /// paths: list of (vertices, codes)
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (gc, master_transform, paths, transforms, offsets, offset_trans, facecolors,
+                        edgecolors, linewidths, dashes, antialiaseds, hatchcolors=None))]
     fn draw_path_collection(
         &mut self,
         gc: &Bound<'_, PyDict>,
@@ -309,6 +311,7 @@ impl PyRendererAgg {
         linewidths: PyReadonlyArray1<f64>,
         dashes: Vec<(f64, Option<Vec<f64>>)>,
         antialiaseds: PyReadonlyArray1<u8>,
+        hatchcolors: Option<PyReadonlyArray2<f64>>,
     ) -> PyResult<()> {
         let gc = gc_from(gc)?;
         let paths: Vec<MplPath> =
@@ -340,6 +343,7 @@ impl PyRendererAgg {
         };
         let fc = colors(&facecolors);
         let ec = colors(&edgecolors);
+        let hc = hatchcolors.as_ref().map(colors).unwrap_or_default();
         let lw: Vec<f64> = linewidths.as_array().iter().copied().collect();
         let ls: Vec<Dashes> = dashes
             .iter()
@@ -364,6 +368,7 @@ impl PyRendererAgg {
             &aa,
             true,
             true,
+            &hc,
         );
         Ok(())
     }

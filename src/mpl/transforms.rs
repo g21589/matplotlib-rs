@@ -361,6 +361,9 @@ pub enum ScaleTransform {
     Logistic,
     AsinH { a: f64 },
     InvertedAsinH { a: f64 },
+    /// A scale implemented in Python (evaluated through the scale hook;
+    /// identity without it).
+    Custom { id: u64, inverted: bool },
 }
 
 /// Evaluates scale transforms on arrays the way the Python layer does (with
@@ -447,6 +450,7 @@ impl ScaleTransform {
             ScaleTransform::Logistic => 1.0 / (1.0 + 10f64.powf(-v)),
             ScaleTransform::AsinH { a } => a * (v / a).asinh(),
             ScaleTransform::InvertedAsinH { a } => a * (v / a).sinh(),
+            ScaleTransform::Custom { .. } => v,
         }
     }
 
@@ -464,6 +468,7 @@ impl ScaleTransform {
             ScaleTransform::Logistic => ScaleTransform::Logit { clip: true },
             ScaleTransform::AsinH { a } => ScaleTransform::InvertedAsinH { a },
             ScaleTransform::InvertedAsinH { a } => ScaleTransform::AsinH { a },
+            ScaleTransform::Custom { id, inverted } => ScaleTransform::Custom { id, inverted: !inverted },
         }
     }
 }

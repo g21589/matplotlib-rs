@@ -345,3 +345,13 @@ Other Parameters
     Other miscellaneous Axes parameters.
 '''
 _docstring.interpd.register(_secax_docstring=_secax_docstring)
+
+
+def _rs_prepare_draw(self, renderer):
+    self._set_lims()
+    # this sets the scale in case the parent has set its scale.
+    self._set_scale()
+    super(SecondaryAxis, self)._rs_prepare_draw(renderer)
+
+
+SecondaryAxis._rs_prepare_draw = _rs_prepare_draw

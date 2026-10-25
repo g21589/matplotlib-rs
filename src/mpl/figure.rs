@@ -1,7 +1,7 @@
 //! Port of `matplotlib.figure.Figure` (drawing, subplots, savefig).
 
 use super::artist::{shared, ClipCtx, ExtArtist, Lock, Shared, TSpec, TransCtx};
-use super::axes::{Axes, FigCtx, GridSpec, SharedLims, SubplotParams, SubplotSpec};
+use super::axes::{Axes, ChildAxesDraw, FigCtx, GridSpec, SharedLims, SubplotParams, SubplotSpec};
 use super::colors::ColorSpec;
 use super::legend::Legend;
 use super::lines::Line2D;
@@ -27,6 +27,27 @@ pub enum FigChild {
     /// An external artist and its `get_children` category (0 artists,
     /// 2 lines, 3 patches, 4 texts, 5 images, 6 legends; axes are 1).
     Ext(std::sync::Arc<dyn ExtArtist>, u8),
+}
+
+/// Draws child axes (which live among the figure's detached axes).
+struct DetachedAxesDraw<'a> {
+    detached: &'a mut Vec<Axes>,
+    fig: &'a FigCtx,
+}
+
+impl ChildAxesDraw for DetachedAxesDraw<'_> {
+    fn zorder(&self, uid: u64) -> Option<f64> {
+        self.detached.iter().find(|a| a.uid == uid).map(|a| a.base.zorder)
+    }
+
+    fn draw(&mut self, uid: u64, renderer: &mut Renderer) {
+        if let Some(i) = self.detached.iter().position(|a| a.uid == uid) {
+            let mut ax = self.detached.remove(i);
+            let fig = self.fig;
+            ax.draw_with(renderer, fig, self);
+            self.detached.insert(i, ax);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -128,6 +149,11 @@ impl Figure {
         (b.xmax() as u32, b.ymax() as u32)
     }
 
+    /// The attached and the detached (e.g. child) axes.
+    pub fn all_axes_mut(&mut self) -> impl Iterator<Item = &mut Axes> {
+        self.axes.iter_mut().chain(self.detached.iter_mut())
+    }
+
     pub fn axes_index(&self, uid: u64) -> Option<usize> {
         self.axes.iter().position(|a| a.uid == uid)
     }
@@ -158,13 +184,35 @@ impl Figure {
         }
     }
 
-    /// Remove an axes from the figure, keeping it detached.
+    /// Remove an axes from the figure (or from its parent axes), keeping it
+    /// detached.
     pub fn detach(&mut self, uid: u64) {
         if let Some(i) = self.axes.iter().position(|a| a.uid == uid) {
             let ax = self.axes.remove(i);
             self.detached.push(ax);
         }
         self.axstack.retain(|&u| u != uid);
+        for a in self.axes.iter_mut().chain(self.detached.iter_mut()) {
+            a.child_axes.retain(|&u| u != uid);
+        }
+    }
+
+    /// Draw one axes (with its child axes), as `Axes.draw` does.
+    pub fn draw_axes(&mut self, uid: u64, renderer: &mut Renderer) -> bool {
+        let fig = self.ctx();
+        if let Some(i) = self.axes_index(uid) {
+            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
+            self.axes[i].draw_with(renderer, &fig, &mut kids);
+            true
+        } else if let Some(i) = self.detached.iter().position(|a| a.uid == uid) {
+            let mut ax = self.detached.remove(i);
+            let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
+            ax.draw_with(renderer, &fig, &mut kids);
+            self.detached.insert(i, ax);
+            true
+        } else {
+            false
+        }
     }
 
     /// `_add_axes_internal`.
@@ -408,7 +456,8 @@ impl Figure {
         for (_, _, it) in items {
             match it {
                 Item::Axes(i) => {
-                    self.axes[i].draw(renderer, &fig);
+                    let mut kids = DetachedAxesDraw { detached: &mut self.detached, fig: &fig };
+                    self.axes[i].draw_with(renderer, &fig, &mut kids);
                 }
                 Item::Child(i) => match &self.children[i] {
                     FigChild::Text(t) => t.lk().draw(renderer, &tc, &clip),
@@ -605,6 +654,7 @@ impl Figure {
         let axes = self
             .axes
             .iter()
+            .chain(self.detached.iter())
             .map(|a| AxesSnapshot {
                 uid: a.uid,
                 tc: a.trans_ctx(&fig),

@@ -50,7 +50,8 @@ def _rs_native(a):
         base = mpatches.Patch
     else:
         return False
-    if cls.draw is not base.draw:
+    # subclasses computing their transform at draw time (e.g. axline's)
+    if cls.draw is not base.draw or cls.get_transform is not base.get_transform:
         return False
     if a.get_path_effects() or a.get_agg_filter() is not None or a.get_rasterized():
         return False
@@ -58,7 +59,7 @@ def _rs_native(a):
 
 
 def _rs_attach(ax, a):
-    """Add child *a* (already in ``ax._children``) to the Rust axes."""
+    """Add child *a* (just appended to ``ax._children``) to the Rust axes."""
     native = _rs_native(a)
     a._rs_native_in = native
     a._rs_switch = functools.partial(_rs_switch_child, weakref.ref(ax))
@@ -68,7 +69,61 @@ def _rs_attach(ax, a):
         ax._rs.add_child_raw(a._h)
     else:
         ax._rs.add_child_raw(a)
-    a._remove_method = functools.partial(_rs_remove_child, ax)
+
+
+def _rs_detach(ax, a):
+    """Remove child *a* (just removed from ``ax._children``) from the Rust axes."""
+    rs = ax.__dict__.get("_rs") if ax is not None else None
+    if rs is not None:
+        rs.remove_child(a._h if a.__dict__.get("_rs_native_in") else a)
+
+
+class _RsChildren(list):
+    """``Axes._children``, keeping the children of the Rust axes in step.
+
+    matplotlib adds children by appending to this list (and removes them
+    through ``_remove_method = _children.remove``).  ``clear`` does not
+    notify: matplotlib only clears a list it has already swapped out, after
+    the Rust axes has been cleared.
+    """
+
+    __slots__ = ("_axref",)
+
+    def __init__(self, ax, items=()):
+        super().__init__()
+        self._axref = weakref.ref(ax)
+        self.extend(items)
+
+    def append(self, a):
+        super().append(a)
+        ax = self._axref()
+        if ax is not None:
+            _rs_attach(ax, a)
+
+    def extend(self, items):
+        for a in items:
+            self.append(a)
+
+    def insert(self, i, a):
+        super().insert(i, a)
+        ax = self._axref()
+        if ax is not None:
+            _rs_attach(ax, a)
+
+    def remove(self, a):
+        super().remove(a)
+        _rs_detach(self._axref(), a)
+
+    def pop(self, i=-1):
+        a = super().pop(i)
+        _rs_detach(self._axref(), a)
+        return a
+
+    def __delitem__(self, i):
+        items = self[i] if isinstance(i, slice) else [self[i]]
+        super().__delitem__(i)
+        for a in items:
+            _rs_detach(self._axref(), a)
 
 
 def _rs_switch_child(axref, a):
@@ -81,13 +136,6 @@ def _rs_switch_child(axref, a):
     new = a._h if native else a
     if ax._rs.replace_child(old, new):
         a._rs_native_in = native
-
-
-def _rs_remove_child(ax, a):
-    ax._children.remove(a)
-    rs = ax.__dict__.get("_rs")
-    if rs is not None:
-        rs.remove_child(a._h if a.__dict__.get("_rs_native_in") else a)
 
 
 def _rs_attr(name, push):
@@ -153,6 +201,7 @@ def _patch_axes_base(cls):
         rs = self._rs
         rs.cla()
         orig_clear(self)
+        self._children = _RsChildren(self, self._children)
         for loc, t in (("center", self.title), ("left", self._left_title),
                        ("right", self._right_title)):
             rs.set_title_handle(loc, t._h)
@@ -176,7 +225,7 @@ def _patch_axes_base(cls):
         self._rs.mirror_state(
             tuple(map(float, p.extents)), tuple(map(float, o.extents)),
             tuple(map(float, v.extents)), tuple(map(float, d.extents)),
-            (float(mp[0]), float(mp[1])))
+            (float(mp[0]), float(mp[1])), float(self.zorder), bool(self.get_visible()))
 
     cls._rs_sync = _rs_sync
 
@@ -204,21 +253,18 @@ def _patch_axes_base(cls):
 
     cls.draw = martist.allow_rasterization(draw)
 
-    # -- children ------------------------------------------------------------
-    def _wrap_adder(name):
-        orig = getattr(cls, name)
+    # child axes (insets, secondary axes) are drawn among the children
+    orig_add_child_axes = cls.add_child_axes
 
-        @functools.wraps(orig)
-        def adder(self, artist, *args, **kwargs):
-            ret = orig(self, artist, *args, **kwargs)
-            _rs_attach(self, artist)
-            return ret
+    @functools.wraps(orig_add_child_axes)
+    def add_child_axes(self, ax):
+        ret = orig_add_child_axes(self, ax)
+        crs = ax.__dict__.get("_rs")
+        if crs is not None:
+            self._rs.add_child_axes(crs.uid)
+        return ret
 
-        setattr(cls, name, adder)
-
-    for name in ["add_artist", "add_collection", "add_image", "add_line",
-                 "_add_text", "add_patch", "add_table"]:
-        _wrap_adder(name)
+    cls.add_child_axes = add_child_axes
 
     # the legend is drawn among the children
     def _get_legend_(self):

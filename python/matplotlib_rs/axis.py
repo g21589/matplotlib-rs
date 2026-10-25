@@ -424,7 +424,10 @@ class Axis(martist.Artist):
         elif name == "asinh":
             kw = dict(linear_width=float(s.linear_width))
         if name not in ("linear", "log", "symlog", "logit", "asinh"):
-            raise NotImplementedError(f"scale {name!r} is not supported by matplotlib_rs yet")
+            # any other scale: the Rust axis evaluates its transform in Python
+            from . import _rs_register_scale_transform
+            kw = dict(custom_id=_rs_register_scale_transform(s.get_transform()))
+            name = "custom"
         self.axes._rs.set_scale(self.axis_name, name, **kw)
         # the Rust axis resets its tick helpers with the scale
         self._pushed = {}

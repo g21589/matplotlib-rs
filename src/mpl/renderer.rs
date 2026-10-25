@@ -131,6 +131,7 @@ impl Renderer {
             antialiaseds,
             true,
             has_codes,
+            &[],
         );
     }
 

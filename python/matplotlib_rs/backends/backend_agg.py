@@ -89,7 +89,9 @@ def _gc_dict(gc):
         d["clippath"] = (_vertices(tpath), _codes(tpath), _matrix(tr))
     hp = gc.get_hatch_path()
     if hp is not None:
-        d["hatch"] = (_vertices(hp), _codes(hp), tuple(map(float, gc.get_hatch_color())),
+        hc = gc.get_hatch_color()
+        d["hatch"] = (_vertices(hp), _codes(hp),
+                      (0.0, 0.0, 0.0, 0.0) if hc is None else tuple(map(float, hc)),
                       float(gc.get_hatch_linewidth()))
     sk = gc.get_sketch_params()
     if sk is not None:
@@ -193,7 +195,7 @@ class RendererAgg(RendererBase):
     def draw_path_collection(self, gc, master_transform, paths, all_transforms,
                              offsets, offset_trans, facecolors, edgecolors,
                              linewidths, linestyles, antialiaseds, urls,
-                             offset_position):
+                             offset_position, *, hatchcolors=None):
         # docstring inherited
         transforms = np.asarray(
             [_matrix(t) for t in all_transforms] if len(all_transforms) else
@@ -209,10 +211,12 @@ class RendererAgg(RendererBase):
                    None if d is None else [float(v) for v in d])
                   for o, d in linestyles]
         aa = np.ascontiguousarray(antialiaseds, dtype=np.uint8).ravel()
+        hc = np.ascontiguousarray(hatchcolors, dtype=float).reshape(-1, 4) \
+            if hatchcolors is not None and len(hatchcolors) else np.zeros((0, 4))
         self._renderer.draw_path_collection(
             _gc_dict(gc), _matrix(master_transform),
             [(_vertices(p), _codes(p)) for p in paths],
-            transforms, offsets, _matrix(offset_trans), fc, ec, lw, dashes, aa)
+            transforms, offsets, _matrix(offset_trans), fc, ec, lw, dashes, aa, hc)
 
     def draw_image(self, gc, x, y, im):
         # docstring inherited

@@ -708,6 +708,7 @@ impl RendererAgg {
         antialiaseds: &[bool],
         check_snap: bool,
         has_codes: bool,
+        hatchcolors: &[Rgba],
     ) {
         let npaths = paths.len();
         let noffsets = offsets.len();
@@ -718,8 +719,9 @@ impl RendererAgg {
         let nlinewidths = linewidths.len();
         let nlinestyles = linestyles.len().min(n);
         let naa = antialiaseds.len();
+        let nhatchcolors = hatchcolors.len();
 
-        if (nfacecolors == 0 && nedgecolors == 0) || npaths == 0 {
+        if (nfacecolors == 0 && nedgecolors == 0 && nhatchcolors == 0) || npaths == 0 {
             return;
         }
 
@@ -765,6 +767,12 @@ impl RendererAgg {
                 gc.linewidth = if nlinewidths > 0 { linewidths[i % nlinewidths] } else { 1.0 };
                 if nlinestyles > 0 {
                     gc.dashes = linestyles[i % nlinestyles].clone();
+                }
+            }
+
+            if nhatchcolors > 0 {
+                if let Some(h) = gc.hatch.as_mut() {
+                    h.color = hatchcolors[i % nhatchcolors];
                 }
             }
 

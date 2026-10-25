@@ -55,6 +55,15 @@ PATCHES = {
         (None, "\n\nfrom ._base_rs import _patch_axes_base  # noqa: E402\n"
                "_patch_axes_base(_AxesBase)\n"),
     ],
+    "axes/_secondary_axes.py": [
+        # the Rust core draws the axes: run SecondaryAxis.draw's preparation
+        (None, "\n\ndef _rs_prepare_draw(self, renderer):\n"
+               "    self._set_lims()\n"
+               "    # this sets the scale in case the parent has set its scale.\n"
+               "    self._set_scale()\n"
+               "    super(SecondaryAxis, self)._rs_prepare_draw(renderer)\n\n\n"
+               "SecondaryAxis._rs_prepare_draw = _rs_prepare_draw\n"),
+    ],
     "figure.py": [
         (None, "\n\nfrom ._figure_rs import _patch_figure  # noqa: E402\n"
                "_patch_figure(FigureBase, Figure, SubFigure)\n"),

@@ -58,6 +58,7 @@ fn scale_key(t: &crate::mpl::transforms::ScaleTransform) -> (&'static str, Vec<f
         S::Logistic => ("logistic", vec![]),
         S::AsinH { a } => ("asinh", vec![a]),
         S::InvertedAsinH { a } => ("invasinh", vec![a]),
+        S::Custom { id, inverted } => (if inverted { "invpy" } else { "py" }, vec![id as f64]),
     }
 }
 

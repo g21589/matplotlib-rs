@@ -1627,11 +1627,32 @@ _rs_mathtext_parser = None
 _mplrs.set_mathtext_handler(_rs_mathtext_layout)
 
 _rs_scale_transforms = {}
+_rs_py_scale_transforms = {}
+_rs_py_scale_ids = __import__("itertools").count(1)
+
+
+def _rs_register_scale_transform(t):
+    """Register the transform of a scale implemented in Python; returns the
+    id under which the Rust core evaluates it."""
+    import weakref
+    cid = next(_rs_py_scale_ids)
+    _rs_py_scale_transforms[cid] = weakref.ref(
+        t, lambda _, cid=cid: _rs_py_scale_transforms.pop(cid, None))
+    return cid
 
 
 def _rs_scale_transform(kind, params, values):
     """The non-affine part of a scale transform, computed by matplotlib's
     scale classes (i.e. with numpy) for the Rust renderer."""
+    if kind in ("py", "invpy"):
+        import numpy as np
+        ref = _rs_py_scale_transforms.get(int(params[0]))
+        t = ref() if ref is not None else None
+        if t is None:
+            return values
+        if kind == "invpy":
+            t = t.inverted()
+        return np.ascontiguousarray(t.transform(values), dtype=float).reshape(-1)
     t = _rs_scale_transforms.get((kind, params))
     if t is None:
         from . import scale as mscale

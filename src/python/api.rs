@@ -1583,12 +1583,18 @@ impl PyAxes {
         self.with(|a, _| a.use_sticky_edges = b)
     }
 
-    /// set_scale(axis, name, base, subs, linthresh, linscale, nonpositive_clip)
-    #[pyo3(signature = (axis, name, base=10.0, subs=None, linthresh=2.0, linscale=1.0, clip=true, linear_width=1.0))]
+    /// set_scale(axis, name, base, subs, linthresh, linscale, nonpositive_clip,
+    /// linear_width, custom_id); name "custom" is a Python scale whose transform
+    /// the scale hook evaluates by *custom_id*.
+    #[pyo3(signature = (axis, name, base=10.0, subs=None, linthresh=2.0, linscale=1.0, clip=true, linear_width=1.0, custom_id=0))]
     #[allow(clippy::too_many_arguments)]
-    fn set_scale(&self, axis: &str, name: &str, base: f64, subs: Option<Vec<f64>>, linthresh: f64, linscale: f64, clip: bool, linear_width: f64) -> PyResult<()> {
+    fn set_scale(&self, axis: &str, name: &str, base: f64, subs: Option<Vec<f64>>, linthresh: f64, linscale: f64, clip: bool, linear_width: f64, custom_id: u64) -> PyResult<()> {
         let x = axis_of(axis)?;
-        let mut sc = scale_from_name(name).ok_or_else(|| PyValueError::new_err(format!("unknown scale {name}")))?;
+        let mut sc = if name == "custom" {
+            Scale::Custom { id: custom_id }
+        } else {
+            scale_from_name(name).ok_or_else(|| PyValueError::new_err(format!("unknown scale {name}")))?
+        };
         match &mut sc {
             Scale::Log { base: b, subs: s, clip: c } => {
                 *b = base;
@@ -1603,7 +1609,7 @@ impl PyAxes {
             }
             Scale::Logit { clip: c } => *c = clip,
             Scale::Asinh { linear_width: lw } => *lw = linear_width,
-            Scale::Linear => {}
+            Scale::Linear | Scale::Custom { .. } => {}
         }
         // The Python layer applies the scale to shared axes and autoscales.
         self.with(|a, _| {
@@ -1649,6 +1655,7 @@ impl PyAxes {
     /// position, view limits and data limits (with minpos); the Rust axes
     /// then neither autoscales nor applies its aspect by itself.
     #[allow(clippy::too_many_arguments)]
+    #[pyo3(signature = (position, original, viewlim, datalim, minpos, zorder=0.0, visible=true))]
     fn mirror_state(
         &self,
         position: (f64, f64, f64, f64),
@@ -1656,8 +1663,12 @@ impl PyAxes {
         viewlim: (f64, f64, f64, f64),
         datalim: (f64, f64, f64, f64),
         minpos: (f64, f64),
+        zorder: f64,
+        visible: bool,
     ) -> PyResult<()> {
         self.with(|a, _| {
+            a.base.zorder = zorder;
+            a.base.visible = visible;
             a.position = Bbox::new(position.0, position.1, position.2, position.3);
             a.original_position = Bbox::new(original.0, original.1, original.2, original.3);
             a.view_lim = Bbox::new(viewlim.0, viewlim.1, viewlim.2, viewlim.3);
@@ -1947,7 +1958,7 @@ impl PyAxes {
                 a.twinned.clone()
             }
         };
-        for a in fig.axes.iter_mut() {
+        for a in fig.all_axes_mut() {
             if tw.contains(&a.uid) {
                 if which == "both" || which == "active" {
                     a.position = b;
@@ -2141,7 +2152,7 @@ impl PyAxes {
                 g
             }
         };
-        for a in fig.axes.iter_mut() {
+        for a in fig.all_axes_mut() {
             if group.contains(&a.uid) {
                 let ax = a.axis_mut(x);
                 if minor {
@@ -2170,7 +2181,7 @@ impl PyAxes {
                 g
             }
         };
-        for a in fig.axes.iter_mut() {
+        for a in fig.all_axes_mut() {
             if group.contains(&a.uid) {
                 let ax = a.axis_mut(x);
                 if minor {
@@ -2350,7 +2361,18 @@ impl PyAxes {
     }
 
     fn cla(&self) -> PyResult<()> {
-        self.with(|a, _| a.clear())
+        self.with(|a, _| {
+            a.clear();
+            a.child_axes.clear();
+        })
+    }
+
+    /// `add_child_axes`: draw the axes *uid* among this axes' children.
+    fn add_child_axes(&self, uid: u64) -> PyResult<()> {
+        self.with(|a, _| {
+            a.child_axes.retain(|&u| u != uid);
+            a.child_axes.push(uid);
+        })
     }
 
     /// `Axes.draw(renderer)` of this axes alone into a Python `RendererAgg`.
@@ -2359,9 +2381,10 @@ impl PyAxes {
             let mut t = target.borrow_mut();
             let r = t.r()?;
             let mut fig = self.lk();
-            let ctx = fig.ctx();
             let _snap = fig.publish_snapshot();
-            axes_mut(&mut fig, self.uid)?.draw(r, &ctx);
+            if !fig.draw_axes(self.uid, r) {
+                return Err(PyValueError::new_err("no such axes"));
+            }
         }
         super::ext::take_error()
     }

@@ -1,0 +1,16 @@
+import matplotlib.pyplot as plt
+
+fig, ax = plt.subplots(figsize=(6, 5))
+ax.text(0.1, 0.9, "rotated", rotation=30, fontsize=14)
+ax.text(0.5, 0.8, "center/center", ha="center", va="center", fontweight="bold")
+ax.text(0.9, 0.7, "right top", ha="right", va="top", style="italic", color="tab:red")
+ax.text(0.1, 0.5, "serif family", family="serif", fontsize=12)
+ax.text(0.1, 0.4, "monospace 123", family="monospace")
+ax.text(0.5, 0.3, "multi\nline\ntext", ha="center", ma="right", linespacing=1.5)
+ax.text(0.8, 0.2, "baseline", va="baseline", rotation=90)
+ax.text(0.2, 0.1, r"$\alpha^2 + \beta_i = \frac{1}{2}\sqrt{x}$", fontsize=14)
+ax.set_title("Left", loc="left")
+ax.set_title("Right", loc="right", fontsize=8)
+fig.suptitle("Suptitle")
+fig.supxlabel("supx")
+fig.savefig("text_styles.png")

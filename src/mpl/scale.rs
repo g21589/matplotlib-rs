@@ -12,6 +12,8 @@ pub enum Scale {
     Symlog { base: f64, linthresh: f64, linscale: f64, subs: Option<Vec<f64>> },
     Logit { clip: bool },
     Asinh { linear_width: f64 },
+    /// A scale implemented in Python.
+    Custom { id: u64 },
 }
 
 impl Scale {
@@ -22,6 +24,7 @@ impl Scale {
             Scale::Symlog { .. } => "symlog",
             Scale::Logit { .. } => "logit",
             Scale::Asinh { .. } => "asinh",
+            Scale::Custom { .. } => "custom",
         }
     }
 
@@ -34,6 +37,7 @@ impl Scale {
             }
             Scale::Logit { clip } => Some(ScaleTransform::Logit { clip: *clip }),
             Scale::Asinh { linear_width } => Some(ScaleTransform::AsinH { a: *linear_width }),
+            Scale::Custom { id } => Some(ScaleTransform::Custom { id: *id, inverted: false }),
         }
     }
 
