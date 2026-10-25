@@ -97,6 +97,137 @@ PATCHES = {
         (None, "\n\nfrom ._base_rs import _patch_axes_base  # noqa: E402\n"
                "_patch_axes_base(_AxesBase)\n"),
     ],
+    "category.py": [
+        # import time: dateutil's parser is imported when first needed
+        ("import dateutil.parser\n", ""),
+        ("            try:\n                dateutil.parser.parse(val)",
+         "            try:\n                import dateutil.parser\n                dateutil.parser.parse(val)"),
+    ],
+    "projections/__init__.py": [
+        # import time: polar, geo and 3d axes (~15 ms) are loaded when used
+        ("""from .geo import AitoffAxes, HammerAxes, LambertAxes, MollweideAxes
+from .polar import PolarAxes
+
+try:
+    from matplotlib_rs.mpl_toolkits.mplot3d import Axes3D
+except Exception:
+    import warnings
+    warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+                  "Matplotlib being installed (e.g. as a system package and as a pip "
+                  "package). As a result, the 3D projection is not available.")
+    Axes3D = None
+""", """import importlib
+
+# projection name -> (module, class), imported on first use
+_LAZY_PROJECTIONS = {
+    "aitoff": ("matplotlib_rs.projections.geo", "AitoffAxes"),
+    "hammer": ("matplotlib_rs.projections.geo", "HammerAxes"),
+    "lambert": ("matplotlib_rs.projections.geo", "LambertAxes"),
+    "mollweide": ("matplotlib_rs.projections.geo", "MollweideAxes"),
+    "polar": ("matplotlib_rs.projections.polar", "PolarAxes"),
+    "3d": ("matplotlib_rs.mpl_toolkits.mplot3d", "Axes3D"),
+}
+_LAZY_NAMES = {cls: (mod, cls) for mod, cls in _LAZY_PROJECTIONS.values()}
+
+
+def __getattr__(name):
+    if name in _LAZY_NAMES:
+        mod, cls = _LAZY_NAMES[name]
+        value = getattr(importlib.import_module(mod), cls)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+"""),
+        ("""    def get_projection_class(self, name, _error_cls=KeyError):
+        \"\"\"Get a projection class from its *name*.\"\"\"
+        return""", """    def get_projection_class(self, name, _error_cls=KeyError):
+        \"\"\"Get a projection class from its *name*.\"\"\"
+        if name not in self._all_projection_types and name in _LAZY_PROJECTIONS:
+            mod, cls = _LAZY_PROJECTIONS[name]
+            self.register(getattr(importlib.import_module(mod), cls))
+        return"""),
+        ("""        return sorted(self._all_projection_types)""",
+         """        return sorted({*self._all_projection_types, *_LAZY_PROJECTIONS})"""),
+        ("""projection_registry.register(
+    axes.Axes,
+    PolarAxes,
+    AitoffAxes,
+    HammerAxes,
+    LambertAxes,
+    MollweideAxes,
+)
+if Axes3D is not None:
+    projection_registry.register(Axes3D)
+else:
+    # remove from namespace if not importable
+    del Axes3D
+""", """projection_registry.register(axes.Axes)
+"""),
+    ],
+    "pyplot.py": [
+        ("from matplotlib_rs.projections import PolarAxes\n", ""),
+        ("\n    if not isinstance(ax, PolarAxes):",
+         "\n    from matplotlib_rs.projections import PolarAxes\n"
+         "    if not isinstance(ax, PolarAxes):", 2),
+        ("\n        if not isinstance(ax, PolarAxes):",
+         "\n        from matplotlib_rs.projections import PolarAxes\n"
+         "        if not isinstance(ax, PolarAxes):"),
+    ],
+    "style/__init__.py": [
+        # import time: the style files (~15 ms) are read when first needed
+        ("""_base_library = _read_style_directory(_BASE_LIBRARY_PATH)
+library = {}
+available = []
+
+
+def reload_library():
+    \"\"\"Reload the style library.\"\"\"
+    library.clear()""", """_base_library = None
+
+
+def _load_library():
+    global _base_library, library, available
+    if _base_library is None:
+        _base_library = _read_style_directory(_BASE_LIBRARY_PATH)
+        library = {}
+        available = []
+        reload_library()
+
+
+def __getattr__(name):
+    if name in ("library", "available"):
+        _load_library()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def reload_library():
+    \"\"\"Reload the style library.\"\"\"
+    if _base_library is None:
+        return _load_library()
+    library.clear()"""),
+        ("\n\nreload_library()\n", "\n"),
+        ("""    if isinstance(style, (str, Path)) or hasattr(style, 'keys'):
+        # If name is a single str, Path or dict, make it a single element list.""",
+         """    _load_library()
+    if isinstance(style, (str, Path)) or hasattr(style, 'keys'):
+        # If name is a single str, Path or dict, make it a single element list."""),
+    ],
+    "image.py": [
+        # import time: Pillow (~25 ms) is imported on first use
+        ("import PIL.Image\nimport PIL.PngImagePlugin\n",
+         "import sys\n\n\n"
+         "class _LazyPIL:\n"
+         "    \"\"\"Pillow, imported when first used.\"\"\"\n\n"
+         "    def __getattr__(self, name):\n"
+         "        import PIL.Image\n"
+         "        import PIL.PngImagePlugin\n"
+         "        globals()['PIL'] = PIL\n"
+         "        return getattr(PIL, name)\n\n\n"
+         "PIL = _LazyPIL()\n"),
+        ("        if isinstance(A, PIL.Image.Image):",
+         "        if 'PIL.Image' in sys.modules and isinstance(A, PIL.Image.Image):"),
+    ],
     "axes/_secondary_axes.py": [
         # the Rust core draws the axes: run SecondaryAxis.draw's preparation
         (None, "\n\ndef _rs_prepare_draw(self, renderer):\n"

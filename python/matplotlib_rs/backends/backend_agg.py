@@ -15,7 +15,6 @@ import math
 import os
 
 import numpy as np
-from PIL import features
 
 import matplotlib_rs as mpl
 from matplotlib_rs import _api, cbook, _mplrs
@@ -453,6 +452,7 @@ class FigureCanvasAgg(FigureCanvasBase):
         self._print_pil(filename_or_obj, "webp", pil_kwargs, metadata)
 
     def print_avif(self, filename_or_obj, *, metadata=None, pil_kwargs=None):
+        from PIL import features
         if not features.check("avif"):
             raise RuntimeError(
                 "The installed pillow version does not support avif. Full "

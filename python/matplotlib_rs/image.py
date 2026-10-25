@@ -10,8 +10,20 @@ from pathlib import Path
 import warnings
 
 import numpy as np
-import PIL.Image
-import PIL.PngImagePlugin
+import sys
+
+
+class _LazyPIL:
+    """Pillow, imported when first used."""
+
+    def __getattr__(self, name):
+        import PIL.Image
+        import PIL.PngImagePlugin
+        globals()['PIL'] = PIL
+        return getattr(PIL, name)
+
+
+PIL = _LazyPIL()
 
 import matplotlib_rs as mpl
 from matplotlib_rs import _api, cbook
@@ -712,7 +724,7 @@ class _ImageBase(mcolorizer.ColorizingArtist):
         ----------
         A : array-like or `PIL.Image.Image`
         """
-        if isinstance(A, PIL.Image.Image):
+        if 'PIL.Image' in sys.modules and isinstance(A, PIL.Image.Image):
             A = pil_to_array(A)  # Needed e.g. to apply png palette.
         self._A = self._normalize_image_array(A)
         self._imcache = None

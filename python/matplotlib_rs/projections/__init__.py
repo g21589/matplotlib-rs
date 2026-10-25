@@ -54,17 +54,27 @@ A full-fledged and heavily annotated example is in
 """
 
 from .. import _api, axes, _docstring
-from .geo import AitoffAxes, HammerAxes, LambertAxes, MollweideAxes
-from .polar import PolarAxes
+import importlib
 
-try:
-    from matplotlib_rs.mpl_toolkits.mplot3d import Axes3D
-except Exception:
-    import warnings
-    warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
-                  "Matplotlib being installed (e.g. as a system package and as a pip "
-                  "package). As a result, the 3D projection is not available.")
-    Axes3D = None
+# projection name -> (module, class), imported on first use
+_LAZY_PROJECTIONS = {
+    "aitoff": ("matplotlib_rs.projections.geo", "AitoffAxes"),
+    "hammer": ("matplotlib_rs.projections.geo", "HammerAxes"),
+    "lambert": ("matplotlib_rs.projections.geo", "LambertAxes"),
+    "mollweide": ("matplotlib_rs.projections.geo", "MollweideAxes"),
+    "polar": ("matplotlib_rs.projections.polar", "PolarAxes"),
+    "3d": ("matplotlib_rs.mpl_toolkits.mplot3d", "Axes3D"),
+}
+_LAZY_NAMES = {cls: (mod, cls) for mod, cls in _LAZY_PROJECTIONS.values()}
+
+
+def __getattr__(name):
+    if name in _LAZY_NAMES:
+        mod, cls = _LAZY_NAMES[name]
+        value = getattr(importlib.import_module(mod), cls)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 class ProjectionRegistry:
@@ -81,28 +91,19 @@ class ProjectionRegistry:
 
     def get_projection_class(self, name, _error_cls=KeyError):
         """Get a projection class from its *name*."""
+        if name not in self._all_projection_types and name in _LAZY_PROJECTIONS:
+            mod, cls = _LAZY_PROJECTIONS[name]
+            self.register(getattr(importlib.import_module(mod), cls))
         return _api.getitem_checked(self._all_projection_types, _error_cls=_error_cls,
                                     projection=name)
 
     def get_projection_names(self):
         """Return the names of all projections currently registered."""
-        return sorted(self._all_projection_types)
+        return sorted({*self._all_projection_types, *_LAZY_PROJECTIONS})
 
 
 projection_registry = ProjectionRegistry()
-projection_registry.register(
-    axes.Axes,
-    PolarAxes,
-    AitoffAxes,
-    HammerAxes,
-    LambertAxes,
-    MollweideAxes,
-)
-if Axes3D is not None:
-    projection_registry.register(Axes3D)
-else:
-    # remove from namespace if not importable
-    del Axes3D
+projection_registry.register(axes.Axes)
 
 
 def register_projection(cls):

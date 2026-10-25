@@ -93,6 +93,7 @@ def use(style):
 
     %s
     """
+    _load_library()
     if isinstance(style, (str, Path)) or hasattr(style, 'keys'):
         # If name is a single str, Path or dict, make it a single element list.
         styles = [style]
@@ -239,16 +240,30 @@ def update_nested_dict(main_dict, new_dict):
 
 # Load style library
 # ==================
-_base_library = _read_style_directory(_BASE_LIBRARY_PATH)
-library = {}
-available = []
+_base_library = None
+
+
+def _load_library():
+    global _base_library, library, available
+    if _base_library is None:
+        _base_library = _read_style_directory(_BASE_LIBRARY_PATH)
+        library = {}
+        available = []
+        reload_library()
+
+
+def __getattr__(name):
+    if name in ("library", "available"):
+        _load_library()
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def reload_library():
     """Reload the style library."""
+    if _base_library is None:
+        return _load_library()
     library.clear()
     library.update(_update_user_library(_base_library.copy()))
     available[:] = sorted(name for name in library if not name.startswith('_'))
 
-
-reload_library()

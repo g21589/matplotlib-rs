@@ -78,7 +78,6 @@ from matplotlib_rs.artist import Artist
 from matplotlib_rs.axes import Axes
 from matplotlib_rs.axes import Subplot  # noqa: F401
 from matplotlib_rs.backends import BackendFilter, backend_registry
-from matplotlib_rs.projections import PolarAxes
 from matplotlib_rs.colorizer import _ColorizerInterface, ColorizingArtist, Colorizer
 from matplotlib_rs import mlab  # for detrend_none, window_hanning
 from matplotlib_rs.scale import get_scale_names  # noqa: F401
@@ -2549,6 +2548,7 @@ def rgrids(
       lines, labels = rgrids( (0.25, 0.5, 1.0), ('Tom', 'Dick', 'Harry' ))
     """
     ax = gca()
+    from matplotlib_rs.projections import PolarAxes
     if not isinstance(ax, PolarAxes):
         raise RuntimeError('rgrids only defined for polar Axes')
     if all(p is None for p in [radii, labels, angle, fmt]) and not kwargs:
@@ -2624,6 +2624,7 @@ def thetagrids(
       lines, labels = thetagrids(range(45, 360, 90), ('NE', 'NW', 'SW', 'SE'))
     """
     ax = gca()
+    from matplotlib_rs.projections import PolarAxes
     if not isinstance(ax, PolarAxes):
         raise RuntimeError('thetagrids only defined for polar Axes')
     if all(param is None for param in [angles, labels, fmt]) and not kwargs:
@@ -2854,6 +2855,7 @@ def polar(*args, **kwargs) -> list[Line2D]:
     # If an axis already exists, check if it has a polar projection
     if gcf().get_axes():
         ax = gca()
+        from matplotlib_rs.projections import PolarAxes
         if not isinstance(ax, PolarAxes):
             _api.warn_deprecated(
                 "3.10",
