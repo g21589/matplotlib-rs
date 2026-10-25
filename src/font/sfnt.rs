@@ -59,6 +59,20 @@ pub struct SfntFace {
     pub underline_position: i16,
     pub underline_thickness: i16,
     pub is_fixed_pitch: bool,
+    /// OS/2 table (None when missing, like `FT_Get_Sfnt_Table`).
+    pub os2: Option<Os2>,
+    /// Raw name records: (platform, encoding, language, name id, bytes).
+    pub names: Vec<(u16, u16, u16, u16, Vec<u8>)>,
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Os2 {
+    pub version: u16,
+    pub us_weight_class: u16,
+    pub fs_selection: u16,
+    pub s_typo_ascender: i16,
+    pub s_typo_descender: i16,
+    pub s_typo_line_gap: i16,
 }
 
 pub const ARGS_ARE_WORDS: u16 = 0x0001;
@@ -166,11 +180,25 @@ impl SfntFace {
             underline_position: 0,
             underline_thickness: 0,
             is_fixed_pitch: false,
+            os2: None,
+            names: Vec::new(),
         };
         face.read_names();
         if let Some(os2) = face.table(b"OS/2") {
             if os2.len >= 6 {
                 face.os2_weight = u16_at(&face.data, os2.offset + 4);
+            }
+            if os2.len >= 78 {
+                let o = os2.offset;
+                let d = &face.data;
+                face.os2 = Some(Os2 {
+                    version: u16_at(d, o),
+                    us_weight_class: u16_at(d, o + 4),
+                    fs_selection: u16_at(d, o + 62),
+                    s_typo_ascender: i16_at(d, o + 68),
+                    s_typo_descender: i16_at(d, o + 70),
+                    s_typo_line_gap: i16_at(d, o + 72),
+                });
             }
         }
         if let Some(post) = face.table(b"post") {
@@ -184,6 +212,15 @@ impl SfntFace {
             }
         }
         Ok(face)
+    }
+
+    /// Raw bytes of a name record (`FT2Font.get_sfnt()[key]`).
+    pub fn name_entry(&self, platform: u16, encoding: u16, language: u16, name_id: u16) -> Option<&[u8]> {
+        self.names
+            .iter()
+            .rev()
+            .find(|(p, e, l, n, _)| *p == platform && *e == encoding && *l == language && *n == name_id)
+            .map(|r| r.4.as_slice())
     }
 
     pub fn table(&self, name: &[u8; 4]) -> Option<TableRange> {
@@ -203,7 +240,8 @@ impl SfntFace {
         }
         let count = u16_at(d, o + 2) as usize;
         let storage = o + u16_at(d, o + 4) as usize;
-        let mut best: [(i32, String); 7] = Default::default();
+        let mut best: [(i32, String); 18] = Default::default();
+        let mut names = Vec::new();
         for i in 0..count {
             let r = o + 6 + 12 * i;
             if r + 12 > d.len() {
@@ -215,14 +253,16 @@ impl SfntFace {
             let name_id = u16_at(d, r + 6) as usize;
             let len = u16_at(d, r + 8) as usize;
             let off = u16_at(d, r + 10) as usize;
-            if name_id >= best.len() {
-                continue;
-            }
             let s = storage + off;
             if s + len > d.len() {
                 continue;
             }
+            if name_id >= best.len() {
+                names.push((platform, encoding, language, name_id as u16, d[s..s + len].to_vec()));
+                continue;
+            }
             let bytes = &d[s..s + len];
+            names.push((platform, encoding, language, name_id as u16, bytes.to_vec()));
             // FreeType prefers Microsoft Unicode English names.
             let (score, text) = if platform == 3 && (encoding == 1 || encoding == 10) {
                 let u: Vec<u16> = bytes.chunks_exact(2).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
@@ -239,8 +279,10 @@ impl SfntFace {
                 best[name_id] = (score, text);
             }
         }
-        self.family_name = std::mem::take(&mut best[1].1);
-        self.style_name = std::mem::take(&mut best[2].1);
+        self.names = names;
+        // FreeType uses the typographic family/subfamily names when present.
+        self.family_name = if !best[16].1.is_empty() { std::mem::take(&mut best[16].1) } else { std::mem::take(&mut best[1].1) };
+        self.style_name = if !best[17].1.is_empty() { std::mem::take(&mut best[17].1) } else { std::mem::take(&mut best[2].1) };
         self.postscript_name = std::mem::take(&mut best[6].1);
     }
 

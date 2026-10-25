@@ -12,7 +12,7 @@ use crate::agg::trans_affine::{ConvTransform, TransAffine};
 use super::path_converters::*;
 
 /// A matplotlib `Path`: vertices, optional codes and simplification info.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct MplPath {
     pub vertices: Vec<[f64; 2]>,
     pub codes: Option<Vec<u8>>,
