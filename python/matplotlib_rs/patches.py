@@ -128,6 +128,13 @@ class Patch(artist.Artist):
         except Exception:
             pass
         _rs_base_props(self, d)
+        if "transform" in d:
+            # the patch transform is part of the geometry
+            from ._live import tspec
+            try:
+                d["transform"] = tspec(self.get_data_transform())
+            except NotImplementedError:
+                del d["transform"]
         d["facecolor_rgba"] = tuple(map(float, self._facecolor))
         d["edgecolor_rgba"] = tuple(map(float, self._edgecolor))
         d["linewidth"] = float(self._linewidth)

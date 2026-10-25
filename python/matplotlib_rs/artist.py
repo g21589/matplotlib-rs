@@ -663,9 +663,6 @@ Supported properties are
         return self._transformSet
 
     def set_transform(self, t):
-        if self.__dict__.get("_h") is not None:
-            from ._live import tspec
-            self._push("transform", tspec(t))
         """
         Set the artist transform.
 
@@ -843,7 +840,6 @@ Supported properties are
         return self._gid
 
     def set_gid(self, gid):
-        self._push("gid", gid)
         """
         Set the (group) id for the artist.
 
@@ -865,7 +861,6 @@ Supported properties are
             return False
 
     def set_snap(self, snap):
-        self._push("snap", snap)
         """
         Set the snapping behavior.
 
@@ -939,7 +934,6 @@ Supported properties are
             self._sketch = None
         else:
             self._sketch = (scale, length or 128.0, randomness or 16.0)
-        self._push("sketch_params", self._sketch)
         self.stale = True
 
     def set_path_effects(self, path_effects):
@@ -1027,7 +1021,6 @@ Supported properties are
         _api.check_isinstance((BboxBase, None), clipbox=clipbox)
         if clipbox != self.clipbox:
             self.clipbox = clipbox
-            self._push_clip()
             self.pchanged()
             self.stale = True
 
@@ -1092,26 +1085,8 @@ Supported properties are
                 f"{type(path).__name__} and {type(transform).__name__}")
         # This may result in the callbacks being hit twice, but guarantees they
         # will be hit at least once.
-        self._push_clip()
         self.pchanged()
         self.stale = True
-
-    def _push_clip(self):
-        if self.__dict__.get("_h") is None:
-            return
-        cb = self.clipbox
-        if cb is None:
-            self._push("clip_box", None)
-        else:
-            spec = getattr(cb, "_rs_clip_spec", None)
-            if spec is not None:
-                self._push("clip_box", spec)
-            else:
-                try:
-                    (x0, y0), (x1, y1) = cb.get_points()
-                    self._push("clip_box", (float(x0), float(y0), float(x1), float(y1)))
-                except Exception:
-                    self._push("clip_box", None)
 
     def get_alpha(self):
         """
@@ -1205,7 +1180,6 @@ Supported properties are
         b : bool
         """
         self._clipon = b
-        self._push("clip_on", bool(b))
         # This may result in the callbacks being hit twice, but ensures they
         # are hit at least once
         self.pchanged()
@@ -1305,7 +1279,6 @@ Supported properties are
             raise ValueError(f'alpha ({alpha}) is outside 0-1 range')
         if alpha != self._alpha:
             self._alpha = alpha
-            self._push("alpha", alpha)
             self.pchanged()
             self.stale = True
 
@@ -1342,7 +1315,6 @@ Supported properties are
         """
         if b != self._visible:
             self._visible = b
-            self._push("visible", bool(b))
             self.pchanged()
             self.stale = True
 
@@ -1367,7 +1339,6 @@ Supported properties are
             self.pchanged()
 
     def set_in_layout(self, in_layout):
-        self._push("in_layout", bool(in_layout))
         """
         Set if artist is to be included in layout calculations,
         E.g. :ref:`constrainedlayout_guide`,
@@ -1407,7 +1378,6 @@ Supported properties are
         label = str(s) if s is not None else None
         if label != self._label:
             self._label = label
-            self._push("label", label if label is not None else "")
             self.pchanged()
             self.stale = True
 
@@ -1428,7 +1398,6 @@ Supported properties are
             level = self.__class__.zorder
         if level != self.zorder:
             self.zorder = level
-            self._push("zorder", float(level))
             self.pchanged()
             self.stale = True
 

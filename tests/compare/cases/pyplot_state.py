@@ -1,0 +1,16 @@
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(5, 3))
+plt.plot([1, 3, 2], label="a")
+plt.xlim(0, 3)
+plt.ylim(0, 4)
+plt.title("pyplot state")
+plt.xlabel("x")
+plt.legend(loc="upper left")
+plt.savefig("pyplot_state.png")
+plt.close()
+plt.subplot(121)
+plt.plot([1, 2])
+plt.subplot(122)
+plt.bar([1, 2], [2, 1])
+plt.savefig("pyplot_state2.png", dpi=50)

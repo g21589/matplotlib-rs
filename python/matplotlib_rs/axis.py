@@ -168,7 +168,20 @@ class Tick:
         return f"<{type(self).__name__} {self._idx} of {self._axis_proxy}>"
 
     def get_loc(self):
-        return self._axis_proxy.get_ticklocs(minor=not self._major)[self._idx]
+        loc = self.__dict__.get("_loc")
+        if loc is None:
+            locs = self._axis_proxy.get_ticklocs(minor=not self._major)
+            loc = locs[self._idx] if self._idx < len(locs) else np.nan
+        return loc
+
+    @property
+    def _size(self):
+        return self._axis_proxy._get_tick_kw(self._major).get(
+            "size", mpl.rcParams[f"{self._axis_proxy.axis_name}tick.{self._which()}.size"])
+
+    @property
+    def _tickdir(self):
+        return self.get_tickdir()
 
     @property
     def label(self):
@@ -215,7 +228,7 @@ class Tick:
         self._axis_proxy.set_tick_params(which=self._which(), **kwargs)
 
     def update_position(self, loc):
-        pass
+        self._loc = loc
 
     def set_clip_path(self, path, transform=None):
         self.gridline.set_clip_path(path, transform)
@@ -293,12 +306,12 @@ def _wrap_rs_line(cache, h, owner):
     return ln
 
 
-def _rs_prop(name, axis_key, conv=lambda v: v):
+def _rs_prop(name, axis_key, conv=lambda v: v, default=None):
     """A plain attribute that is also pushed to the Rust axis as `axis_key`."""
     attr = "_rs_" + name
 
     def getter(self):
-        return self.__dict__.get(attr)
+        return self.__dict__.get(attr, default)
 
     def setter(self, v):
         self.__dict__[attr] = v
@@ -321,7 +334,7 @@ class Axis(martist.Artist):
 
     labelpad = _rs_prop("labelpad", "labelpad", float)
     label_position = _rs_prop("label_position", "label_position", str)
-    _tick_position = _rs_prop("tick_position", "tick_position", str)
+    _tick_position = _rs_prop("tick_position", "tick_position", str, "bottom")
     _autolabelpos = _rs_prop("autolabelpos", "autolabelpos", bool)
 
     def __str__(self):
@@ -340,6 +353,7 @@ class Axis(martist.Artist):
         self._autolabelpos = True
         self._text_cache = {}
         self._line_cache = {}
+        self._tick_cache = {}
         self._pushed = {}
         self.label = _wrap_rs_text(self._text_cache, axes._rs.axis_label(self.axis_name), axes)
         self.offsetText = _wrap_rs_text(self._text_cache, axes._rs.offset_text(self.axis_name), axes)
@@ -593,6 +607,7 @@ class Axis(martist.Artist):
         label, offset = self.label, self.offsetText
         self._text_cache = {label._h.ident(): label, offset._h.ident(): offset}
         self._line_cache = {}
+        self._tick_cache = {}
         label._rs_refresh()
         offset._rs_refresh()
         self.labelpad = mpl.rcParams['axes.labelpad']
@@ -614,6 +629,7 @@ class Axis(martist.Artist):
     def reset_ticks(self):
         self.axes._rs.reset_ticks(self.axis_name)
         self._line_cache = {}
+        self._tick_cache = {}
 
     def minorticks_on(self):
         scale = self.get_scale()
@@ -824,39 +840,55 @@ class Axis(martist.Artist):
             return
         a.set_figure(self.get_figure(root=False))
 
-    def _update_ticks(self):
-        """Update the Rust ticks (locations, labels) and return the major ones."""
-        return self.get_major_ticks()
-
-    def _get_ticklabel_bboxes(self, ticks, renderer=None):
+    def _get_ticklabel_bboxes(self, ticks, renderer):
+        """Return lists of bboxes for ticks' label1's and label2's."""
         return ([tick.label1.get_window_extent(renderer)
-                 for tick in ticks if tick.label1.get_visible()],
+                 for tick in ticks
+                 if tick.label1.get_visible() and tick.label1.get_in_layout()],
                 [tick.label2.get_window_extent(renderer)
-                 for tick in ticks if tick.label2.get_visible()])
+                 for tick in ticks
+                 if tick.label2.get_visible() and tick.label2.get_in_layout()])
 
     def get_tightbbox(self, renderer=None, *, for_layout_only=False):
         """
-        Return a bounding box that encloses the axis (the tick labels, the
-        axis label and the offset text).
+        Return a bounding box that encloses the axis. It only accounts
+        tick labels, axis label, and offsetText.
         """
-        if not self.get_visible():
+        if not self.get_visible() or for_layout_only and not self.get_in_layout():
             return
-        ticks = self.get_major_ticks() + self.get_minor_ticks()
-        tlb1, tlb2 = self._get_ticklabel_bboxes(ticks, renderer)
-        bboxes = [*tlb1, *tlb2]
-        for a in [self.label, self.offsetText]:
-            if a.get_visible() and a.get_text():
-                bb = a.get_window_extent(renderer)
-                if for_layout_only and a is self.label:
-                    if self.axis_name == "x" and bb.width > 0:
-                        bb.x0 = (bb.x0 + bb.x1) / 2 - 0.5
-                        bb.x1 = bb.x0 + 1.0
-                    if self.axis_name == "y" and bb.height > 0:
-                        bb.y0 = (bb.y0 + bb.y1) / 2 - 0.5
-                        bb.y1 = bb.y0 + 1.0
-                bboxes.append(bb)
-        bboxes = [b for b in bboxes
-                  if 0 < b.width < np.inf and 0 < b.height < np.inf]
+        if renderer is None:
+            renderer = self.get_figure(root=True)._get_renderer()
+        ticks_to_draw = self._update_ticks()
+
+        self._update_label_position(renderer)
+
+        # go back to just this axis's tick labels
+        tlb1, tlb2 = self._get_ticklabel_bboxes(ticks_to_draw, renderer)
+
+        self._update_offset_text_position(tlb1, tlb2)
+        self.offsetText.set_text(self.major.formatter.get_offset())
+
+        bboxes = [
+            *(a.get_window_extent(renderer)
+              for a in [self.offsetText]
+              if a.get_visible()),
+            *tlb1, *tlb2,
+        ]
+        # take care of label
+        if self.label.get_visible():
+            bb = self.label.get_window_extent(renderer)
+            # for constrained/tight_layout, we want to ignore the label's
+            # width/height because the adjustments they make can't be improved.
+            # this code collapses the relevant direction
+            if for_layout_only:
+                if self.axis_name == "x" and bb.width > 0:
+                    bb.x0 = (bb.x0 + bb.x1) / 2 - 0.5
+                    bb.x1 = bb.x0 + 1.0
+                if self.axis_name == "y" and bb.height > 0:
+                    bb.y0 = (bb.y0 + bb.y1) / 2 - 0.5
+                    bb.y1 = bb.y0 + 1.0
+            bboxes.append(bb)
+        bboxes = [b for b in bboxes if b._is_finite()]
         if bboxes:
             return mtransforms.Bbox.union(bboxes)
         else:
@@ -982,10 +1014,57 @@ class Axis(martist.Artist):
                  for h in rs.get_gridlines(self.axis_name, not major)]
         nt = len(grids)
         cls = self._tick_class or Tick
-        ticks = [cls(self, i, major, lines[2 * i], lines[2 * i + 1], grids[i],
-                     labels[i], labels[nt + i])
-                 for i in range(nt)]
+        cache = self.__dict__.setdefault("_tick_cache", {})
+        ticks = []
+        for i in range(nt):
+            key = (major, labels[i]._h.ident())
+            t = cache.get(key)
+            if t is None or t.label1 is not labels[i] or t.gridline is not grids[i]:
+                t = cls(self, i, major, lines[2 * i], lines[2 * i + 1], grids[i],
+                        labels[i], labels[nt + i])
+                cache[key] = t
+            t._idx = i
+            ticks.append(t)
         return ticks[:n] if n is not None else ticks
+
+    def _update_ticks(self):
+        """
+        Update the ticks (position and labels) using the current data
+        interval of the axes.  Return the list of ticks that will be drawn.
+        """
+        # The tick labels themselves are formatted by the Rust core; the
+        # formatters are run for their state (e.g. the offset).
+        major_locs = self.get_majorticklocs()
+        self.major.formatter.format_ticks(major_locs)
+        major_ticks = self.get_major_ticks(len(major_locs))
+        for tick, loc in zip(major_ticks, major_locs):
+            tick.update_position(loc)
+        minor_locs = self.get_minorticklocs()
+        self.minor.formatter.format_ticks(minor_locs)
+        minor_ticks = self.get_minor_ticks(len(minor_locs))
+        for tick, loc in zip(minor_ticks, minor_locs):
+            tick.update_position(loc)
+        ticks = [*major_ticks, *minor_ticks]
+
+        view_low, view_high = self.get_view_interval()
+        if view_low > view_high:
+            view_low, view_high = view_high, view_low
+
+        interval_t = self.get_transform().transform([view_low, view_high])
+
+        ticks_to_draw = []
+        for tick in ticks:
+            try:
+                loc_t = self.get_transform().transform(tick.get_loc())
+            except AssertionError:
+                # Transform.transform doesn't allow masked values but
+                # some scales might make them, so we need this try/except.
+                pass
+            else:
+                if mtransforms._interval_contains_close(interval_t, loc_t):
+                    ticks_to_draw.append(tick)
+
+        return ticks_to_draw
 
     @property
     def majorTicks(self):
@@ -1323,7 +1402,7 @@ class Axis(martist.Artist):
         bboxes2 = []
         for ax in grouper.get_siblings(self.axes):
             axis = ax._axis_map[name]
-            ticks_to_draw = axis.get_major_ticks() + axis.get_minor_ticks()
+            ticks_to_draw = axis._update_ticks()
             tlb, tlb2 = axis._get_ticklabel_bboxes(ticks_to_draw, renderer)
             bboxes.extend(tlb)
             bboxes2.extend(tlb2)
@@ -1511,10 +1590,54 @@ class XAxis(Axis):
         self.stale = True
 
     def _update_label_position(self, renderer):
-        pass  # done by the Rust core at draw time
+        """
+        Update the label position based on the bounding box enclosing
+        all the ticklabels and axis spine
+        """
+        if not self._autolabelpos:
+            return
+
+        # get bounding boxes for this axis and any siblings
+        # that have been set by `fig.align_xlabels()`
+        bboxes, bboxes2 = self._get_tick_boxes_siblings(renderer=renderer)
+        x, y = self.label.get_position()
+
+        if self.label_position == 'bottom':
+            # Union with extents of the bottom spine if present, of the axes otherwise.
+            bbox = mtransforms.Bbox.union([
+                *bboxes, self.axes.spines.get("bottom", self.axes).get_window_extent()])
+            self.label.set_position(
+                (x, bbox.y0 - self.labelpad * self.get_figure(root=True).dpi / 72))
+        else:
+            # Union with extents of the top spine if present, of the axes otherwise.
+            bbox = mtransforms.Bbox.union([
+                *bboxes2, self.axes.spines.get("top", self.axes).get_window_extent()])
+            self.label.set_position(
+                (x, bbox.y1 + self.labelpad * self.get_figure(root=True).dpi / 72))
 
     def _update_offset_text_position(self, bboxes, bboxes2):
-        pass  # done by the Rust core at draw time
+        """
+        Update the offset_text position based on the sequence of bounding
+        boxes of all the ticklabels
+        """
+        x, y = self.offsetText.get_position()
+        if not hasattr(self, '_tick_position'):
+            self._tick_position = 'bottom'
+        if self._tick_position == 'bottom':
+            if not len(bboxes):
+                bottom = self.axes.bbox.ymin
+            else:
+                bbox = mtransforms.Bbox.union(bboxes)
+                bottom = bbox.y0
+            y = bottom - self.OFFSETTEXTPAD * self.get_figure(root=True).dpi / 72
+        else:
+            if not len(bboxes2):
+                top = self.axes.bbox.ymax
+            else:
+                bbox = mtransforms.Bbox.union(bboxes2)
+                top = bbox.y1
+            y = top + self.OFFSETTEXTPAD * self.get_figure(root=True).dpi / 72
+        self.offsetText.set_position((x, y))
 
     def set_ticks_position(self, position):
         if position == 'top':
@@ -1660,10 +1783,46 @@ class YAxis(Axis):
         self.stale = True
 
     def _update_label_position(self, renderer):
-        pass  # done by the Rust core at draw time
+        """
+        Update the label position based on the bounding box enclosing
+        all the ticklabels and axis spine
+        """
+        if not self._autolabelpos:
+            return
+
+        # get bounding boxes for this axis and any siblings
+        # that have been set by `fig.align_ylabels()`
+        bboxes, bboxes2 = self._get_tick_boxes_siblings(renderer=renderer)
+        x, y = self.label.get_position()
+
+        if self.label_position == 'left':
+            # Union with extents of the left spine if present, of the axes otherwise.
+            bbox = mtransforms.Bbox.union([
+                *bboxes, self.axes.spines.get("left", self.axes).get_window_extent()])
+            self.label.set_position(
+                (bbox.x0 - self.labelpad * self.get_figure(root=True).dpi / 72, y))
+        else:
+            # Union with extents of the right spine if present, of the axes otherwise.
+            bbox = mtransforms.Bbox.union([
+                *bboxes2, self.axes.spines.get("right", self.axes).get_window_extent()])
+            self.label.set_position(
+                (bbox.x1 + self.labelpad * self.get_figure(root=True).dpi / 72, y))
 
     def _update_offset_text_position(self, bboxes, bboxes2):
-        pass  # done by the Rust core at draw time
+        """
+        Update the offset_text position based on the sequence of bounding
+        boxes of all the ticklabels
+        """
+        x, _ = self.offsetText.get_position()
+        if 'outline' in self.axes.spines:
+            # Special case for colorbars:
+            bbox = self.axes.spines['outline'].get_window_extent()
+        else:
+            bbox = self.axes.bbox
+        top = bbox.ymax
+        self.offsetText.set_position(
+            (x, top + self.OFFSETTEXTPAD * self.get_figure(root=True).dpi / 72)
+        )
 
     def set_offset_position(self, position):
         x, y = self.offsetText.get_position()

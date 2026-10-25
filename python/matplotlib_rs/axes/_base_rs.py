@@ -143,6 +143,10 @@ def _patch_axes_base(cls):
         for loc, t in (("center", self.title), ("left", self._left_title),
                        ("right", self._right_title)):
             rs.set_title_handle(loc, t._h)
+        # matplotlib sets the spine positions when it creates the first
+        # ticks; the Rust core creates the ticks itself.
+        for spine in self.spines.values():
+            spine._ensure_position_is_set()
         self.patch.__dict__["_h"] = mpatches._RsPatchHandle(rs)
         martist._DIRTY.add(self.patch)
         martist._DIRTY.add(self)
