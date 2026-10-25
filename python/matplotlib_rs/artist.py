@@ -171,6 +171,8 @@ def _rs_base_props(a, d):
     d["snap"] = a._snap
     d["in_layout"] = bool(a._in_layout)
     d["sketch_params"] = a._sketch
+    d["gid"] = None if a._gid is None else str(a._gid)
+    d["url"] = None if a._url is None else str(a._url)
     if a._transformSet or a._transform is not None:
         try:
             d["transform"] = tspec(a.get_transform())
@@ -883,6 +885,8 @@ Supported properties are
         url : str
         """
         self._url = url
+        if self.__dict__.get("_h") is not None:
+            _DIRTY.add(self)  # (matplotlib does not mark the artist stale)
 
     def get_gid(self):
         """Return the group id."""
@@ -897,6 +901,8 @@ Supported properties are
         gid : str
         """
         self._gid = gid
+        if self.__dict__.get("_h") is not None:
+            _DIRTY.add(self)  # (matplotlib does not mark the artist stale)
 
     def get_snap(self):
         """

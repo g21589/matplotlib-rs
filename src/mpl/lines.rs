@@ -462,6 +462,7 @@ impl Line2D {
             if !tpath.vertices.is_empty() {
                 let mut gc = GcState::default();
                 gc.set_clip_from(&self.base, clip);
+                gc.url = self.base.url.clone();
                 gc.antialiased = self.antialiased;
                 gc.linewidth = self.linewidth;
                 let (cap, join) = if self.is_dashed() {
@@ -494,6 +495,7 @@ impl Line2D {
         if marker_is_truthy(&self.marker) && self.markersize > 0.0 {
             let mut gc = GcState::default();
             gc.set_clip_from(&self.base, clip);
+            gc.url = self.base.url.clone();
             gc.linewidth = self.markeredgewidth;
             gc.antialiased = self.antialiased;
             let mut ec = self.marker_edgecolor().to_rgba(self.base.alpha);

@@ -801,6 +801,56 @@ impl RendererAgg {
         }
     }
 
+    /// `draw_gouraud_triangles(gc, points, colors, trans)`.
+    pub fn draw_gouraud_triangles(&mut self, gc: &Gc, points: &[[[f64; 2]; 3]], colors: &[[[f64; 4]; 3]], trans: &TransAffine) {
+        self.ras.reset_clipping();
+        Self::set_clipbox_ras(&mut self.ras, gc.cliprect_d(), self.width, self.height);
+        let has_clippath = self.render_clippath(&gc.clippath, gc.snap_mode);
+        for (p, c) in points.iter().zip(colors) {
+            self.draw_gouraud_triangle(p, c, trans, has_clippath);
+        }
+    }
+
+    fn draw_gouraud_triangle(&mut self, points: &[[f64; 2]; 3], colors: &[[f64; 4]; 3], trans: &TransAffine, has_clippath: bool) {
+        let mut trans = *trans;
+        trans.multiply(&TransAffine::scaling(1.0, -1.0));
+        trans.multiply(&TransAffine::translation(0.0, self.height as f64));
+        let mut tp = [[0.0; 2]; 3];
+        for (t, p) in tp.iter_mut().zip(points) {
+            let (mut x, mut y) = (p[0], p[1]);
+            trans.transform(&mut x, &mut y);
+            if x.is_nan() || y.is_nan() {
+                return;
+            }
+            *t = [x, y];
+        }
+        let col = |c: &[f64; 4]| Rgba::new(c[0], c[1], c[2], c[3]).to_rgba8();
+        let mut gen = crate::agg::span_gouraud::SpanGouraudRgba::new(
+            col(&colors[0]),
+            col(&colors[1]),
+            col(&colors[2]),
+            tp[0][0],
+            tp[0][1],
+            tp[1][0],
+            tp[1][1],
+            tp[2][0],
+            tp[2][1],
+            0.5,
+        );
+        self.ras.add_path(&mut gen);
+        if has_clippath {
+            let mask = self.alpha_mask.as_ref().unwrap();
+            let pfa = PixfmtAmaskAdaptor::new(&mut self.pixf, mask);
+            let mut rb = RendererBase::new(pfa);
+            let mut sl = ScanlineU8::new(None);
+            render_scanlines_aa(&mut self.ras, &mut sl, &mut rb, &mut gen);
+        } else {
+            let mut rb = RendererBase::new(&mut self.pixf);
+            let mut sl = ScanlineP8::new();
+            render_scanlines_aa(&mut self.ras, &mut sl, &mut rb, &mut gen);
+        }
+    }
+
     fn draw_with_sketch<V: VertexSource>(&mut self, path: &mut V, has_clippath: bool, face: Face, gc: &Gc) {
         match gc.sketch {
             Some((scale, length, randomness)) => {

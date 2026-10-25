@@ -166,6 +166,7 @@ pub fn base_set(base: &mut crate::mpl::artist::ArtistBase, name: &str, v: &Bound
         }
         "in_layout" => base.in_layout = v.extract()?,
         "gid" => base.gid = if v.is_none() { None } else { Some(v.extract()?) },
+        "url" => base.url = if v.is_none() { None } else { Some(v.extract()?) },
         "animated" => base.animated = v.extract()?,
         "rasterized" => base.rasterized = v.extract()?,
         "sketch_params" => base.sketch = if v.is_none() { None } else { Some(v.extract()?) },

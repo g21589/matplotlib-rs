@@ -53,7 +53,7 @@ def _path(verts, codes, should_simplify, simplify_threshold):
 
 def _gc(renderer, state, clip_cache):
     (alpha, forced_alpha, antialiased, capstyle, joinstyle, cliprect, clippath,
-     dashes, linewidth, rgb, snap, sketch, hatch) = state
+     dashes, linewidth, rgb, snap, sketch, hatch, url) = state
     gc = renderer.new_gc()
     gc._alpha = alpha
     gc._forced_alpha = forced_alpha
@@ -76,6 +76,7 @@ def _gc(renderer, state, clip_cache):
     gc._rgb = rgb
     gc._snap = snap
     gc._sketch = sketch
+    gc._url = url
     if hatch is not None:
         pattern, gc._hatch_color, gc._hatch_linewidth, is_np = hatch
         gc._hatch = np.str_(pattern) if is_np else pattern
@@ -192,6 +193,25 @@ class Target:
         if r._raster_depth == 0 and r._rasterizing:
             r.stop_rasterizing()
             r._rasterizing = False
+
+    def raster_begin(self):
+        r = self.renderer
+        if r._raster_depth == 0 and not r._rasterizing:
+            r.start_rasterizing()
+            r._rasterizing = True
+        r._raster_depth += 1
+        # (a MixedModeRenderer sets the figure dpi to its raster dpi)
+        fig = getattr(r, "figure", None)
+        return None if fig is None else float(fig.dpi)
+
+    def raster_end(self):
+        r = self.renderer
+        r._raster_depth -= 1
+        fig = getattr(r, "figure", None)  # (a MixedModeRenderer's)
+        if r._rasterizing and fig is not None and fig.suppressComposite:
+            # restart rasterizing to prevent merging
+            r.stop_rasterizing()
+            r.start_rasterizing()
 
     def flip(self):
         r = self.renderer

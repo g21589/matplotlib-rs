@@ -1803,7 +1803,7 @@ impl PyAxes {
     /// then neither autoscales nor applies its aspect by itself.
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (position, original, viewlim, datalim, minpos, zorder=0.0, visible=true,
-                        axison=true, frameon=true, autotitlepos=None))]
+                        axison=true, frameon=true, autotitlepos=None, rasterization_zorder=None))]
     fn mirror_state(
         &self,
         position: (f64, f64, f64, f64),
@@ -1816,8 +1816,10 @@ impl PyAxes {
         axison: bool,
         frameon: bool,
         autotitlepos: Option<bool>,
+        rasterization_zorder: Option<f64>,
     ) -> PyResult<()> {
         self.with(|a, _| {
+            a.rasterization_zorder = rasterization_zorder;
             a.base.zorder = zorder;
             a.base.visible = visible;
             a.axison = axison;
@@ -2207,8 +2209,8 @@ impl PyAxes {
     /// Update ticks and return the tick label handles (label1 and label2 of
     /// each tick), like `get_ticklabels(minor, which)`; `visible_only`
     /// filters like matplotlib.
-    #[pyo3(signature = (axis, which="major", visible_only=true))]
-    fn get_ticklabels(&self, axis: &str, which: &str, visible_only: bool) -> PyResult<Vec<PyText>> {
+    #[pyo3(signature = (axis, which="major", visible_only=true, count=None))]
+    fn get_ticklabels(&self, axis: &str, which: &str, visible_only: bool, count: Option<usize>) -> PyResult<Vec<PyText>> {
         let x = axis_of(axis)?;
         self.unstaled(|a, ctx| {
             let tc = a.trans_ctx(ctx);
@@ -2231,13 +2233,13 @@ impl PyAxes {
                 out.extend(l2);
             };
             if which == "major" || which == "both" {
-                let n = ax.get_majorticklocs(&ac).len();
+                let n = ax.get_majorticklocs(&ac).len().max(count.unwrap_or(0));
                 ax.ensure_major_ticks(n);
                 let t = ax.major_ticks.clone().unwrap_or_default();
                 collect(&t, n);
             }
             if which == "minor" || which == "both" {
-                let n = ax.get_minorticklocs(&ac).len();
+                let n = ax.get_minorticklocs(&ac).len().max(count.unwrap_or(0));
                 ax.ensure_minor_ticks(n);
                 let t = ax.minor_ticks.clone().unwrap_or_default();
                 collect(&t, n);
@@ -2249,8 +2251,8 @@ impl PyAxes {
     /// Update the ticks (as `get_ticklabels` does) and return a fingerprint
     /// of the tick objects: their identities and states.  Equal fingerprints
     /// mean the tick handles and everything about them are unchanged.
-    #[pyo3(signature = (axis, major=true))]
-    fn ticks_signature(&self, axis: &str, major: bool) -> PyResult<u64> {
+    #[pyo3(signature = (axis, major=true, count=None))]
+    fn ticks_signature(&self, axis: &str, major: bool, count: Option<usize>) -> PyResult<u64> {
         use std::hash::{Hash, Hasher};
         let x = axis_of(axis)?;
         self.unstaled(|a, ctx| {
@@ -2259,11 +2261,11 @@ impl PyAxes {
             let ax = if x { &mut a.xaxis } else { &mut a.yaxis };
             ax.update_ticks(&ac);
             let (n, ticks) = if major {
-                let n = ax.get_majorticklocs(&ac).len();
+                let n = ax.get_majorticklocs(&ac).len().max(count.unwrap_or(0));
                 ax.ensure_major_ticks(n);
                 (n, ax.major_ticks.clone().unwrap_or_default())
             } else {
-                let n = ax.get_minorticklocs(&ac).len();
+                let n = ax.get_minorticklocs(&ac).len().max(count.unwrap_or(0));
                 ax.ensure_minor_ticks(n);
                 (n, ax.minor_ticks.clone().unwrap_or_default())
             };
@@ -2284,14 +2286,14 @@ impl PyAxes {
     }
 
     /// Tick line handles (tick1line, tick2line per tick).
-    #[pyo3(signature = (axis, minor=false))]
-    fn get_ticklines(&self, axis: &str, minor: bool) -> PyResult<Vec<PyLine2D>> {
+    #[pyo3(signature = (axis, minor=false, count=None))]
+    fn get_ticklines(&self, axis: &str, minor: bool, count: Option<usize>) -> PyResult<Vec<PyLine2D>> {
         let x = axis_of(axis)?;
         self.unstaled(|a, ctx| {
             let tc = a.trans_ctx(ctx);
             let ac = a.axis_ctx(x, &tc, ctx);
             let ax = if x { &mut a.xaxis } else { &mut a.yaxis };
-            let n = if minor { ax.get_minorticklocs(&ac).len() } else { ax.get_majorticklocs(&ac).len() };
+            let n = if minor { ax.get_minorticklocs(&ac).len().max(count.unwrap_or(0)) } else { ax.get_majorticklocs(&ac).len().max(count.unwrap_or(0)) };
             let ticks = if minor {
                 ax.ensure_minor_ticks(n);
                 ax.minor_ticks.clone().unwrap_or_default()
@@ -2308,14 +2310,14 @@ impl PyAxes {
         })
     }
 
-    #[pyo3(signature = (axis, minor=false))]
-    fn get_gridlines(&self, axis: &str, minor: bool) -> PyResult<Vec<PyLine2D>> {
+    #[pyo3(signature = (axis, minor=false, count=None))]
+    fn get_gridlines(&self, axis: &str, minor: bool, count: Option<usize>) -> PyResult<Vec<PyLine2D>> {
         let x = axis_of(axis)?;
         self.unstaled(|a, ctx| {
             let tc = a.trans_ctx(ctx);
             let ac = a.axis_ctx(x, &tc, ctx);
             let ax = if x { &mut a.xaxis } else { &mut a.yaxis };
-            let n = if minor { ax.get_minorticklocs(&ac).len() } else { ax.get_majorticklocs(&ac).len() };
+            let n = if minor { ax.get_minorticklocs(&ac).len().max(count.unwrap_or(0)) } else { ax.get_majorticklocs(&ac).len().max(count.unwrap_or(0)) };
             let ticks = if minor {
                 ax.ensure_minor_ticks(n);
                 ax.minor_ticks.clone().unwrap_or_default()

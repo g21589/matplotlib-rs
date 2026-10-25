@@ -373,6 +373,105 @@ impl PyRendererAgg {
         Ok(())
     }
 
+    /// `RendererAgg.draw_gouraud_triangles(gc, points (N, 3, 2), colors
+    /// (N, 3, 4), transform)`.
+    fn draw_gouraud_triangles(
+        &mut self,
+        gc: &Bound<'_, PyDict>,
+        points: PyReadonlyArray3<f64>,
+        colors: PyReadonlyArray3<f64>,
+        transform: PyReadonlyArray2<f64>,
+    ) -> PyResult<()> {
+        let gc = gc_from(gc)?;
+        let (p, c) = (points.as_array(), colors.as_array());
+        if p.shape()[0] != 0 && (p.shape()[1] != 3 || p.shape()[2] != 2) {
+            return Err(PyValueError::new_err(format!("points must have shape (N, 3, 2), got {:?}", p.shape())));
+        }
+        if c.shape()[0] != 0 && (c.shape()[1] != 3 || c.shape()[2] != 4) {
+            return Err(PyValueError::new_err(format!("colors must have shape (N, 3, 4), got {:?}", c.shape())));
+        }
+        if p.shape()[0] != c.shape()[0] {
+            return Err(PyValueError::new_err(format!(
+                "points and colors arrays must be the same length, got {} points and {} colors",
+                p.shape()[0],
+                c.shape()[0]
+            )));
+        }
+        let pts: Vec<[[f64; 2]; 3]> =
+            (0..p.shape()[0]).map(|i| std::array::from_fn(|k| [p[[i, k, 0]], p[[i, k, 1]]])).collect();
+        let cols: Vec<[[f64; 4]; 3]> =
+            (0..c.shape()[0]).map(|i| std::array::from_fn(|k| std::array::from_fn(|j| c[[i, k, j]]))).collect();
+        let trans = trans_from(&transform)?;
+        let Some(r) = self.agg()? else { return Ok(()) };
+        r.draw_gouraud_triangles(&gc, &pts, &cols, &trans);
+        Ok(())
+    }
+
+    /// `RendererAgg.draw_quad_mesh`: each cell is a 5-vertex path in the
+    /// order of matplotlib's `QuadMeshPathIterator` (the winding matters to
+    /// the non-antialiased coverage of the cell edges).
+    #[allow(clippy::too_many_arguments)]
+    fn draw_quad_mesh(
+        &mut self,
+        gc: &Bound<'_, PyDict>,
+        master_transform: PyReadonlyArray2<f64>,
+        mesh_width: usize,
+        mesh_height: usize,
+        coordinates: PyReadonlyArray3<f64>,
+        offsets: PyReadonlyArray2<f64>,
+        offset_trans: PyReadonlyArray2<f64>,
+        facecolors: PyReadonlyArray2<f64>,
+        antialiased: bool,
+        edgecolors: PyReadonlyArray2<f64>,
+    ) -> PyResult<()> {
+        let gc = gc_from(gc)?;
+        let c = coordinates.as_array();
+        if c.shape()[0] < mesh_height + 1 || c.shape()[1] < mesh_width + 1 || c.shape()[2] < 2 {
+            return Err(PyValueError::new_err("coordinates do not match the mesh size"));
+        }
+        let mut paths = Vec::with_capacity(mesh_width * mesh_height);
+        for i in 0..mesh_width * mesh_height {
+            let (m, n) = (i % mesh_width, i / mesh_width);
+            let v = |idx: usize| {
+                let mm = m + ((idx & 2) >> 1);
+                let nn = n + (((idx + 1) & 2) >> 1);
+                [c[[nn, mm, 0]], c[[nn, mm, 1]]]
+            };
+            paths.push(MplPath::new((0..5).map(v).collect(), None));
+        }
+        let o = offsets.as_array();
+        let offsets: Vec<[f64; 2]> =
+            if o.len() == 0 { Vec::new() } else { (0..o.shape()[0]).map(|i| [o[[i, 0]], o[[i, 1]]]).collect() };
+        let colors = |a: &PyReadonlyArray2<f64>| -> Vec<Rgba> {
+            let a = a.as_array();
+            if a.len() == 0 {
+                return Vec::new();
+            }
+            (0..a.shape()[0]).map(|i| Rgba::new(a[[i, 0]], a[[i, 1]], a[[i, 2]], a[[i, 3]])).collect()
+        };
+        let fc = colors(&facecolors);
+        let ec = colors(&edgecolors);
+        let lw = [gc.linewidth];
+        let Some(r) = self.agg()? else { return Ok(()) };
+        r.draw_path_collection(
+            &gc,
+            &trans_from(&master_transform)?,
+            &paths,
+            &[],
+            &offsets,
+            &trans_from(&offset_trans)?,
+            &fc,
+            &ec,
+            &lw,
+            &[],
+            &[antialiased],
+            true,
+            false,
+            &[],
+        );
+        Ok(())
+    }
+
     fn draw_text_image(&mut self, image: PyReadonlyArray2<u8>, x: i32, y: i32, gc: &Bound<'_, PyDict>) -> PyResult<()> {
         let gc = gc_from(gc)?;
         let a = image.as_array();

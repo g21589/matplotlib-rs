@@ -53,6 +53,11 @@ pub trait ForeignRenderer: Send + Sync {
     /// What matplotlib's `allow_rasterization` does before drawing a
     /// non-rasterized artist (stop a pending rasterization).
     fn artist_start(&self);
+    /// What `allow_rasterization` does around the draw of a rasterized
+    /// group (`Axes.set_rasterization_zorder`); returns the figure dpi
+    /// while rasterizing.
+    fn raster_begin(&self) -> Option<f64>;
+    fn raster_end(&self);
     /// `flipy()` and the canvas height (for text positions).
     fn flipy(&self) -> bool;
     fn canvas_height(&self) -> f64;
@@ -167,6 +172,21 @@ impl Renderer {
         }
         if let Some(f) = &self.foreign {
             f.artist_start();
+        }
+    }
+
+    /// Start a rasterized group (a no-op for Agg); returns the figure dpi
+    /// to draw it at.
+    pub fn raster_begin(&mut self) -> Option<f64> {
+        match (self.disabled, &self.foreign) {
+            (false, Some(f)) => f.raster_begin(),
+            _ => None,
+        }
+    }
+
+    pub fn raster_end(&mut self) {
+        if let (false, Some(f)) = (self.disabled, &self.foreign) {
+            f.raster_end();
         }
     }
 

@@ -439,6 +439,7 @@ impl Text {
         gc.antialiased = self.antialiased;
         gc.snap = self.base.snap;
         gc.set_clip_from(&self.base, clip);
+        gc.url = self.base.url.clone();
         let angle = self.get_rotation(ctx);
         let mtext = super::renderer::MText {
             owner: self.owner.as_ref(),

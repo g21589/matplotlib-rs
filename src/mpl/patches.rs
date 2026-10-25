@@ -657,6 +657,7 @@ impl Patch {
         gc.joinstyle = self.joinstyle;
         gc.antialiased = self.antialiased;
         gc.set_clip_from(&self.base, clip);
+        gc.url = self.base.url.clone();
         gc.snap = self.base.snap;
         gc.set_alpha(self.base.alpha);
         if let Some(h) = &self.hatch {

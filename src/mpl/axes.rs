@@ -215,6 +215,28 @@ pub struct FigCtx {
     pub trans_figure: Transform,
     pub dpi_scale: Transform,
     pub fig_bbox: Bbox,
+    pub figsize: (f64, f64),
+    /// `transFigure._boxout` override (bbox_inches adjustment)
+    pub boxout: Option<Bbox>,
+}
+
+impl FigCtx {
+    pub fn new(figsize: (f64, f64), dpi: f64, boxout: Option<Bbox>) -> FigCtx {
+        let dpi_scale = Transform::Affine(super::transforms::Affine2D::identity().scale(dpi, dpi).0);
+        let fig_bbox = Bbox::from_bounds(0.0, 0.0, figsize.0, figsize.1).transformed_bbox(&dpi_scale);
+        let trans_figure = Transform::bbox_to(boxout.as_ref().unwrap_or(&fig_bbox));
+        FigCtx { dpi, trans_figure, dpi_scale, fig_bbox, figsize, boxout }
+    }
+
+    /// The context with the figure dpi set to `dpi` (as `MixedModeRenderer`
+    /// does while rasterizing).
+    pub fn with_dpi(&self, dpi: f64) -> FigCtx {
+        let boxout = self.boxout.map(|b| {
+            let s = dpi / self.dpi;
+            Bbox::new(b.x0 * s, b.y0 * s, b.x1 * s, b.y1 * s)
+        });
+        FigCtx::new(self.figsize, dpi, boxout)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -437,6 +459,8 @@ pub struct Axes {
     pub name: String,
     /// positions frozen by `bbox_inches` adjustment (apply_aspect disabled)
     pub aspect_frozen: bool,
+    /// `set_rasterization_zorder`
+    pub rasterization_zorder: Option<f64>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -503,6 +527,7 @@ impl Axes {
             twinned: Vec::new(),
             child_axes: Vec::new(),
             trans_subfigure: None,
+            rasterization_zorder: None,
             ext_draw: None,
             prop_cycle_index: 0,
             patch_cycle_index: 0,
@@ -1298,25 +1323,49 @@ impl Axes {
             items.push((l.lk().zorder, Item::Legend));
         }
         items.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let tc = self.trans_ctx(fig);
-        let clip = ClipCtx { axes_bbox: Some(self.clip_bbox(&tc)), trans: &tc };
+        let tc0 = self.trans_ctx(fig);
+        let clip0 = ClipCtx { axes_bbox: Some(self.clip_bbox(&tc0)), trans: &tc0 };
+        // artists with zorder <= rasterization_zorder (and the patch) are
+        // rasterized together when the lowest one is below it, at the dpi
+        // the renderer sets while rasterizing
+        let nraster = match self.rasterization_zorder {
+            Some(rz) if items.first().is_some_and(|f| f.0 < rz) => items.iter().take_while(|it| it.0 <= rz).count(),
+            _ => 0,
+        };
+        let raster_dpi = if nraster > 0 { renderer.raster_begin().filter(|&d| d != fig.dpi) } else { None };
+        let fig_r = raster_dpi.map(|d| fig.with_dpi(d));
+        let tc_r = fig_r.as_ref().map(|f| self.trans_ctx(f));
+        let clip_r = tc_r.as_ref().map(|t| ClipCtx { axes_bbox: Some(self.clip_bbox(t)), trans: t });
+        let saved_dpi = renderer.dpi;
+        let fig0 = fig;
+        let (mut fig, mut tc, mut clip) = (fig, &tc0, &clip0);
+        if let (Some(f), Some(t), Some(c)) = (&fig_r, &tc_r, &clip_r) {
+            (fig, tc, clip) = (f, t, c);
+            renderer.dpi = f.dpi;
+        }
         if self.axison && self.frameon {
-            self.patch.draw(renderer, &tc, &clip);
+            self.patch.draw(renderer, tc, clip);
         }
         let xbound = Some(self.get_bound(true));
         let subslice_ok = self.name == "rectilinear" && self.xaxis.scale.name() == "linear";
-        for (_, it) in items {
+        let nitems = items.len();
+        for (k, (_, it)) in items.into_iter().enumerate() {
+            if nraster > 0 && k == nraster {
+                renderer.raster_end();
+                (fig, tc, clip) = (fig0, &tc0, &clip0);
+                renderer.dpi = saved_dpi;
+            }
             match it {
                 Item::Child(c) => match c {
                     Child::Line(l) => {
                         let mut l = l.lk();
                         let ok = subslice_ok && l.base.transform == TSpec::Data;
-                        l.draw(renderer, &tc, &clip, xbound, ok);
+                        l.draw(renderer, tc, clip, xbound, ok);
                     }
-                    Child::Patch(p) => p.lk().draw(renderer, &tc, &clip),
-                    Child::Text(t) => t.lk().draw(renderer, &tc, &clip),
-                    Child::Collection(cc) => cc.lk().draw(renderer, &tc, &clip),
-                    Child::Image(im) => im.lk().draw(renderer, &tc, &clip),
+                    Child::Patch(p) => p.lk().draw(renderer, tc, clip),
+                    Child::Text(t) => t.lk().draw(renderer, tc, clip),
+                    Child::Collection(cc) => cc.lk().draw(renderer, tc, clip),
+                    Child::Image(im) => im.lk().draw(renderer, tc, clip),
                     Child::Ext(e) => {
                         if e.visible() {
                             e.draw(renderer)
@@ -1326,12 +1375,12 @@ impl Axes {
                 Item::Spine(i) => {
                     let view = self.view_lim;
                     self.spines[i].adjust_location(&view);
-                    self.spines[i].patch.draw(renderer, &tc, &clip);
+                    self.spines[i].patch.draw(renderer, tc, clip);
                 }
                 Item::Axis(x) => {
                     let sidx = self.label_spine_idx(x);
                     let me: *mut Axes = self;
-                    let ac = self.axis_ctx(x, &tc, fig);
+                    let ac = self.axis_ctx(x, tc, fig);
                     let axis: *mut Axis = if x { &mut self.xaxis } else { &mut self.yaxis };
                     // SAFETY: the spine closure only reads/updates disjoint
                     // state (spines) plus idempotent tick updates.
@@ -1341,16 +1390,20 @@ impl Axes {
                 }
                 Item::Title(i) => {
                     let t = [&self.title, &self.left_title, &self.right_title][i].clone();
-                    t.lk().draw(renderer, &tc, &clip);
+                    t.lk().draw(renderer, tc, clip);
                 }
                 Item::ChildAxes(uid) => kids.draw(uid, renderer),
                 Item::Legend => {
                     if let Some(l) = self.legend.clone() {
                         let bbox = self.bbox(fig);
-                        l.lk().draw(renderer, &tc, &clip, bbox, self);
+                        l.lk().draw(renderer, tc, clip, bbox, self);
                     }
                 }
             }
+        }
+        if nraster > 0 && nraster == nitems {
+            renderer.raster_end();
+            renderer.dpi = saved_dpi;
         }
         renderer.close_group("axes");
     }

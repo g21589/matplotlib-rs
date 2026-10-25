@@ -15,6 +15,7 @@ pub mod pixfmt;
 pub mod rasterizer;
 pub mod renderer;
 pub mod scanline;
+pub mod span_gouraud;
 pub mod stroke;
 pub mod trans_affine;
 

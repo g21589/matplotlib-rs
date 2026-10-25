@@ -145,7 +145,7 @@ class _PyFormatterAdapter:
 # Ticks
 
 
-class Tick:
+class Tick(martist.Artist):
     """
     One tick of an `Axis`: a view of the tick owned by the Rust core.
 
@@ -154,6 +154,8 @@ class Tick:
     """
 
     def __init__(self, axis, idx, major, line_handles, label1, label2):
+        super().__init__()
+        self.set_figure(axis.axes.get_figure(root=False))
         self._axis_proxy = axis
         self._idx = idx
         self._major = major
@@ -1038,23 +1040,24 @@ class Axis(martist.Artist):
         self._rs_prepare()
         rs = self.axes._rs
         # reuse the tick views while the Rust ticks are unchanged
-        sig = rs.ticks_signature(self.axis_name, major)
+        # (at least *n* ticks, as matplotlib creates them on request)
+        sig = rs.ticks_signature(self.axis_name, major, n)
         made = self.__dict__.setdefault("_rs_made_ticks", {})
         prev = made.get(major)
         if prev is not None and prev[0] == sig:
             ticks = prev[1]
             return ticks[:n] if n is not None else ticks
-        ticks = self._make_ticks_from_rs(major)
+        ticks = self._make_ticks_from_rs(major, n)
         made[major] = (sig, ticks)
         return ticks[:n] if n is not None else ticks
 
-    def _make_ticks_from_rs(self, major):
+    def _make_ticks_from_rs(self, major, n=None):
         which = "major" if major else "minor"
         rs = self.axes._rs
         labels = [_wrap_rs_text(self._text_cache, h, self.axes)
-                  for h in rs.get_ticklabels(self.axis_name, which, False)]
-        lines = rs.get_ticklines(self.axis_name, not major)
-        grids = rs.get_gridlines(self.axis_name, not major)
+                  for h in rs.get_ticklabels(self.axis_name, which, False, n)]
+        lines = rs.get_ticklines(self.axis_name, not major, n)
+        grids = rs.get_gridlines(self.axis_name, not major, n)
         nt = len(grids)
         cls = self._tick_class or Tick
         cache = self.__dict__.setdefault("_tick_cache", {})

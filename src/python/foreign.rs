@@ -149,6 +149,10 @@ fn gc<'py>(py: Python<'py>, g: &GcState) -> PyResult<Bound<'py, PyTuple>> {
             snap,
             sketch,
             hatch,
+            match &g.url {
+                Some(u) => u.into_pyobject(py)?.into_any(),
+                None => none(),
+            },
         ],
     )
 }
@@ -274,6 +278,16 @@ impl ForeignRenderer for PyForeign {
     fn artist_start(&self) {
         Python::attach(|py| {
             self.call(py, "artist_start", ());
+        })
+    }
+
+    fn raster_begin(&self) -> Option<f64> {
+        Python::attach(|py| self.call(py, "raster_begin", ()).and_then(|v| v.extract::<Option<f64>>().ok()).flatten())
+    }
+
+    fn raster_end(&self) {
+        Python::attach(|py| {
+            self.call(py, "raster_end", ());
         })
     }
 

@@ -225,10 +225,31 @@ class RendererAgg(RendererBase):
     def draw_quad_mesh(self, gc, master_transform, meshWidth, meshHeight,
                        coordinates, offsets, offsetTrans, facecolors,
                        antialiased, edgecolors):
-        # matplotlib's generic implementation (via draw_path_collection)
-        return super().draw_quad_mesh(
-            gc, master_transform, meshWidth, meshHeight, coordinates, offsets,
-            offsetTrans, facecolors, antialiased, edgecolors)
+        # docstring inherited
+        coordinates = np.ascontiguousarray(
+            np.asarray(coordinates, dtype=float).reshape(
+                meshHeight + 1, meshWidth + 1, 2))
+        offsets = np.ascontiguousarray(offsets, dtype=float).reshape(-1, 2) \
+            if len(offsets) else np.zeros((0, 2))
+        fc = np.ascontiguousarray(facecolors, dtype=float).reshape(-1, 4) \
+            if len(facecolors) else np.zeros((0, 4))
+        if edgecolors is None:
+            edgecolors = facecolors
+        ec = np.ascontiguousarray(edgecolors, dtype=float).reshape(-1, 4) \
+            if len(edgecolors) else np.zeros((0, 4))
+        self._renderer.draw_quad_mesh(
+            _gc_dict(gc), _matrix(master_transform), int(meshWidth),
+            int(meshHeight), coordinates, offsets, _matrix(offsetTrans), fc,
+            bool(antialiased), ec)
+
+    def draw_gouraud_triangles(self, gc, triangles_array, colors_array,
+                               transform):
+        # docstring inherited
+        self._renderer.draw_gouraud_triangles(
+            _gc_dict(gc),
+            np.ascontiguousarray(triangles_array, dtype=float).reshape(-1, 3, 2),
+            np.ascontiguousarray(colors_array, dtype=float).reshape(-1, 3, 4),
+            _matrix(transform))
 
     def _draw_text_glyphs_and_boxes(self, gc, x, y, angle, glyphs, boxes):
         self._renderer.draw_glyphs_and_boxes(

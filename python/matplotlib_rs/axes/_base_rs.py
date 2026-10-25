@@ -279,7 +279,8 @@ def _patch_axes_base(cls):
             tuple(map(float, v.extents)), tuple(map(float, d.extents)),
             (float(mp[0]), float(mp[1])), float(self.zorder), bool(self.get_visible()),
             bool(self.axison), bool(self._frameon),
-            None if self._autotitlepos is None else bool(self._autotitlepos))
+            None if self._autotitlepos is None else bool(self._autotitlepos),
+            None if self._rasterization_zorder is None else float(self._rasterization_zorder))
 
     cls._rs_sync = _rs_sync
 

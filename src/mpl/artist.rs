@@ -240,6 +240,7 @@ pub struct ArtistBase {
     pub clip_path: Option<ClipPathSpec>,
     pub label: String,
     pub gid: Option<String>,
+    pub url: Option<String>,
     pub snap: Option<bool>,
     pub sketch: Option<(f64, f64, f64)>,
     pub transform: TSpec,
@@ -260,6 +261,7 @@ impl Default for ArtistBase {
             clip_path: None,
             label: String::new(),
             gid: None,
+            url: None,
             snap: None,
             sketch: None,
             transform: TSpec::Identity,
@@ -300,6 +302,8 @@ pub struct GcState {
     /// identity of the artist whose clip box this is (renderers that compare
     /// clip boxes by identity see one object per artist)
     pub clip_owner: usize,
+    /// `gc.get_url()` (vector backends make it a link)
+    pub url: Option<String>,
 }
 
 impl Default for GcState {
@@ -321,6 +325,7 @@ impl Default for GcState {
             hatch_pattern: None,
             hatch_np: false,
             clip_owner: 0,
+            url: None,
         }
     }
 }

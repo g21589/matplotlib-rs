@@ -273,10 +273,7 @@ impl Figure {
     }
 
     pub fn ctx(&self) -> FigCtx {
-        let dpi_scale = Transform::Affine(Affine2D::identity().scale(self.dpi, self.dpi).0);
-        let fig_bbox = self.fig_bbox();
-        let tf = Transform::bbox_to(self.boxout.as_ref().unwrap_or(&fig_bbox));
-        FigCtx { dpi: self.dpi, trans_figure: tf, dpi_scale, fig_bbox }
+        FigCtx::new(self.figsize, self.dpi, self.boxout)
     }
 
     pub fn trans_ctx(&self) -> TransCtx {
