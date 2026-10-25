@@ -29,6 +29,18 @@ pub struct ShapedGlyph {
     pub y_offset: i32,
 }
 
+/// Glyph metrics in 26.6 (`linear_hori_advance` in 16.16).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GlyphMetrics {
+    pub width: i64,
+    pub height: i64,
+    pub hori_bearing_x: i64,
+    pub hori_bearing_y: i64,
+    pub hori_advance: i64,
+    pub linear_hori_advance: i64,
+    pub bbox: BBox,
+}
+
 /// Size state (`FT_Size_Metrics`, unhinted root metrics).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SizeMetrics {
@@ -130,6 +142,48 @@ impl FtFont {
     pub fn render_glyph(&self, gid: u32) -> Result<GlyphBitmap, FontError> {
         let mut outline = self.load_glyph(gid)?;
         render_outline(&mut outline, Some(self.size))
+    }
+
+    /// Metrics of `FT_Load_Glyph(gid, FT_LOAD_NO_HINTING)` as matplotlib's
+    /// `FT2Font.load_glyph` reports them (26.6, `linearHoriAdvance` 16.16).
+    pub fn glyph_metrics(&self, gid: u32) -> Result<GlyphMetrics, FontError> {
+        let o = self.sfnt().load_glyph(gid, self.size.x_scale, self.size.y_scale)?;
+        let cb = if o.points.is_empty() { BBox::default() } else { o.cbox() };
+        let (lsb, aw) = self.sfnt().hmetrics(gid);
+        let _ = lsb;
+        let linear = super::outline::mul_div(aw as i64, self.size.x_scale, 64);
+        // the glyph image after the face transform
+        let mut t = o.clone();
+        if self.transform_flags != 0 {
+            t.transform(&self.matrix);
+            t.translate(self.delta.0, self.delta.1);
+        }
+        let bbox = if t.points.is_empty() { BBox::default() } else { t.cbox() };
+        Ok(GlyphMetrics {
+            width: cb.x_max - cb.x_min,
+            height: cb.y_max - cb.y_min,
+            hori_bearing_x: cb.x_min,
+            hori_bearing_y: cb.y_max,
+            hori_advance: mul_fix(aw as i64, self.size.x_scale),
+            linear_hori_advance: linear,
+            bbox,
+        })
+    }
+
+    /// `FT_Get_Kerning` (mode 0 default, 1 unfitted, 2 unscaled), 26.6.
+    pub fn kerning(&self, left: u32, right: u32, mode: u32) -> i64 {
+        let k = self.sfnt().kerning(left, right) as i64;
+        if mode == 2 {
+            return k;
+        }
+        let mut x = mul_fix(k, self.size.x_scale);
+        if mode == 0 {
+            if self.size.x_ppem < 25 {
+                x = super::outline::mul_div(x, self.size.x_ppem as i64, 25);
+            }
+            x = (x + 32) & !63;
+        }
+        x
     }
 
     /// `FT_Get_Advance(face, gid, FT_LOAD_NO_HINTING)`, 16.16.

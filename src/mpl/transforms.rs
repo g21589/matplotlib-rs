@@ -363,7 +363,34 @@ pub enum ScaleTransform {
     InvertedAsinH { a: f64 },
 }
 
+/// Evaluates scale transforms on arrays the way the Python layer does (with
+/// numpy, whose vectorized `log10` & co. may differ from libm in the last
+/// bit).  Returns false to fall back to [`ScaleTransform::apply`].
+pub type ScaleHook = dyn Fn(&ScaleTransform, &mut [f64]) -> bool + Send + Sync;
+
+static SCALE_HOOK: std::sync::RwLock<Option<std::sync::Arc<ScaleHook>>> = std::sync::RwLock::new(None);
+
+pub fn set_scale_hook(h: Option<std::sync::Arc<ScaleHook>>) {
+    *SCALE_HOOK.write().unwrap() = h;
+}
+
 impl ScaleTransform {
+    /// Transform `vals` in place.
+    pub fn apply_slice(&self, vals: &mut [f64]) {
+        if vals.is_empty() {
+            return;
+        }
+        let hook = SCALE_HOOK.read().unwrap().clone();
+        if let Some(h) = hook {
+            if h(self, vals) {
+                return;
+            }
+        }
+        for v in vals.iter_mut() {
+            *v = self.apply(*v);
+        }
+    }
+
     pub fn apply(&self, v: f64) -> f64 {
         match *self {
             ScaleTransform::Log { base, clip } => {
@@ -581,8 +608,8 @@ impl Transform {
         match self {
             Transform::Affine(m) => affine_point(m, x, y),
             _ => {
-                let (xn, yn) = self.transform_non_affine(x, y);
-                affine_point(&self.get_affine(), xn, yn)
+                let p = self.transform_points_non_affine(&[[x, y]])[0];
+                affine_point(&self.get_affine(), p[0], p[1])
             }
         }
     }
@@ -598,10 +625,10 @@ impl Transform {
                 .collect(),
             _ => {
                 let a = self.get_affine();
-                pts.iter()
+                self.transform_points_non_affine(pts)
+                    .into_iter()
                     .map(|p| {
-                        let (xn, yn) = self.transform_non_affine(p[0], p[1]);
-                        let (x, y) = affine_point(&a, xn, yn);
+                        let (x, y) = affine_point(&a, p[0], p[1]);
                         [x, y]
                     })
                     .collect()
@@ -609,16 +636,41 @@ impl Transform {
         }
     }
 
+    /// `transform_non_affine` on arrays (column-wise, as matplotlib's
+    /// separable transforms evaluate their scales).
     pub fn transform_points_non_affine(&self, pts: &[[f64; 2]]) -> Vec<[f64; 2]> {
         if self.is_affine() {
             return pts.to_vec();
         }
-        pts.iter()
-            .map(|p| {
-                let (x, y) = self.transform_non_affine(p[0], p[1]);
-                [x, y]
-            })
-            .collect()
+        match self {
+            Transform::Affine(_) => pts.to_vec(),
+            Transform::Separable(sx, sy) => {
+                let mut xs: Vec<f64> = pts.iter().map(|p| p[0]).collect();
+                let mut ys: Vec<f64> = pts.iter().map(|p| p[1]).collect();
+                if let Some(s) = sx {
+                    s.apply_slice(&mut xs);
+                }
+                if let Some(s) = sy {
+                    s.apply_slice(&mut ys);
+                }
+                xs.into_iter().zip(ys).map(|(x, y)| [x, y]).collect()
+            }
+            Transform::Composite(a, b) => {
+                if !a.is_affine() && b.is_affine() {
+                    a.transform_points_non_affine(pts)
+                } else {
+                    b.transform_points_non_affine(&a.transform_points(pts))
+                }
+            }
+            Transform::Blended(tx, ty) => {
+                if tx == ty {
+                    return tx.transform_points_non_affine(pts);
+                }
+                let xo = tx.transform_points_non_affine(pts);
+                let yo = ty.transform_points_non_affine(pts);
+                xo.iter().zip(yo.iter()).map(|(a, b)| [a[0], b[1]]).collect()
+            }
+        }
     }
 
     /// `inverted()` for affine transforms and scale-separable ones.

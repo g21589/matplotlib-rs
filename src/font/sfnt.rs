@@ -286,6 +286,59 @@ impl SfntFace {
         self.postscript_name = std::mem::take(&mut best[6].1);
     }
 
+    /// `tt_face_get_kerning`: the 'kern' table value of a glyph pair (font
+    /// units), summed over the horizontal format-0 subtables FreeType uses.
+    pub fn kerning(&self, left: u32, right: u32) -> i32 {
+        let Some(t) = self.table_data(b"kern") else { return 0 };
+        if t.len() < 4 || u16_at(t, 0) != 0 {
+            return 0;
+        }
+        let ntables = u16_at(t, 2) as usize;
+        let key = (left << 16) | (right & 0xFFFF);
+        let mut p = 4usize;
+        let mut result: i32 = 0;
+        for _ in 0..ntables {
+            if p + 6 > t.len() {
+                break;
+            }
+            let length = u16_at(t, p + 2) as usize;
+            let coverage = u16_at(t, p + 4);
+            let next = p + length.max(6);
+            // only horizontal format-0 kerning, optionally overriding
+            if (coverage & !8u16) == 0x0001 && p + 14 <= t.len() {
+                let npairs = u16_at(t, p + 6) as usize;
+                let base = p + 14;
+                let avail = t.len().saturating_sub(base) / 6;
+                let n = npairs.min(avail);
+                // binary search on the (left, right) key
+                let (mut lo, mut hi) = (0usize, n);
+                let mut found = None;
+                while lo < hi {
+                    let mid = (lo + hi) / 2;
+                    let q = base + 6 * mid;
+                    let k = ((u16_at(t, q) as u32) << 16) | u16_at(t, q + 2) as u32;
+                    if k == key {
+                        found = Some(i16_at(t, q + 4) as i32);
+                        break;
+                    } else if k < key {
+                        lo = mid + 1;
+                    } else {
+                        hi = mid;
+                    }
+                }
+                if let Some(v) = found {
+                    if coverage & 8 != 0 {
+                        result = v;
+                    } else {
+                        result += v;
+                    }
+                }
+            }
+            p = next;
+        }
+        result
+    }
+
     /// `TT_Get_HMetrics`: (left side bearing, advance width) in font units.
     pub fn hmetrics(&self, gid: u32) -> (i16, u16) {
         let d = &self.data;

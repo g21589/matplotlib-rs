@@ -52,23 +52,43 @@ class RenderMode(IntEnum):
     SDF = 5
 
 
+class Glyph:
+    """The metrics of a loaded glyph (26.6 units, ``linearHoriAdvance`` 16.16)."""
+
+    def __init__(self, metrics):
+        (self.width, self.height, self.horiBearingX, self.horiBearingY,
+         self.horiAdvance, self.linearHoriAdvance, self.bbox) = metrics
+        self.vertBearingX = self.vertBearingY = self.vertAdvance = 0
+
+    def __repr__(self):
+        return (f"Glyph(width={self.width}, height={self.height}, "
+                f"horiAdvance={self.horiAdvance}, bbox={self.bbox})")
+
+
 class FT2Font:
-    """Subset of matplotlib's FT2Font API."""
+    """matplotlib's ``FT2Font`` over the Rust font engine (scalable TrueType)."""
 
     def __init__(self, filename, hinting_factor=8, *, face_index=0,
                  _fallback_list=None, _kerning_factor=None, _warn_if_used=False):
         self.fname = str(filename)
         self.face_index = face_index
         self._fallback_list = _fallback_list or []
-        self._f = _mplrs.FT2Font(self.fname)
-        entries = _mplrs.font_entries(self.fname)
-        e = entries[0] if entries else (self.fname, 0, "", "normal", "normal", 400, "normal", "scalable")
-        self.family_name = e[2]
-        self.style_name = "Regular"
+        self._f = _mplrs.FT2Font(self.fname, face_index)
+        self.family_name = self._f.family_name
+        self.style_name = self._f.style_name
+        self.postscript_name = self._f.postscript_name
+        self.num_glyphs = self._f.num_glyphs
+        self.units_per_EM = self._f.units_per_em
+        self.underline_thickness = self._f.underline_thickness
+        self.underline_position = self._f.underline_position
         self.num_faces = 1
         self.scalable = True
+        self._last_glyph = None
 
     def set_charmap(self, i):
+        pass
+
+    def select_charmap(self, i):
         pass
 
     def clear(self):
@@ -83,7 +103,18 @@ class FT2Font:
     def get_char_index(self, codepoint):
         return self._f.get_char_index(codepoint)
 
-    def set_text(self, string, angle=0.0, flags=LoadFlags.DEFAULT):
+    def load_glyph(self, glyph_index, flags=LoadFlags.FORCE_AUTOHINT):
+        g = Glyph(self._f.glyph_metrics(int(glyph_index)))
+        self._last_glyph = int(glyph_index)
+        return g
+
+    def load_char(self, charcode, flags=LoadFlags.FORCE_AUTOHINT):
+        return self.load_glyph(self.get_char_index(charcode), flags)
+
+    def get_kerning(self, left, right, mode):
+        return self._f.get_kerning(int(left), int(right), int(mode))
+
+    def set_text(self, string, angle=0.0, flags=LoadFlags.DEFAULT, **kwargs):
         self._last = self._f.get_width_height_descent(string)
 
     def get_width_height(self):
@@ -93,12 +124,9 @@ class FT2Font:
     def get_descent(self):
         return int(round(self._last[2] * 64))
 
+    def get_sfnt_table(self, name):
+        return self._f.get_sfnt_table(name)
 
-def _get_sfnt_table(self, name):
-    return self._f.get_sfnt_table(name)
-
-
-FT2Font.get_sfnt_table = _get_sfnt_table
 
 # type aliases used in annotations of the vendored modules
 CharacterCodeType = int

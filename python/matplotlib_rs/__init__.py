@@ -1602,4 +1602,61 @@ def _dot_uses_fma():
 
 
 _mplrs.set_dot_uses_fma(_dot_uses_fma())
+
+
+def _rs_mathtext_layout(s, dpi, prop):
+    """Mathtext layout for the Rust renderer (``MathTextParser('path')``)."""
+    global _rs_mathtext_parser
+    from .font_manager import FontProperties
+    if _rs_mathtext_parser is None:
+        from .mathtext import MathTextParser
+        _rs_mathtext_parser = MathTextParser("path")
+    family, style, variant, weight, stretch, size, fname, math_fontfamily = prop
+    fp = FontProperties(family=family, style=style, variant=variant, weight=weight,
+                        stretch=stretch, size=size, fname=fname,
+                        math_fontfamily=math_fontfamily)
+    parse = _rs_mathtext_parser.parse(s, dpi, fp)
+    glyphs = [(font.fname, int(getattr(font, "face_index", 0)), float(fontsize),
+               int(glyph_index), float(ox), float(oy))
+              for font, fontsize, _num, glyph_index, ox, oy in parse.glyphs]
+    rects = [tuple(map(float, r)) for r in parse.rects]
+    return (float(parse.width), float(parse.height), float(parse.depth), glyphs, rects)
+
+
+_rs_mathtext_parser = None
+_mplrs.set_mathtext_handler(_rs_mathtext_layout)
+
+_rs_scale_transforms = {}
+
+
+def _rs_scale_transform(kind, params, values):
+    """The non-affine part of a scale transform, computed by matplotlib's
+    scale classes (i.e. with numpy) for the Rust renderer."""
+    t = _rs_scale_transforms.get((kind, params))
+    if t is None:
+        from . import scale as mscale
+        if kind == "log":
+            t = mscale.LogTransform(params[0], "clip" if params[1] else "mask")
+        elif kind == "invlog":
+            t = mscale.InvertedLogTransform(params[0])
+        elif kind == "symlog":
+            t = mscale.SymmetricalLogTransform(*params)
+        elif kind == "invsymlog":
+            t = mscale.InvertedSymmetricalLogTransform(*params)
+        elif kind == "logit":
+            t = mscale.LogitTransform("clip" if params[0] else "mask")
+        elif kind == "logistic":
+            t = mscale.LogisticTransform()
+        elif kind == "asinh":
+            t = mscale.AsinhTransform(params[0])
+        elif kind == "invasinh":
+            t = mscale.InvertedAsinhTransform(params[0])
+        else:
+            raise ValueError(kind)
+        _rs_scale_transforms[(kind, params)] = t
+    import numpy as np
+    return np.ascontiguousarray(t.transform_non_affine(values), dtype=float)
+
+
+_mplrs.set_scale_hook(_rs_scale_transform)
 from ._hook import install, uninstall  # noqa: E402

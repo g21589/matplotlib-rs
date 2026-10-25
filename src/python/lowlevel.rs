@@ -499,10 +499,60 @@ pub struct PyFont {
 #[pymethods]
 impl PyFont {
     #[new]
-    fn new(path: &str) -> PyResult<Self> {
-        let bytes = std::fs::read(path).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        let data = crate::font::FontData::from_bytes(bytes, 0).map_err(|e| PyValueError::new_err(e.to_string()))?;
-        Ok(PyFont { inner: crate::font::FtFont::new(std::sync::Arc::new(data)) })
+    #[pyo3(signature = (path, face_index=0))]
+    fn new(path: &str, face_index: u32) -> PyResult<Self> {
+        let data = crate::mpl::fonts::load_font_data(path, face_index)
+            .ok_or_else(|| PyValueError::new_err(format!("cannot load font {path}")))?;
+        Ok(PyFont { inner: crate::font::FtFont::new(data) })
+    }
+
+    /// `load_glyph(gid, NO_HINTING)` metrics: (width, height, horiBearingX,
+    /// horiBearingY, horiAdvance, linearHoriAdvance, bbox).
+    #[allow(clippy::type_complexity)]
+    fn glyph_metrics(&self, gid: u32) -> PyResult<(i64, i64, i64, i64, i64, i64, (i64, i64, i64, i64))> {
+        let m = self.inner.glyph_metrics(gid).map_err(|e| PyValueError::new_err(e.to_string()))?;
+        Ok((m.width, m.height, m.hori_bearing_x, m.hori_bearing_y, m.hori_advance, m.linear_hori_advance,
+            (m.bbox.x_min, m.bbox.y_min, m.bbox.x_max, m.bbox.y_max)))
+    }
+
+    /// `get_kerning(left, right, mode)` in 26.6 (mode: 0 default, 1 unfitted, 2 unscaled).
+    fn get_kerning(&self, left: u32, right: u32, mode: u32) -> i64 {
+        self.inner.kerning(left, right, mode)
+    }
+
+    #[getter]
+    fn postscript_name(&self) -> String {
+        self.inner.sfnt().postscript_name.clone()
+    }
+
+    #[getter]
+    fn family_name(&self) -> String {
+        self.inner.sfnt().family_name.clone()
+    }
+
+    #[getter]
+    fn style_name(&self) -> String {
+        self.inner.sfnt().style_name.clone()
+    }
+
+    #[getter]
+    fn num_glyphs(&self) -> u32 {
+        self.inner.sfnt().num_glyphs as u32
+    }
+
+    #[getter]
+    fn units_per_em(&self) -> u32 {
+        self.inner.sfnt().units_per_em as u32
+    }
+
+    #[getter]
+    fn underline_thickness(&self) -> i32 {
+        self.inner.sfnt().underline_thickness as i32
+    }
+
+    #[getter]
+    fn underline_position(&self) -> i32 {
+        self.inner.sfnt().underline_position as i32
     }
 
     fn set_size(&mut self, ptsize: f64, dpi: f64) {

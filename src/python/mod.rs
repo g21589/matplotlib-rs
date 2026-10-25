@@ -4,6 +4,7 @@ pub mod api;
 pub mod collections;
 pub mod ext;
 pub mod lowlevel;
+pub mod mathtext;
 pub mod model;
 pub mod pathmod;
 
@@ -16,5 +17,7 @@ fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     api::register(m)?;
     collections::register(m)?;
     pathmod::register(m)?;
+    mathtext::register(m)?;
+    mathtext::register_scale(m)?;
     Ok(())
 }
