@@ -7,7 +7,7 @@ import numpy as np
 
 from matplotlib_rs import _api
 from matplotlib_rs.tri._triangulation import Triangulation
-import matplotlib_rs.tri._triinterpolate
+import matplotlib_rs.tri._triinterpolate; import matplotlib_rs as matplotlib
 
 
 class TriRefiner:

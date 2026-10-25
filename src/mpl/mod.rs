@@ -24,3 +24,4 @@ pub mod text;
 pub mod ticker;
 pub mod tight_layout;
 pub mod transforms;
+pub mod tri;

@@ -10,13 +10,13 @@ import re
 import numpy as np
 
 import matplotlib_rs as mpl
-import matplotlib_rs.category  # Register category unit converter as side effect.
+import matplotlib_rs.category; import matplotlib_rs as matplotlib  # Register category unit converter as side effect.
 import matplotlib_rs.cbook as cbook
 import matplotlib_rs.collections as mcoll
 import matplotlib_rs.colorizer as mcolorizer
 import matplotlib_rs.colors as mcolors
 import matplotlib_rs.contour as mcontour
-import matplotlib_rs.dates  # noqa: F401, Register date unit converter as side effect.
+import matplotlib_rs.dates; import matplotlib_rs as matplotlib  # noqa: F401, Register date unit converter as side effect.
 import matplotlib_rs.image as mimage
 import matplotlib_rs.inset as minset
 import matplotlib_rs.legend as mlegend

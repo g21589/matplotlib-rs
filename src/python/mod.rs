@@ -8,6 +8,7 @@ pub mod lowlevel;
 pub mod mathtext;
 pub mod model;
 pub mod pathmod;
+pub mod tri;
 
 use pyo3::prelude::*;
 
@@ -19,6 +20,7 @@ fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     collections::register(m)?;
     pathmod::register(m)?;
     image::register(m)?;
+    tri::register(m)?;
     mathtext::register(m)?;
     mathtext::register_scale(m)?;
     Ok(())

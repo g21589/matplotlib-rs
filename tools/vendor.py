@@ -127,9 +127,9 @@ def rewrite_imports(s):
                flags=re.M)
     s = re.sub(r"^(\s*)import matplotlib((?:\.[\w]+)+) as (\w+)", r"\1import matplotlib_rs\2 as \3", s,
                flags=re.M)
-    # bare "import matplotlib.x" (side-effect imports, e.g. unit converters)
-    s = re.sub(r"^(\s*)import matplotlib((?:\.[\w]+)+)(\s*(#.*)?)$", r"\1import matplotlib_rs\2\3", s,
-               flags=re.M)
+    # bare "import matplotlib.x": also binds the name "matplotlib"
+    s = re.sub(r"^(\s*)import matplotlib((?:\.[\w]+)+)(\s*(#.*)?)$",
+               r"\1import matplotlib_rs\2; import matplotlib_rs as matplotlib\3", s, flags=re.M)
     return s
 
 

@@ -59,7 +59,7 @@ from typing import IO, TYPE_CHECKING, cast, overload
 
 from cycler import cycler  # noqa: F401
 import matplotlib_rs as matplotlib
-import matplotlib_rs.image
+import matplotlib_rs.image; import matplotlib_rs as matplotlib
 from matplotlib_rs import _api
 # Re-exported (import x as x) for typing.
 from matplotlib_rs import get_backend as get_backend, rcParams as rcParams
@@ -99,9 +99,9 @@ if TYPE_CHECKING:
     from numpy.typing import ArrayLike
     import pandas as pd
 
-    import matplotlib_rs.axes
-    import matplotlib_rs.artist
-    import matplotlib_rs.backend_bases
+    import matplotlib_rs.axes; import matplotlib_rs as matplotlib
+    import matplotlib_rs.artist; import matplotlib_rs as matplotlib
+    import matplotlib_rs.backend_bases; import matplotlib_rs as matplotlib
     from matplotlib_rs.axis import Tick
     from matplotlib_rs.axes._base import _AxesBase
     from matplotlib_rs.backend_bases import (
@@ -408,7 +408,7 @@ def switch_backend(newbackend: str) -> None:
     """
     global _backend_mod
     # make sure the init is pulled up so we can assign to it later
-    import matplotlib_rs.backends
+    import matplotlib_rs.backends; import matplotlib_rs as matplotlib
 
     if newbackend is rcsetup._auto_backend_sentinel:
         current_framework = cbook._get_running_interactive_framework()

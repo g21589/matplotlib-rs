@@ -36,7 +36,7 @@ def triplot(ax, *args, **kwargs):
     markers : `~matplotlib.lines.Line2D`
         The drawn marker nodes.
     """
-    import matplotlib_rs.axes
+    import matplotlib_rs.axes; import matplotlib_rs as matplotlib
 
     tri, args, kwargs = Triangulation.get_from_args_and_kwargs(*args, **kwargs)
     x, y, edges = (tri.x, tri.y, tri.edges)
