@@ -1442,6 +1442,11 @@ fn axis_of(x: &str) -> PyResult<bool> {
 /// draw of `f` (an external artist) tries to access the locked figure.
 fn check_not_drawing(f: &Shared<Figure>) {
     if snapshot_for(Arc::as_ptr(f) as usize).is_some() {
+        if std::env::var_os("MPLRS_DEBUG").is_some() {
+            Python::attach(|py| {
+                let _ = py.import("traceback").and_then(|t| t.call_method0("print_stack"));
+            });
+        }
         panic!("matplotlib_rs: this figure's state cannot be changed while the figure is being drawn");
     }
 }
@@ -1754,7 +1759,8 @@ impl PyAxes {
     /// position, view limits and data limits (with minpos); the Rust axes
     /// then neither autoscales nor applies its aspect by itself.
     #[allow(clippy::too_many_arguments)]
-    #[pyo3(signature = (position, original, viewlim, datalim, minpos, zorder=0.0, visible=true))]
+    #[pyo3(signature = (position, original, viewlim, datalim, minpos, zorder=0.0, visible=true,
+                        axison=true, frameon=true, autotitlepos=None))]
     fn mirror_state(
         &self,
         position: (f64, f64, f64, f64),
@@ -1764,10 +1770,16 @@ impl PyAxes {
         minpos: (f64, f64),
         zorder: f64,
         visible: bool,
+        axison: bool,
+        frameon: bool,
+        autotitlepos: Option<bool>,
     ) -> PyResult<()> {
         self.with(|a, _| {
             a.base.zorder = zorder;
             a.base.visible = visible;
+            a.axison = axison;
+            a.frameon = frameon;
+            a.autotitlepos = autotitlepos;
             a.position = Bbox::new(position.0, position.1, position.2, position.3);
             a.original_position = Bbox::new(original.0, original.1, original.2, original.3);
             a.view_lim = Bbox::new(viewlim.0, viewlim.1, viewlim.2, viewlim.3);

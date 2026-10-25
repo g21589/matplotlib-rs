@@ -39,6 +39,20 @@ MODULES = [
     "tri/_trifinder.py", "tri/_triinterpolate.py", "tri/_tripcolor.py",
     "tri/_triplot.py", "tri/_trirefine.py", "tri/_tritools.py",
     "_axis_py.py",
+    "mpl_toolkits/mplot3d/__init__.py", "mpl_toolkits/mplot3d/art3d.py",
+    "mpl_toolkits/mplot3d/axes3d.py", "mpl_toolkits/mplot3d/axis3d.py",
+    "mpl_toolkits/mplot3d/proj3d.py",
+    "mpl_toolkits/axes_grid1/__init__.py", "mpl_toolkits/axes_grid1/anchored_artists.py",
+    "mpl_toolkits/axes_grid1/axes_divider.py", "mpl_toolkits/axes_grid1/axes_grid.py",
+    "mpl_toolkits/axes_grid1/axes_rgb.py", "mpl_toolkits/axes_grid1/axes_size.py",
+    "mpl_toolkits/axes_grid1/inset_locator.py", "mpl_toolkits/axes_grid1/mpl_axes.py",
+    "mpl_toolkits/axes_grid1/parasite_axes.py",
+    "mpl_toolkits/axisartist/__init__.py", "mpl_toolkits/axisartist/angle_helper.py",
+    "mpl_toolkits/axisartist/axes_divider.py", "mpl_toolkits/axisartist/axis_artist.py",
+    "mpl_toolkits/axisartist/axisline_style.py", "mpl_toolkits/axisartist/axislines.py",
+    "mpl_toolkits/axisartist/floating_axes.py", "mpl_toolkits/axisartist/grid_finder.py",
+    "mpl_toolkits/axisartist/grid_helper_curvelinear.py",
+    "mpl_toolkits/axisartist/parasite_axes.py",
 ]
 
 # vendored under another name: {destination: source}
@@ -78,6 +92,10 @@ PATCHES = {
         (None, "\n\nfrom . import axis as _rs_axis  # noqa: E402\n"
                "_rs_axis._rs_other_axis_classes.append(Axis)\n"),
     ],
+    "mpl_toolkits/mplot3d/axis3d.py": [
+        # 3D axes are drawn by matplotlib's Python code (see _axis_py.py)
+        ("axis as maxis,", "_axis_py as maxis,"),
+    ],
     "projections/polar.py": [
         ("import matplotlib_rs.axis as maxis", "import matplotlib_rs._axis_py as maxis"),
     ],
@@ -92,17 +110,6 @@ PATCHES = {
         (None, "\n\nfrom ._spines_rs import _patch_spines, _patch_spines_container  # noqa: E402\n"
                "_patch_spines(Spine)\n"
                "_patch_spines_container(Spines, Spine)\n"),
-    ],
-    "projections/__init__.py": [
-        # the 3D toolkit imports matplotlib itself; not supported yet
-        ('''try:
-    from mpl_toolkits.mplot3d import Axes3D
-except Exception:
-    import warnings
-    warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
-                  "Matplotlib being installed (e.g. as a system package and as a pip "
-                  "package). As a result, the 3D projection is not available.")
-    Axes3D = None''', "Axes3D = None"),
     ],
     "backends/registry.py": [
         ('''        return (backend[9:] if backend.startswith("module://")
@@ -120,6 +127,10 @@ except Exception:
 
 
 def rewrite_imports(s):
+    s = re.sub(r"^(\s*)from mpl_toolkits((?:\.[\w]+)*) import", r"\1from matplotlib_rs.mpl_toolkits\2 import",
+               s, flags=re.M)
+    s = re.sub(r"^(\s*)import mpl_toolkits((?:\.[\w]+)+) as (\w+)",
+               r"\1import matplotlib_rs.mpl_toolkits\2 as \3", s, flags=re.M)
     s = re.sub(r"^(\s*)import matplotlib as mpl\b", r"\1import matplotlib_rs as mpl", s, flags=re.M)
     s = re.sub(r"^(\s*)import matplotlib(\s*(#.*)?)$", r"\1import matplotlib_rs as matplotlib\2", s,
                flags=re.M)
@@ -134,7 +145,10 @@ def rewrite_imports(s):
 
 
 def vendor(rel):
-    src = (SRC / SOURCES.get(rel, rel)).read_text()
+    if rel.startswith("mpl_toolkits/"):
+        src = (SRC.parent / rel).read_text()
+    else:
+        src = (SRC / SOURCES.get(rel, rel)).read_text()
     s = HEADER + rewrite_imports(src)
     for old, new, *count in PATCHES.get(rel, []):
         if old is None:

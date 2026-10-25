@@ -57,7 +57,14 @@ from .. import _api, axes, _docstring
 from .geo import AitoffAxes, HammerAxes, LambertAxes, MollweideAxes
 from .polar import PolarAxes
 
-Axes3D = None
+try:
+    from matplotlib_rs.mpl_toolkits.mplot3d import Axes3D
+except Exception:
+    import warnings
+    warnings.warn("Unable to import Axes3D. This may be due to multiple versions of "
+                  "Matplotlib being installed (e.g. as a system package and as a pip "
+                  "package). As a result, the 3D projection is not available.")
+    Axes3D = None
 
 
 class ProjectionRegistry:

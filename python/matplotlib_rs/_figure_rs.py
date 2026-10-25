@@ -252,6 +252,7 @@ def _patch_figure(FigureBase, Figure, SubFigure):
         sfid = root._rs.new_subfigure(self.__dict__.get("_rs_sfid"))
         sf._rs_sfid = sfid
         root._rs.subfig_set_patch(sfid, sf.patch._h)
+        sf.patch._rs_native_in = True
         martist._DIRTY.add(sf.patch)
         owner_remove = sf._remove_method
 

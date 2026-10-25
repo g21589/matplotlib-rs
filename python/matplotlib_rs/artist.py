@@ -13,7 +13,7 @@ import warnings
 import numpy as np
 
 import matplotlib_rs as mpl
-from . import _api, cbook
+from . import _api, _mplrs, cbook
 from .path import Path
 from .transforms import (BboxBase, Bbox, IdentityTransform, Transform, TransformedBbox,
                          TransformedPatchPath, TransformedPath)
@@ -120,12 +120,25 @@ def _sync_dirty():
         items = list(_DIRTY)
         _DIRTY.clear()
         for a in items:
-            sync = getattr(a, "_rs_sync", None)
-            if sync is not None:
-                sync()
+            # move the artist between native and Python drawing first; the
+            # state of artists drawn by Python is not mirrored
             switch = a.__dict__.get("_rs_switch")
             if switch is not None:
                 switch(a)
+            native = a.__dict__.get("_rs_native_in")
+            if native is False:
+                continue
+            if (native is None and not isinstance(a, _RsOwned)
+                    and isinstance(a.__dict__.get("_h"), _PLAIN_HANDLES)):
+                continue  # never handed to the Rust model
+            sync = getattr(a, "_rs_sync", None)
+            if sync is not None:
+                sync()
+
+
+# Rust twins of plain lines, texts and patches: only those given to the Rust
+# model (flagged by ``_rs_native_in``) need their state mirrored.
+_PLAIN_HANDLES = (_mplrs.Line2D, _mplrs.Text, _mplrs.Patch)
 
 
 def _rs_base_props(a, d):

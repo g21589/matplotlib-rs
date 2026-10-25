@@ -34,6 +34,14 @@ class _FlushBbox(mtransforms.Bbox):
         return super().invalidate()
 
 
+# methods whose overrides decide an artist's geometry, and the modules whose
+# artists keep it up to date by marking themselves stale
+_GEOMETRY_METHODS = ("get_path", "get_patch_transform", "get_xydata", "recache",
+                     "_get_transformed_path", "get_text", "get_window_extent")
+_CORE_MODULES = {"matplotlib_rs.lines", "matplotlib_rs.patches", "matplotlib_rs.text",
+                 "matplotlib_rs.artist"}
+
+
 def _rs_native(a):
     """Whether the Rust core draws *a* itself (instead of ``a.draw``)."""
     h = a.__dict__.get("_h")
@@ -53,6 +61,12 @@ def _rs_native(a):
     # subclasses computing their transform at draw time (e.g. axline's)
     if cls.draw is not base.draw or cls.get_transform is not base.get_transform:
         return False
+    # subclasses from elsewhere may compute their geometry when drawn (e.g.
+    # the connectors of mpl_toolkits' mark_inset)
+    for name in _GEOMETRY_METHODS:
+        m = getattr(cls, name, None)
+        if m is not None and getattr(m, "__module__", None) not in _CORE_MODULES:
+            return False
     if a.get_path_effects() or a.get_agg_filter() is not None or a.get_rasterized():
         return False
     return True
@@ -138,8 +152,8 @@ def _rs_switch_child(axref, a):
         a._rs_native_in = native
 
 
-def _rs_attr(name, push):
-    """An attribute whose value is also pushed to the Rust axes."""
+def _rs_attr(name):
+    """An attribute mirrored into the Rust axes (by ``_rs_sync``)."""
     key = "_rs_attr_" + name
 
     def getter(self):
@@ -147,22 +161,38 @@ def _rs_attr(name, push):
 
     def setter(self, v):
         self.__dict__[key] = v
-        rs = self.__dict__.get("_rs")
-        if rs is not None:
-            push(rs, v)
+        martist._DIRTY.add(self)
 
     return property(getter, setter)
 
 
 def _rs_py_drawn(ax):
-    """Whether *ax* is drawn by matplotlib's Python code (non-rectilinear
-    projections: polar, geo) rather than by the Rust core."""
-    return ax.name != "rectilinear"
+    """Whether *ax* is drawn by matplotlib's Python code rather than by the
+    Rust core: non-rectilinear projections (polar, geo, 3d) and axes with
+    their own children (mpl_toolkits.axisartist)."""
+    from ._base import _AxesBase
+    return ax.name != "rectilinear" or type(ax).get_children is not _AxesBase.get_children
 
 
 def _patch_axes_base(cls):
     orig_draw = cls.draw
     orig_set_figure = cls.set_figure
+    orig_init_axis = cls._init_axis
+
+    def _init_axis(self):
+        if not _rs_py_drawn(self):
+            return orig_init_axis(self)
+        # axes drawn by Python use matplotlib's own Axis (see _axis_py.py)
+        from .. import _axis_py
+        self.xaxis = _axis_py.XAxis(self, clear=False)
+        self.spines.bottom.register_axis(self.xaxis)
+        self.spines.top.register_axis(self.xaxis)
+        self.yaxis = _axis_py.YAxis(self, clear=False)
+        self.spines.left.register_axis(self.yaxis)
+        self.spines.right.register_axis(self.yaxis)
+
+    _init_axis.__doc__ = orig_init_axis.__doc__
+    cls._init_axis = _init_axis
     orig_set_lim_and_transforms = cls._set_lim_and_transforms
     orig_clear = cls._AxesBase__clear
     orig_gen_axes_patch = cls._gen_axes_patch
@@ -219,6 +249,7 @@ def _patch_axes_base(cls):
         for loc, t in (("center", self.title), ("left", self._left_title),
                        ("right", self._right_title)):
             rs.set_title_handle(loc, t._h)
+            t._rs_native_in = True
         # matplotlib sets the spine positions when it creates the first
         # ticks; the Rust core creates the ticks itself.
         if not _rs_py_drawn(self):
@@ -240,7 +271,9 @@ def _patch_axes_base(cls):
         self._rs.mirror_state(
             tuple(map(float, p.extents)), tuple(map(float, o.extents)),
             tuple(map(float, v.extents)), tuple(map(float, d.extents)),
-            (float(mp[0]), float(mp[1])), float(self.zorder), bool(self.get_visible()))
+            (float(mp[0]), float(mp[1])), float(self.zorder), bool(self.get_visible()),
+            bool(self.axison), bool(self._frameon),
+            None if self._autotitlepos is None else bool(self._autotitlepos))
 
     cls._rs_sync = _rs_sync
 
@@ -302,10 +335,9 @@ def _patch_axes_base(cls):
     cls.legend_ = property(_get_legend_, _set_legend_)
 
     # -- plain attributes that the Rust axes needs ------------------------------
-    cls.axison = _rs_attr("axison", lambda rs, v: rs.set_axison(bool(v)))
-    cls._frameon = _rs_attr("frameon", lambda rs, v: rs.set_frameon(bool(v)))
-    cls._autotitlepos = _rs_attr(
-        "autotitlepos", lambda rs, v: rs.set_autotitlepos(None if v is None else bool(v)))
+    cls.axison = _rs_attr("axison")
+    cls._frameon = _rs_attr("frameon")
+    cls._autotitlepos = _rs_attr("autotitlepos")
 
     def __del__(self):
         rs = self.__dict__.get("_rs")
