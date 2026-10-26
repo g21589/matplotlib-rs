@@ -108,6 +108,8 @@ def main():
     scripts = sorted(glob.glob(os.path.join(a.gallery, "**", "*.py"), recursive=True))
     if a.patterns:
         scripts = [s for s in scripts if any(p in s for p in a.patterns)]
+    if not scripts:
+        ap.error("no gallery scripts matched")
     counts = {}
     tot = [0.0, 0.0]
     with cf.ThreadPoolExecutor(a.j) as ex:
@@ -118,7 +120,8 @@ def main():
                 tot[1] += tr
             print(f"{status:5s} {name:70s} {msg}", flush=True)
     print("summary:", counts, f"OK cases: mpl {tot[0]:.1f}s rs {tot[1]:.1f}s")
+    return 1 if counts.get("ERR", 0) or counts.get("DIFF", 0) else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

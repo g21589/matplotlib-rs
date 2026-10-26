@@ -4,13 +4,25 @@ build-backend = "maturin"
 
 [project]
 name = "matplotlib-rs"
-version = "0.1.0"
-description = "matplotlib reimplemented in Rust: pixel-identical output, much faster, drop-in pyplot API"
-requires-python = ">=3.9"
-dependencies = ["numpy>=1.23"]
+version = "0.0.1"
+description = "A Rust rendering core with a Matplotlib-compatible Python API"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.25",
+    "contourpy>=1.0.1",
+    "cycler>=0.10",
+    "fonttools>=4.28.2",
+    "kiwisolver>=1.3.1",
+    "packaging>=20.0",
+    "pillow>=9",
+    "pyparsing>=3",
+    "python-dateutil>=2.7",
+]
 license = { text = "PSF-2.0" }
 
 [tool.maturin]
 python-source = "python"
 module-name = "matplotlib_rs._mplrs"
 features = ["pyo3/extension-module"]
+include = ["licenses/*", "docs/releases/*.md"]

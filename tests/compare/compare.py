@@ -79,6 +79,8 @@ def main():
             r = compare_images(os.path.join(dm, img), pr)
             if r:
                 problems.append(f"{img}: {r}")
+        extras = set(os.listdir(dr)) - set(os.listdir(dm))
+        problems.extend(f"{name}: extra output" for name in sorted(extras))
         for f in sorted(glob.glob(os.path.join(dm, "*"))):
             base = os.path.basename(f)
             if base.endswith(".png"):

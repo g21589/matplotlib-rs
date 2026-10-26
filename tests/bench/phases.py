@@ -2,6 +2,7 @@
 repeated savefig.  Usage: python phases.py mpl|rs"""
 import os
 import sys
+import tempfile
 import time
 
 t0 = time.perf_counter()
@@ -27,12 +28,14 @@ for i, ax in enumerate(axs.flat):
     ax.grid(True)
 fig.tight_layout()
 t2 = time.perf_counter()
-fig.savefig("/tmp/claude-0/phase.png")
+output = os.path.join(tempfile.gettempdir(), f"mplrs-phase-{os.getpid()}.png")
+fig.savefig(output)
 t3 = time.perf_counter()
 N = 10
 for k in range(N):
     axs[0, 0].set_title(f"frame {k}")
-    fig.savefig("/tmp/claude-0/phase.png")
+    fig.savefig(output)
 t4 = time.perf_counter()
+os.remove(output)
 print(f"{sys.argv[1]}: import {1e3*(t1-t0):7.1f} ms  build {1e3*(t2-t1):7.1f} ms  "
       f"first savefig {1e3*(t3-t2):7.1f} ms  later savefig {1e3*(t4-t3)/N:7.1f} ms")
