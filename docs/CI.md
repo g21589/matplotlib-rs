@@ -3,6 +3,7 @@
 ## 自動測試
 
 [CI workflow](../.github/workflows/ci.yml) 在 branch push、pull request、手動執行與 release 呼叫時啟動。
+同一分支／PR 的新版本會取消舊 CI；release 呼叫依 tag 分組，不會被 branch CI 取消。
 Linux x86_64／Ubuntu 24.04，Python 3.11、3.12、3.13 分別建置 release extension，執行：
 
 - Python／Cargo／lockfile 版本檢查。

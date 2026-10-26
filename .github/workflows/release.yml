@@ -105,7 +105,10 @@ jobs:
           python -m pip install -r requirements-ci.txt
           mkdir -p "$RUNNER_TEMP/baseline-source" "$RUNNER_TEMP/baseline-wheel"
           git archive v0.0.1 | tar -x -C "$RUNNER_TEMP/baseline-source"
-          maturin build --manifest-path "$RUNNER_TEMP/baseline-source/Cargo.toml" --release --locked --interpreter python --out "$RUNNER_TEMP/baseline-wheel"
+          (
+            cd "$RUNNER_TEMP/baseline-source"
+            maturin build --release --locked --interpreter python --out "$RUNNER_TEMP/baseline-wheel"
+          )
           sh scripts/dev_build.sh --locked
       - name: Require identical 5,400-boxplot output and at least 10x faster build
         shell: bash
