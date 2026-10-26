@@ -22,9 +22,10 @@ python -m pip install .
 ```
 
 pip 會透過 maturin 編譯 Rust extension 並安裝所需 Python 依賴。
-也可從 [Releases](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.1)
-下載符合 Python 與平台的 wheel，再執行 `python -m pip install /path/to/matplotlib_rs-0.0.1-*.whl`。
-本次提供的 wheel 適用 CPython 3.12、Linux x86_64、glibc 2.35 以上；其他環境請從原始碼建置。
+本次 [Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.1) 提供原始碼下載。
+預編譯 wheel 已建置與驗證，但 GitHub 附件上傳受限，尚未附至發行頁；目前請從原始碼安裝。
+該 wheel 適用 CPython 3.12、Linux x86_64、glibc 2.35 以上，取得檔案後可執行
+`python -m pip install /path/to/matplotlib_rs-0.0.1-*.whl`。
 此版本尚未發布至 PyPI。
 
 ## 基本使用
