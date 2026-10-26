@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "matplotlib-rs"
-version = "0.0.1"
+version = "0.0.2"
 description = "A Rust rendering core with a Matplotlib-compatible Python API"
 readme = "README.md"
 requires-python = ">=3.11"

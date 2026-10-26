@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Python ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12', '3.13']
+    env:
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-py${{ matrix.python }}
+          workspaces: |
+            . -> target
+            . -> target/rust-tests
+      - name: Install fonts, Ghostscript and Python dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ghostscript fonts-dejavu-core fonts-urw-base35 fonts-lmodern fonts-inter fonts-thai-tlwg fonts-unifont
+          python -m pip install -r requirements-ci.txt
+      - name: Check versions and build extension
+        run: |
+          python scripts/check_version.py
+          sh scripts/dev_build.sh --locked
+      - name: Rust tests and doctests
+        run: sh scripts/test_rust.sh
+      - name: Python, renderer, fonts, model and four output formats
+        run: bash scripts/ci_test.sh
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-py${{ matrix.python }}
+          path: tests/output/ci
+          if-no-files-found: warn
+          retention-days: 14
