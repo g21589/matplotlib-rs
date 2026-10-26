@@ -4898,6 +4898,34 @@ or pandas.DataFrame
         elif len(capwidths) != N:
             raise ValueError(datashape_message.format("capwidths"))
 
+        # Reuse validated styles and update limits once for numeric native axes.
+        # All components still have independent Python artists and Rust handles.
+        from ._boxplot import _BoxplotArtists
+        line_styles = [whisker_kw, median_kw]
+        if showcaps:
+            line_styles.append(cap_kw)
+        if showfliers:
+            line_styles.append(flier_kw)
+        if showmeans:
+            line_styles.append(mean_kw)
+        if showbox and not patch_artist:
+            line_styles.append(box_kw)
+        # bxp assigns these labels before creating its component artists.
+        for kw in (whisker_kw, cap_kw, flier_kw):
+            kw.setdefault('label', '_nolegend_')
+        if showbox:
+            median_kw.setdefault('label', '_nolegend_')
+        fast = _BoxplotArtists.create(
+            self, bxpstats, line_styles, box_kw if showbox and patch_artist else None)
+        if fast is not None:
+            def do_plot(xs, ys, **kwargs):
+                x, y = [xs, ys][maybe_swap]
+                return fast.line(x, y, kwargs)
+
+            def do_patch(xs, ys, **kwargs):
+                x, y = [xs, ys][maybe_swap]
+                return fast.patch(x, y)
+
         for pos, width, stats, capwidth in zip(positions, widths, bxpstats,
                                                capwidths):
             # try to find a new label
@@ -4967,6 +4995,9 @@ or pandas.DataFrame
                 flier_x = np.full(len(stats['fliers']), pos, dtype=np.float64)
                 flier_y = stats['fliers']
                 fliers.append(do_plot(flier_x, flier_y, **flier_kw))
+
+        if fast is not None:
+            fast.finish()
 
         # Set legend labels
         if label:

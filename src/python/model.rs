@@ -405,6 +405,13 @@ impl PyLine2D {
         }
         Ok(())
     }
+
+    /// Copy a validated style while giving the new artist independent data.
+    fn copy_with_data(&self, x: &Bound<'_, PyAny>, y: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let mut line = self.inner.lk().clone();
+        line.set_data(f64_vec(x)?, f64_vec(y)?);
+        Ok(Self { inner: shared(line) })
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -473,6 +473,15 @@ impl PyPatch {
         Ok(())
     }
 
+    /// Copy a PathPatch's style with independent replacement geometry.
+    fn copy_with_path(&self, verts: Vec<[f64; 2]>, codes: Option<Vec<u8>>) -> Self {
+        let mut patch = self.lk().clone();
+        patch.kind = PatchKind::Generic {
+            path: path_from_parts(verts, codes), patch_transform: None,
+        };
+        Self { inner: shared(patch) }
+    }
+
     fn get<'py>(&self, py: Python<'py>, name: &str) -> PyResult<Bound<'py, PyAny>> {
         patch_get(py, &self.lk(), name)
     }

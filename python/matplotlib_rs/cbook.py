@@ -11,6 +11,7 @@ import functools
 import gzip
 import itertools
 import math
+import numbers
 import operator
 import os
 from pathlib import Path
@@ -1177,6 +1178,40 @@ def _broadcast_with_masks(*args, compress=False):
     return inputs
 
 
+def _boxplot_stats_dense(X, whis, labels):
+    """The regular finite float64 case, with the same per-column arithmetic.
+
+    Keep each sample contiguous so mean/percentile use the same reduction
+    and interpolation order as the individual 1-D arrays in boxplot_stats.
+    """
+    columns = np.ascontiguousarray(X.T)
+    ncols, nsamples = columns.shape
+    if labels is not None and len(labels) != ncols:
+        raise ValueError(f"The number of labels ({len(labels)}) must match the"
+                         f" number of columns ({ncols}).")
+    q1, med, q3 = np.percentile(columns, [25, 50, 75], axis=1)
+    means = np.mean(columns, axis=1)
+    iqr = q3 - q1
+    delta = 1.57 * iqr / np.sqrt(nsamples)
+    cilo, cihi = med - delta, med + delta
+    loval, hival = q1 - whis * iqr, q3 + whis * iqr
+    lo = np.min(columns, axis=1, where=columns >= loval[:, None], initial=np.inf)
+    hi = np.max(columns, axis=1, where=columns <= hival[:, None], initial=-np.inf)
+    lo = np.where((lo == np.inf) | (lo > q1), q1, lo)
+    hi = np.where((hi == -np.inf) | (hi < q3), q3, hi)
+    result = []
+    for i, x in enumerate(columns):
+        stats = {}
+        if labels is not None and labels[i] is not None:
+            stats['label'] = labels[i]
+        stats.update(mean=means[i], iqr=iqr[i], cilo=cilo[i], cihi=cihi[i],
+                     whishi=hi[i], whislo=lo[i],
+                     fliers=np.concatenate([x[x < lo[i]], x[x > hi[i]]]),
+                     q1=q1[i], med=med[i], q3=q3[i])
+        result.append(stats)
+    return result
+
+
 def boxplot_stats(X, whis=1.5, bootstrap=None, labels=None, autorange=False):
     r"""
     Return a list of dictionaries of statistics used to draw a series of box
@@ -1255,6 +1290,12 @@ def boxplot_stats(X, whis=1.5, bootstrap=None, labels=None, autorange=False):
     McGill, R., Tukey, J.W., and Larsen, W.A. (1978) "Variations of
     Boxplots", The American Statistician, 32:12-16.
     """
+
+    if (type(X) is np.ndarray and X.ndim == 2 and X.dtype == np.float64
+            and X.shape[0] and X.shape[1] > 1 and bootstrap is None
+            and not autorange and isinstance(whis, numbers.Real)
+            and np.isfinite(X).all()):
+        return _boxplot_stats_dense(X, whis, labels)
 
     def _bootstrap_median(data, N=5000):
         # determine 95% confidence intervals of the median

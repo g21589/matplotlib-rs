@@ -1,0 +1,581 @@
+{
+  "baseline_wheel": "matplotlib_rs-0.0.1-cp312-cp312-manylinux_2_35_x86_64.whl",
+  "baseline_sha256": "9de42ef870e7c71651bd25b8a6d8320ef9eed919bce04b94c32f5e0ffa584da6",
+  "benchmark_sha256": "6c8b7a91ae100e15d63045ee11b95ce8b9d6523055e5d549b1015b8a6def9fe2",
+  "parameters": {
+    "groups": 30,
+    "boxes": 180,
+    "samples": 100,
+    "seed": 20261026,
+    "rounds": 5,
+    "warmups": 1,
+    "redraws": 2,
+    "dpi": 100,
+    "width": 36,
+    "height": 12,
+    "timeout": 300
+  },
+  "warmups": [
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "warmup-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 595.80859375,
+      "seconds": {
+        "import": 1.0185445710003478,
+        "build": 25.310553737999726,
+        "first_draw": 0.28869673400004103,
+        "build_and_first_draw": 25.599250471999767,
+        "redraw": 0.21682956999939051,
+        "save_png": 0.2863316760003727
+      },
+      "cpu_seconds": {
+        "build": 25.305570049,
+        "first_draw": 0.28257685999999893,
+        "build_and_first_draw": 25.588146909,
+        "redraw": 0.2168210135000006,
+        "save_png": 0.2863387579999994
+      },
+      "redraw_seconds": [
+        0.2192259039993587,
+        0.21443323599942232
+      ],
+      "round": "warmup-before",
+      "variant": "before"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "warmup-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.8828125,
+      "seconds": {
+        "import": 0.40999951399953716,
+        "build": 1.6664694330002021,
+        "first_draw": 0.36762978800015844,
+        "build_and_first_draw": 2.0340992210003606,
+        "redraw": 0.2904681300001357,
+        "save_png": 0.3356636859998616
+      },
+      "cpu_seconds": {
+        "build": 1.653219586,
+        "first_draw": 0.3591592939999999,
+        "build_and_first_draw": 2.01237888,
+        "redraw": 0.28932220799999997,
+        "save_png": 0.3356467669999996
+      },
+      "redraw_seconds": [
+        0.3185256409997237,
+        0.26241061900054774
+      ],
+      "round": "warmup-after",
+      "variant": "after"
+    }
+  ],
+  "runs": [
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-01-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.71484375,
+      "seconds": {
+        "import": 0.5198789890000626,
+        "build": 3.136808619000476,
+        "first_draw": 0.2845190789994376,
+        "build_and_first_draw": 3.4213276979999137,
+        "redraw": 0.23327895349984828,
+        "save_png": 0.7282858070002476
+      },
+      "cpu_seconds": {
+        "build": 3.109548522,
+        "first_draw": 0.28133163500000036,
+        "build_and_first_draw": 3.3908801570000002,
+        "redraw": 0.23327857549999997,
+        "save_png": 0.7275680900000001
+      },
+      "redraw_seconds": [
+        0.2571039409995137,
+        0.20945396600018285
+      ],
+      "round": "round-01-after",
+      "variant": "after"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-01-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 593.44140625,
+      "seconds": {
+        "import": 0.5294390609997208,
+        "build": 39.1205107349997,
+        "first_draw": 0.38546804300040094,
+        "build_and_first_draw": 39.5059787780001,
+        "redraw": 0.29301802800000587,
+        "save_png": 0.3264026120004928
+      },
+      "cpu_seconds": {
+        "build": 39.019569564,
+        "first_draw": 0.3799077009999934,
+        "build_and_first_draw": 39.399477264999994,
+        "redraw": 0.2930208725000014,
+        "save_png": 0.3264003580000008
+      },
+      "redraw_seconds": [
+        0.3070266590002575,
+        0.27900939699975424
+      ],
+      "round": "round-01-before",
+      "variant": "before"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-02-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 593.6015625,
+      "seconds": {
+        "import": 0.34794949799925234,
+        "build": 27.073887232000743,
+        "first_draw": 0.4122108299998217,
+        "build_and_first_draw": 27.486098062000565,
+        "redraw": 0.2830560219999825,
+        "save_png": 0.30204684999989695
+      },
+      "cpu_seconds": {
+        "build": 27.054240504,
+        "first_draw": 0.4023674789999987,
+        "build_and_first_draw": 27.456607982999998,
+        "redraw": 0.2830286314999988,
+        "save_png": 0.3020474369999988
+      },
+      "redraw_seconds": [
+        0.31893713299996307,
+        0.24717491100000188
+      ],
+      "round": "round-02-before",
+      "variant": "before"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-02-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.859375,
+      "seconds": {
+        "import": 0.3449402830001418,
+        "build": 1.1048845810000785,
+        "first_draw": 0.2642119250003816,
+        "build_and_first_draw": 1.36909650600046,
+        "redraw": 0.24644988950012703,
+        "save_png": 0.270192302000396
+      },
+      "cpu_seconds": {
+        "build": 1.101991081,
+        "first_draw": 0.259943292,
+        "build_and_first_draw": 1.361934373,
+        "redraw": 0.24565582649999984,
+        "save_png": 0.269896036
+      },
+      "redraw_seconds": [
+        0.25761085100020864,
+        0.23528892800004542
+      ],
+      "round": "round-02-after",
+      "variant": "after"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-03-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.890625,
+      "seconds": {
+        "import": 0.3680182980006066,
+        "build": 1.4582390779996786,
+        "first_draw": 0.32068672700006573,
+        "build_and_first_draw": 1.7789258049997443,
+        "redraw": 0.2296857269998327,
+        "save_png": 0.29590959699999075
+      },
+      "cpu_seconds": {
+        "build": 1.4569533800000003,
+        "first_draw": 0.31368912500000024,
+        "build_and_first_draw": 1.7706425050000005,
+        "redraw": 0.22964648650000008,
+        "save_png": 0.2958824999999998
+      },
+      "redraw_seconds": [
+        0.22695045199998276,
+        0.23242100199968263
+      ],
+      "round": "round-03-after",
+      "variant": "after"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-03-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 593.91015625,
+      "seconds": {
+        "import": 0.35253126099996734,
+        "build": 36.6005592649999,
+        "first_draw": 0.4467290269994919,
+        "build_and_first_draw": 37.04728829199939,
+        "redraw": 0.31907802000023366,
+        "save_png": 0.33924631599984423
+      },
+      "cpu_seconds": {
+        "build": 36.325432334,
+        "first_draw": 0.4386846530000028,
+        "build_and_first_draw": 36.764116987,
+        "redraw": 0.31905397950000136,
+        "save_png": 0.3392448150000007
+      },
+      "redraw_seconds": [
+        0.31437188600011723,
+        0.3237841540003501
+      ],
+      "round": "round-03-before",
+      "variant": "before"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-04-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 593.8515625,
+      "seconds": {
+        "import": 0.3424130640005387,
+        "build": 28.721693143000266,
+        "first_draw": 0.2547794519996387,
+        "build_and_first_draw": 28.976472594999905,
+        "redraw": 0.20670549050009868,
+        "save_png": 0.2417083749996891
+      },
+      "cpu_seconds": {
+        "build": 28.715918158,
+        "first_draw": 0.24743617599999723,
+        "build_and_first_draw": 28.963354333999998,
+        "redraw": 0.20647515599999977,
+        "save_png": 0.24171498599999808
+      },
+      "redraw_seconds": [
+        0.21046180600023945,
+        0.2029491749999579
+      ],
+      "round": "round-04-before",
+      "variant": "before"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-04-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.89453125,
+      "seconds": {
+        "import": 0.38618941599997925,
+        "build": 1.8569829110001592,
+        "first_draw": 0.24394036600006075,
+        "build_and_first_draw": 2.10092327700022,
+        "redraw": 0.22533491200010758,
+        "save_png": 0.5074919609996869
+      },
+      "cpu_seconds": {
+        "build": 1.8123163240000002,
+        "first_draw": 0.24050959999999977,
+        "build_and_first_draw": 2.052825924,
+        "redraw": 0.22533649899999997,
+        "save_png": 0.5074794890000001
+      },
+      "redraw_seconds": [
+        0.21229487399978098,
+        0.23837495000043418
+      ],
+      "round": "round-04-after",
+      "variant": "after"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-05-after-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 266.9375,
+      "seconds": {
+        "import": 0.48197591600001033,
+        "build": 1.413387980999687,
+        "first_draw": 0.2497977089997221,
+        "build_and_first_draw": 1.663185689999409,
+        "redraw": 0.21597766099966975,
+        "save_png": 0.24831835399982083
+      },
+      "cpu_seconds": {
+        "build": 1.4133698399999999,
+        "first_draw": 0.24467160199999993,
+        "build_and_first_draw": 1.6580414419999998,
+        "redraw": 0.21597382349999994,
+        "save_png": 0.2483243850000001
+      },
+      "redraw_seconds": [
+        0.21444773199982592,
+        0.21750758999951358
+      ],
+      "round": "round-05-after",
+      "variant": "after"
+    },
+    {
+      "impl": "rs",
+      "matplotlib_api_version": "3.11.2",
+      "numpy_version": "2.3.5",
+      "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+      "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+      "image": "round-05-before-rs.png",
+      "shape": [
+        1200,
+        3600,
+        4
+      ],
+      "box_count": 5400,
+      "line_count": 32400,
+      "peak_rss_mib": 593.57421875,
+      "seconds": {
+        "import": 0.5120606569998927,
+        "build": 37.04448799700003,
+        "first_draw": 0.2712560649997613,
+        "build_and_first_draw": 37.315744061999794,
+        "redraw": 0.2480129324999325,
+        "save_png": 0.28165388999968854
+      },
+      "cpu_seconds": {
+        "build": 36.716316814,
+        "first_draw": 0.26596166400000243,
+        "build_and_first_draw": 36.982278478000005,
+        "redraw": 0.24796122149999889,
+        "save_png": 0.2816612190000001
+      },
+      "redraw_seconds": [
+        0.24816748800003552,
+        0.2478583769998295
+      ],
+      "round": "round-05-before",
+      "variant": "before"
+    }
+  ],
+  "summary": {
+    "before": {
+      "import": {
+        "median": 0.35253126099996734,
+        "min": 0.3424130640005387,
+        "max": 0.5294390609997208
+      },
+      "build": {
+        "median": 36.6005592649999,
+        "min": 27.073887232000743,
+        "max": 39.1205107349997
+      },
+      "first_draw": {
+        "median": 0.38546804300040094,
+        "min": 0.2547794519996387,
+        "max": 0.4467290269994919
+      },
+      "build_and_first_draw": {
+        "median": 37.04728829199939,
+        "min": 27.486098062000565,
+        "max": 39.5059787780001
+      },
+      "redraw": {
+        "median": 0.2830560219999825,
+        "min": 0.20670549050009868,
+        "max": 0.31907802000023366
+      },
+      "save_png": {
+        "median": 0.30204684999989695,
+        "min": 0.2417083749996891,
+        "max": 0.33924631599984423
+      },
+      "peak_rss_mib": 593.6015625
+    },
+    "after": {
+      "import": {
+        "median": 0.38618941599997925,
+        "min": 0.3449402830001418,
+        "max": 0.5198789890000626
+      },
+      "build": {
+        "median": 1.4582390779996786,
+        "min": 1.1048845810000785,
+        "max": 3.136808619000476
+      },
+      "first_draw": {
+        "median": 0.2642119250003816,
+        "min": 0.24394036600006075,
+        "max": 0.32068672700006573
+      },
+      "build_and_first_draw": {
+        "median": 1.7789258049997443,
+        "min": 1.36909650600046,
+        "max": 3.4213276979999137
+      },
+      "redraw": {
+        "median": 0.2296857269998327,
+        "min": 0.21597766099966975,
+        "max": 0.24644988950012703
+      },
+      "save_png": {
+        "median": 0.29590959699999075,
+        "min": 0.24831835399982083,
+        "max": 0.7282858070002476
+      },
+      "peak_rss_mib": 266.890625
+    }
+  },
+  "build_speedup": 25.099148567055455,
+  "all_rgba_identical": true,
+  "paired_build_speedups": [
+    12.47143689227212,
+    24.50381487584432,
+    25.099148567055455,
+    15.466859157864272,
+    26.20970921996841
+  ],
+  "source_sha256": {
+    "python/matplotlib_rs/axes/_boxplot.py": "a7bd7cae874ee557f4ff5359d9d98049366550572916291659b0d850b0307611",
+    "python/matplotlib_rs/axes/_axes.py": "80904404b3ba4952c418a9783512f9df17dcaa382bc385903774a19ef9836e35",
+    "python/matplotlib_rs/cbook.py": "47ac31752dbb54b6e27e960c02596df06252326e7572270699d9ead8cc49132a",
+    "src/python/model.rs": "be7f843bb61056a274013343b986cafb575c643b53b96cd5733ba097c5b5fb6d",
+    "src/python/api.rs": "ff6e7f80d20cb8f1476a43e4a67d559926a08be8db3d7aba28d2bb1f3dc7ea33",
+    "tests/bench/boxplots.py": "6c8b7a91ae100e15d63045ee11b95ce8b9d6523055e5d549b1015b8a6def9fe2",
+    "tests/bench/boxplot_build_compare.py": "5835b3ad133462886bacaaa51bd4292218d141bc340b663c959ed475b7149195"
+  },
+  "png_different_pixels": 0,
+  "validation": {
+    "rust_unit_tests_passed": 1,
+    "rust_doctests": 0,
+    "python_unit_scripts_passed": 4,
+    "lowlevel_scripts_passed": 4,
+    "model_scripts_passed": 1,
+    "png_cases_identical": 58,
+    "png_files_identical": 74,
+    "svg_files_identical": 71,
+    "pdf_files_identical": 71,
+    "eps_files_identical": 70,
+    "eps_files_total": 71,
+    "unchanged_vector_difference": "polar_more.eps",
+    "official_boxplot_gallery_cases_identical": 6
+  },
+  "environment": {
+    "date": "2026-10-26",
+    "os": "Linux x86_64, glibc 2.41",
+    "cpu": "Intel Xeon Platinum 8573C; container quota 2 CPUs",
+    "python": "3.12.14",
+    "numpy": "2.3.5",
+    "pillow": "13.0.0",
+    "rust": "1.99.1",
+    "maturin": "1.15.0",
+    "reference_matplotlib": "3.11.2",
+    "build": "release, opt-level=3, fat LTO, codegen-units=1"
+  },
+  "note": "Measured before the 0.0.2 version bump. Image names identify original worker outputs; raw images are attached separately by the release performance workflow."
+}
