@@ -4197,6 +4197,25 @@ class FancyBboxPatch(Patch):
             if isinstance(boxstyle, str) else boxstyle)
         self.stale = True
 
+    def _rs_boxstyle_spec(self):
+        """The box style as the Rust core parses it, or None if it is not a
+        builtin style."""
+        bs = self._bbox_transmuter
+        name = {BoxStyle.Square: "square", BoxStyle.Circle: "circle",
+                BoxStyle.Ellipse: "ellipse", BoxStyle.RArrow: "rarrow",
+                BoxStyle.LArrow: "larrow", BoxStyle.DArrow: "darrow",
+                BoxStyle.Round: "round", BoxStyle.Round4: "round4",
+                BoxStyle.Sawtooth: "sawtooth",
+                BoxStyle.Roundtooth: "roundtooth"}.get(type(bs))
+        if name is None:
+            return None
+        kw = [name]
+        for attr in ("pad", "rounding_size", "tooth_size", "head_width", "head_angle"):
+            v = getattr(bs, attr, None)
+            if v is not None:
+                kw.append(f"{attr}={float(v)!r}")
+        return ",".join(kw)
+
     def get_boxstyle(self):
         """Return the boxstyle object."""
         return self._bbox_transmuter

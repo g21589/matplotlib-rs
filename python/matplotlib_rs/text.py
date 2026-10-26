@@ -402,7 +402,7 @@ class Text(Artist):
         bp = self._bbox_patch
         if bp is not None:
             bp._rs_sync()
-            d["bbox"] = bp._h
+            d["bbox"] = (bp._h, bp._rs_boxstyle_spec())
         else:
             d["bbox"] = None
         return d

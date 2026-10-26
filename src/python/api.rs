@@ -111,11 +111,20 @@ fn text_set(t: &mut Text, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         "transform_rotates_text" => t.transform_rotates_text = v.extract()?,
         "url" => t.url = v.extract()?,
         "bbox" => {
+            // None, a patch, or (patch, box style): with a box style, the
+            // text sizes the box when drawn
             if v.is_none() {
                 t.bbox_patch = None;
             } else {
-                let p = v.cast::<PyPatch>()?;
-                let patch = p.borrow().inner.lk().clone();
+                let (p, spec) = match v.cast::<PyTuple>() {
+                    Ok(tp) => (tp.get_item(0)?, tp.get_item(1)?.extract::<Option<String>>()?),
+                    Err(_) => (v.clone(), None),
+                };
+                let mut patch = p.cast::<PyPatch>()?.borrow().inner.lk().clone();
+                if let Some(spec) = spec {
+                    let boxstyle = BoxStyle::parse(&spec).ok_or_else(|| PyValueError::new_err(format!("unknown boxstyle {spec}")))?;
+                    patch.kind = PatchKind::FancyBbox { x: 0.0, y: 0.0, width: 1.0, height: 1.0, boxstyle };
+                }
                 t.bbox_patch = Some(Box::new(crate::mpl::text::TextBbox { patch, pad: 0.0 }));
             }
         }
