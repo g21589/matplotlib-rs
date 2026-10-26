@@ -427,6 +427,10 @@ class RendererPS(_backend_pdf_ps.RendererPDFPSBase):
         self._hatches = {}
         self.image_magnification = imagedpi / 72
         self._clip_paths = {}
+        # Clip transforms may be temporary affine objects. Keep them alive
+        # while their ids are cache keys, so a later transform cannot reuse
+        # an address and silently select an unrelated clipping region.
+        self._clip_path_transforms = {}
         self._path_collection_id = 0
 
         self._character_tracker = _backend_pdf_ps.CharacterTracker(
@@ -575,6 +579,7 @@ newpath
 }} bind def
 """)
                 self._clip_paths[key] = custom_clip_cmd
+                self._clip_path_transforms[key] = trf
             clip.append(f"{custom_clip_cmd}\n")
         return "".join(clip)
 

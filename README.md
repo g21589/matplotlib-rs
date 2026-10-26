@@ -94,11 +94,13 @@ PNG 以 RGBA 像素完全一致為通過條件；SVG／PDF／EPS 比對固定時
 
 0.0.2 另加入箱形圖統計與可變物件的回歸測試，以及 1 個包含 5 張 PNG 的繪圖案例。
 本機重跑後，58／58 案例、74／74 張 PNG、SVG 71／71、PDF 71／71 完全一致；
-EPS 為 70／71，保留以下既有差異。另重跑 6 個官方 boxplot gallery，全部逐像素一致。
+EPS 修正裁切快取生命週期、穩定參考端後為 71／71 內容一致。
+另重跑 6 個官方 boxplot gallery，全部逐像素一致。
 上表 581 支完整 gallery 的數字屬於 0.0.1，0.0.2 未重新執行全部官方 gallery。
 
-`polar_more.eps` 的裁切路徑快取定義不同；以 Ghostscript 10.05.1 轉為 100 DPI PNG 後，像素完全一致。
-原始 EPS 內容比較仍記為失敗，不因這項額外檢查改為通過。
+0.0.1 的 `polar_more.eps` 裁切路徑快取定義有差異，當時的 Ghostscript 轉圖像素一致，原始內容比較仍記為失敗。
+0.0.2 發現此快取也可能因臨時 transform 的位址重用而裁切錯誤，已修正；
+CI 比對時亦明確保留參考端 transform 的生命週期，詳見 [CI 說明](docs/CI.md)。
 官方 gallery 的全量結果與未通過案例另外列於驗證報告。
 
 完整結果與可重現命令見 [驗證報告](docs/releases/0.0.1.md)。
@@ -159,7 +161,7 @@ sh scripts/test_rust.sh
 for test in tests/unit/test_*.py tests/lowlevel/diff_*.py tests/model/first_plot.py; do
     python "$test" || exit 1
 done
-COMPARE_VECTOR=svg,pdf,eps python tests/compare/compare.py
+COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
 ```
 
 Rust 單元測試的 PyO3／libpython 連結方式、官方 gallery 的取得與執行方式，

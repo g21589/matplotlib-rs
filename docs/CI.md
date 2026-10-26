@@ -11,14 +11,15 @@ Linux x86_64／Ubuntu 24.04，Python 3.11、3.12、3.13 分別建置 release ext
 - 全部自有繪圖案例；PNG 逐像素一致，SVG／PDF／EPS 內容一致。
 
 參考版本與數值依賴固定於 [`requirements-ci.txt`](../requirements-ci.txt)。
-安裝 Ghostscript 與開源字型，避免 CFF 測試因找不到字型而空跑。
+安裝開源字型，避免 CFF 測試因找不到字型而空跑。
 字型數量依 runner 套件版本而異，測試記錄會保留實際比較數量。
 
-唯一例外為既有的 `polar_more/polar_more.eps` 裁切路徑快取定義差異：
-只允許這個明確檔名在內容不同時，以 Ghostscript 100 DPI 轉成 PNG 再逐像素比較。
-像素、其他檔案、執行錯誤與缺失輸出仍會讓 CI 失敗。
-此案例會明確顯示 `EQUIV`，不列入內容完全一致的數量。
-未傳入 `--rasterize-eps` 時，比較工具維持原有嚴格行為。
+0.0.2 修正 EPS 快取未保留臨時 affine transform、造成 Python 物件位址重用的問題。
+新增測試以同一路徑搭配 1,000 個不同裁切轉換，檢查命令與序列化幾何均獨立。
+Matplotlib 3.11.2 參考端也有相同問題，因此 CI 明確設定 `COMPARE_STABLE_EPS=1`：
+僅在參考比較行程保留原有 transform 的生命週期，不改動座標或繪圖命令。
+此設定會印於日誌；未設定時仍使用原始參考行為。
+全部 EPS 仍嚴格比較內容，沒有略過檔案或接受像素誤差。
 
 本機使用相同入口：
 

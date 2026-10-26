@@ -9,6 +9,6 @@ python scripts/check_version.py
 for test in tests/unit/test_*.py tests/lowlevel/diff_*.py tests/model/first_plot.py; do
     python -u "$test" 2>&1 | tee "tests/output/ci/$(basename "$test" .py).log"
 done
-COMPARE_VECTOR=svg,pdf,eps COMPARE_OUT="$PWD/tests/output/ci/compare" \
-    python -u tests/compare/compare.py --rasterize-eps polar_more/polar_more.eps \
+COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 COMPARE_OUT="$PWD/tests/output/ci/compare" \
+    python -u tests/compare/compare.py \
     2>&1 | tee tests/output/ci/compare.log

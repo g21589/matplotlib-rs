@@ -36,10 +36,10 @@ jobs:
           workspaces: |
             . -> target
             . -> target/rust-tests
-      - name: Install fonts, Ghostscript and Python dependencies
+      - name: Install fonts and Python dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ghostscript fonts-dejavu-core fonts-urw-base35 fonts-lmodern fonts-inter fonts-thai-tlwg fonts-unifont
+          sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+          sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 fonts-dejavu-core fonts-urw-base35 fonts-lmodern fonts-inter fonts-thai-tlwg fonts-unifont
           python -m pip install -r requirements-ci.txt
       - name: Check versions and build extension
         run: |

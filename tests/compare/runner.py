@@ -32,6 +32,23 @@ if vector:
     matplotlib.rcParams["svg.hashsalt"] = "compare"
     orig_savefig = mfigure.Figure.savefig
 
+    if "eps" in vector and impl == "mpl" and os.environ.get("COMPARE_STABLE_EPS") == "1":
+        # Matplotlib 3.11.2's PS cache keys temporary affine transforms by
+        # id without retaining them. Address reuse can clip with an unrelated
+        # region. Keep reference inputs alive for this comparison process;
+        # do not change any path coordinates, transforms or drawing commands.
+        from matplotlib.backend_bases import GraphicsContextBase
+        original_clip_path = GraphicsContextBase.get_clip_path
+        reference_clip_transforms = []
+
+        def stable_clip_path(self):
+            path, transform = original_clip_path(self)
+            if path is not None:
+                reference_clip_transforms.append(transform)
+            return path, transform
+
+        GraphicsContextBase.get_clip_path = stable_clip_path
+
     def savefig(self, fname, *args, **kwargs):
         ret = orig_savefig(self, fname, *args, **kwargs)
         if isinstance(fname, str) and fname.endswith(".png") and "format" not in kwargs:

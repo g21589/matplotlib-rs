@@ -5,12 +5,10 @@ Usage: python compare.py [case.py ...]   (default: all of cases/)
 Each case is run in its own process with both implementations; every image
 it saves must be pixel-identical.  Exit status 1 if any case differs.
 """
-import argparse
 import glob
 import os
 import subprocess
 import sys
-import tempfile
 
 import numpy as np
 from PIL import Image
@@ -49,35 +47,11 @@ def normalized(path):
     return b"\n".join(line for line in data.split(b"\n") if not line.startswith(b"%%Title:"))
 
 
-def compare_eps_pixels(a, b):
-    """Render an explicitly selected known EPS difference; fail on any pixel."""
-    with tempfile.TemporaryDirectory(prefix="mplrs-eps-") as directory:
-        images = []
-        for index, source in enumerate((a, b)):
-            dest = os.path.join(directory, f"{index}.png")
-            try:
-                subprocess.run([
-                    "gs", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dEPSCrop",
-                    "-sDEVICE=pngalpha", "-r100", f"-sOutputFile={dest}",
-                    os.path.abspath(source),
-                ], check=True, capture_output=True, timeout=60)
-            except (OSError, subprocess.SubprocessError) as exc:
-                return f"Ghostscript failed: {exc}"
-            images.append(dest)
-        return compare_images(*images)
-
-
 def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("cases", nargs="*")
-    parser.add_argument("--rasterize-eps", action="append", default=[], metavar="CASE/FILE.eps",
-                        help="accept this known EPS content difference only if Ghostscript pixels match")
-    args = parser.parse_args()
-    if any(not path.endswith(".eps") or "/" not in path for path in args.rasterize_eps):
-        parser.error("--rasterize-eps must name CASE/FILE.eps")
-    cases = args.cases or sorted(glob.glob(os.path.join(here, "cases", "*.py")))
+    cases = sys.argv[1:] or sorted(glob.glob(os.path.join(here, "cases", "*.py")))
+    if os.environ.get("COMPARE_STABLE_EPS") == "1":
+        print("Reference EPS: retaining temporary clip transforms to avoid upstream id-reuse bug; strict file comparison")
     failed = 0
-    raster_equivalent = 0
     tot = [0.0, 0.0]
     for case in cases:
         name = os.path.splitext(os.path.basename(case))[0]
@@ -97,7 +71,6 @@ def main():
         tot[1] += tr
         imgs = sorted(os.path.basename(p) for p in glob.glob(os.path.join(dm, "*.png")))
         problems = []
-        equivalents = []
         if not imgs:
             problems.append("no images")
         for img in imgs:
@@ -118,23 +91,13 @@ def main():
             if not os.path.exists(pr):
                 problems.append(f"{base}: missing")
             elif normalized(f) != normalized(pr):
-                if f"{name}/{base}" in args.rasterize_eps:
-                    difference = compare_eps_pixels(f, pr)
-                    if difference:
-                        problems.append(f"{base}: {difference}")
-                    else:
-                        equivalents.append(f"{base}: content differs; Ghostscript pixels identical")
-                else:
-                    problems.append(f"{base}: differs")
-        status = "DIFF" if problems else "EQUIV" if equivalents else "OK  "
+                problems.append(f"{base}: differs")
+        status = "OK  " if not problems else "DIFF"
         if problems:
             failed += 1
-        elif equivalents:
-            raster_equivalent += 1
         print(f"{name:30s} {status} mpl {tm*1000:8.1f} ms  rs {tr*1000:8.1f} ms  "
-              f"x{tm / tr if tr else 0:5.2f}  {'; '.join(problems + equivalents)}")
-    print(f"total: {len(cases) - failed - raster_equivalent}/{len(cases)} identical; "
-          f"{raster_equivalent} EPS raster-equivalent; {failed} failed; "
+              f"x{tm / tr if tr else 0:5.2f}  {'; '.join(problems)}")
+    print(f"total: {len(cases) - failed}/{len(cases)} identical; "
           f"mpl {tot[0]:.3f}s rs {tot[1]:.3f}s")
     sys.exit(1 if failed else 0)
 
