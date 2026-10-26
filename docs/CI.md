@@ -11,6 +11,7 @@ Linux x86_64／Ubuntu 24.04，Python 3.11、3.12、3.13 分別建置 release ext
 - 全部自有繪圖案例；PNG 逐像素一致，SVG／PDF／EPS 內容一致。
 
 參考版本與數值依賴固定於 [`requirements-ci.txt`](../requirements-ci.txt)。
+Python 3.11 使用相容的 ContourPy 1.3.3；Python 3.12 以上使用 1.4.0。
 安裝開源字型，避免 CFF 測試因找不到字型而空跑。
 字型數量依 runner 套件版本而異，測試記錄會保留實際比較數量。
 
