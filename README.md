@@ -7,7 +7,14 @@
 
 ## 安裝
 
-需要 Python 3.11 以上、Rust stable 工具鏈與本機 C linker。
+需要 Python 3.11 以上。Linux x86_64、glibc 2.28 以上、CPython 3.11～3.13 可直接安裝預編譯 wheel：
+
+```bash
+python -m pip install matplotlib-rs==0.0.2
+```
+
+套件已發布於 [PyPI](https://pypi.org/project/matplotlib-rs/0.0.2/)。
+從原始碼安裝另需 Rust stable 工具鏈與本機 C linker。
 本機實測環境為 Linux x86_64、CPython 3.12；CI 涵蓋 CPython 3.11～3.13。
 其他平台尚未驗證。
 
@@ -27,7 +34,8 @@ pip 會透過 maturin 編譯 Rust extension 並安裝所需 Python 依賴。
 執行 `python -m pip install /path/to/matplotlib_rs-0.0.2-*.whl`，不需自行編譯 Rust。
 發布流程建置 CPython 3.11／3.12／3.13、Linux x86_64、glibc 2.28 以上的 wheel，
 並附上 source distribution、效能原始紀錄與 `SHA256SUMS`。
-PyPI 發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
+PyPI 與 GitHub Release 使用完全相同的已測試套件。
+發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
 
 ## 基本使用
 

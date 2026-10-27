@@ -91,9 +91,10 @@ GitHub Release 流程使用 `GITHUB_TOKEN`，不需新增外部發布密鑰。
 # 只驗證既有 0.0.2，不上傳。
 gh workflow run publish-pypi.yml -f tag=v0.0.2 -f dry_run=true
 
-# Trusted Publisher 完成設定後，上傳同一組已驗證套件。
-gh workflow run publish-pypi.yml -f tag=v0.0.2 -f dry_run=false
+# 上傳尚未發布的新版本；將 vX.Y.Z 替換為實際的 GitHub Release tag。
+gh workflow run publish-pypi.yml -f tag=vX.Y.Z -f dry_run=false
 ```
 
-PyPI 版本發布完成後，可執行 `python -m pip install matplotlib-rs==0.0.2`。
+0.0.2 已發布至 [PyPI](https://pypi.org/project/matplotlib-rs/0.0.2/)，
+可執行 `python -m pip install matplotlib-rs==0.0.2`。
 PyPI 不允許覆寫已使用的檔名；請勿以重新建置的內容重傳相同版本。
