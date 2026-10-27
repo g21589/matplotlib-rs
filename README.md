@@ -27,7 +27,7 @@ pip 會透過 maturin 編譯 Rust extension 並安裝所需 Python 依賴。
 執行 `python -m pip install /path/to/matplotlib_rs-0.0.2-*.whl`，不需自行編譯 Rust。
 發布流程建置 CPython 3.11／3.12／3.13、Linux x86_64、glibc 2.28 以上的 wheel，
 並附上 source distribution、效能原始紀錄與 `SHA256SUMS`。
-此版本尚未發布至 PyPI。
+PyPI 發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
 
 ## 基本使用
 
@@ -181,7 +181,8 @@ GitHub Actions 在 push／PR 執行 Python 3.11～3.13 的 Rust、單元、底�
 推送 `vX.Y.Z` 標籤後，發布流程會檢查版本一致性、執行測試、建置 wheel 與 sdist、
 在乾淨環境驗證 wheel，並與 0.0.1 基準版交錯量測 5,400 個箱形圖。
 必須像素一致且建圖中位數至少加速 10 倍，才能發布 GitHub Release。
-完整流程與本機入口見 [CI／CD 說明](docs/CI.md)；不會自動發布到 PyPI。
+GitHub Release 成功後，PyPI 流程會沿用同一組已驗證的套件，以 Trusted Publishing 發布。
+完整流程、首次授權設定與本機入口見 [CI／CD 說明](docs/CI.md)。
 
 ## 授權
 

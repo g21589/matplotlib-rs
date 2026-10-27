@@ -60,5 +60,40 @@ git push origin vX.Y.Z
 ```
 
 僅 publish job 取得 `contents: write`；其他 job 僅 `contents: read`。
-流程使用 GitHub 的 `GITHUB_TOKEN`，不需新增外部發布密鑰，不會自動發布 PyPI。
+GitHub Release 流程使用 `GITHUB_TOKEN`，不需新增外部發布密鑰。
 不要移動已公開版本的 tag；修正後應發布下一版。
+
+## PyPI 發布
+
+[Publish PyPI workflow](../.github/workflows/publish-pypi.yml) 在 Release workflow 成功後自動啟動，
+也可手動指定既有版本（例如 `v0.0.2`）。手動執行時設定 `dry_run=true` 可只驗證、不上傳。
+
+發布流程會確認 GitHub Release 已公開、tag 對應 commit 曾通過完整 Release workflow，
+下載該版本的 wheel 與 source distribution，核對 `SHA256SUMS`、GitHub asset digest 與套件名稱／版本，
+再執行 `twine check --strict`。效能紀錄壓縮檔與校驗碼本身不會上傳 PyPI。
+因此 PyPI 使用與 GitHub Release 完全相同的已測試套件，不重新建置，也不移動既有 tag。
+
+首次發布前，PyPI 專案擁有者須在
+[PyPI Publishing](https://pypi.org/manage/account/publishing/) 建立 Pending Publisher：
+
+| 欄位 | 值 |
+| --- | --- |
+| PyPI Project Name | `matplotlib-rs` |
+| Owner | `g21589` |
+| Repository | `matplotlib-rs` |
+| Workflow | `publish-pypi.yml` |
+| Environment | `pypi` |
+
+上傳 job 使用 GitHub environment `pypi` 與 `id-token: write`，透過 PyPI Trusted Publishing 取得短效授權，
+不需要設定長效 API token。既有 PyPI 專案則在該專案的 Publishing 設定中新增相同發布者。
+
+```bash
+# 只驗證既有 0.0.2，不上傳。
+gh workflow run publish-pypi.yml -f tag=v0.0.2 -f dry_run=true
+
+# Trusted Publisher 完成設定後，上傳同一組已驗證套件。
+gh workflow run publish-pypi.yml -f tag=v0.0.2 -f dry_run=false
+```
+
+PyPI 版本發布完成後，可執行 `python -m pip install matplotlib-rs==0.0.2`。
+PyPI 不允許覆寫已使用的檔名；請勿以重新建置的內容重傳相同版本。
