@@ -152,6 +152,12 @@ import 包含 NumPy／pyplot，第一次存檔包含首次繪製成本，後續�
 完整條件、範圍與重跑命令見 [壓測說明](tests/bench/README.md)。
 五輪數據另存為 [可檢查的 JSON](docs/benchmarks/boxplots-0.0.2.json)。
 
+另在官方 Matplotlib 3.11.2 上套用 Python／NumPy 實驗補丁，以相同負載量測五輪：
+建圖中位數 **17.063 → 2.225 秒（7.67×）**，保留全部 37,800 個物件。
+官方行程未載入本專案 Rust extension；全部版本改用相同 Pillow PNG 壓縮設定，
+30 次執行的 PNG 位元組亦完全一致。分項優化與繪製對照見
+[官方版優化實驗報告](docs/benchmarks/official-boxplot-optimization.md)。
+
 ## 開發與重跑測試
 
 ```bash

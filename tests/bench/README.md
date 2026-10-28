@@ -1,5 +1,25 @@
 # 繪圖效能量測
 
+## 官方 Matplotlib 的 Python 優化對照
+
+`official_boxplot_fastpath.py` 對官方 Matplotlib 3.11.2 套用行程內的 Python／NumPy 實驗補丁，
+不載入本專案的 Rust extension；`official_boxplot_compare.py` 使用相同 5,400 箱工作負載，
+比較原版、僅統計優化、僅物件流程優化、兩者合併與 matplotlib-rs 0.0.2。
+全部使用 Pillow 壓縮等級 6，各預熱一次、各量測五輪，保留全部 37,800 個 artists。
+
+官方版合併優化後建圖中位數 **17.063 → 2.225 秒（7.67×）**，
+建圖＋首次繪製 **20.795 → 5.887 秒（3.53×）**；30 次執行的 PNG 位元組全部相同。
+這是輔助分析建圖成本的實驗補丁，尚未合併至上游。
+方法、分項對照、限制、完整數據及重跑命令見
+[官方版優化報告](../../docs/benchmarks/official-boxplot-optimization.md)。
+
+```bash
+python tests/bench/test_official_boxplot_fastpath.py
+python tests/bench/official_boxplot_compare.py \
+    --output tests/output/official-boxplots-python-only --rounds 5 \
+    --variants official statistics_only artists_only python_optimized
+```
+
 ## 5,400 個箱形圖
 
 `boxplots.py` 比較同一張圖上的 30 組箱形圖，每組 180 個；每個箱形圖有

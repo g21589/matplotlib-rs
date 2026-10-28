@@ -45,6 +45,10 @@ def arguments(argv=None):
     parser.add_argument("--output", type=Path, default=ROOT / "tests/output/boxplots-5400")
     parser.add_argument("--python-source", type=Path, default=ROOT / "python",
                         help="Python package root, e.g. an extracted baseline wheel")
+    parser.add_argument("--official-optimization", choices=("none", "statistics", "artists", "all"),
+                        default="none", help="experimental optimization of official Matplotlib")
+    parser.add_argument("--png-compress-level", type=int, choices=range(10),
+                        help="use the same Pillow compression level for all implementations")
     parser.add_argument("--impl", choices=("mpl", "rs"), help=argparse.SUPPRESS)
     parser.add_argument("--image", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -65,6 +69,11 @@ def worker(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
+    if args.impl == "mpl" and args.official_optimization != "none":
+        import official_boxplot_fastpath
+        official_boxplot_fastpath.install(
+            artists=args.official_optimization in ("artists", "all"),
+            statistics=args.official_optimization in ("statistics", "all"))
     imported = time.perf_counter()
     matplotlib.rc_file(ROOT / "tests/mplrc/matplotlibrc")
 
@@ -113,7 +122,10 @@ def worker(args):
     built = time.perf_counter()
     build_cpu = time.process_time() - cpu
     assert len(ax.patches) == args.groups * args.boxes
+    paths_ready = sum(line._path is not None and not line._invalidx and not line._invalidy
+                      for line in ax.lines)
 
+    draw_begin = time.perf_counter()
     cpu = time.process_time()
     fig.canvas.draw()
     drawn = time.perf_counter()
@@ -127,7 +139,9 @@ def worker(args):
         redraws.append(time.perf_counter() - t)
         redraw_cpus.append(time.process_time() - cpu)
     t, cpu = time.perf_counter(), time.process_time()
-    fig.savefig(args.image, dpi=args.dpi)
+    save_options = ({"pil_kwargs": {"compress_level": args.png_compress_level}}
+                    if args.png_compress_level is not None else {})
+    fig.savefig(args.image, dpi=args.dpi, **save_options)
     save_time, save_cpu = time.perf_counter() - t, time.process_time() - cpu
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     peak_mib = rss / (1024 * 1024 if sys.platform == "darwin" else 1024)
@@ -139,8 +153,16 @@ def worker(args):
         "rgba_sha256": image_hash, "image": str(args.image),
         "shape": list(rgba.shape), "box_count": args.groups * args.boxes,
         "line_count": len(ax.lines), "peak_rss_mib": peak_mib,
+        "official_optimization": args.official_optimization if args.impl == "mpl" else None,
+        "rust_extension_loaded": "matplotlib_rs._mplrs" in sys.modules,
+        "line_paths_ready_after_build": int(paths_ready),
+        "pre_draw_check_seconds": draw_begin - built,
+        "png_bytes": args.image.stat().st_size,
+        "optimization_counts": (dict(official_boxplot_fastpath.COUNTS)
+                                if args.impl == "mpl" and args.official_optimization != "none" else {}),
         "seconds": {"import": imported - start, "build": built - begin,
-                    "first_draw": drawn - built, "build_and_first_draw": drawn - begin,
+                    "first_draw": drawn - draw_begin,
+                    "build_and_first_draw": built - begin + drawn - draw_begin,
                     "redraw": statistics.median(redraws), "save_png": save_time},
         "cpu_seconds": {"build": build_cpu, "first_draw": draw_cpu,
                         "build_and_first_draw": build_cpu + draw_cpu,
@@ -157,6 +179,9 @@ def run_one(args, impl, label):
            "--redraws", str(args.redraws), "--dpi", str(args.dpi),
            "--width", str(args.width), "--height", str(args.height)]
     cmd += ["--python-source", str(args.python_source)]
+    cmd += ["--official-optimization", args.official_optimization]
+    if args.png_compress_level is not None:
+        cmd += ["--png-compress-level", str(args.png_compress_level)]
     print(f"START {label} {impl}", flush=True)
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=args.timeout)
     (args.output / f"{label}-{impl}.stderr.log").write_text(result.stderr)
