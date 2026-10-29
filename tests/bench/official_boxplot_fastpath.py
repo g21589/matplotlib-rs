@@ -1,4 +1,4 @@
-"""Experimental Python/NumPy boxplot optimization for official Matplotlib 3.11.2.
+"""Experimental Python/NumPy boxplot optimization for Matplotlib 3.8.2/3.11.2.
 
 Only the importing process is patched. Rendering, PNG encoding and returned
 Artist classes remain those of official Matplotlib; matplotlib_rs is not used.
@@ -22,6 +22,7 @@ ORIGINAL_PLOT = Axes.plot
 ORIGINAL_ADD_ARTIST = Axes.add_artist
 ORIGINAL_ADD_LINE = Axes.add_line
 COUNTS = {"fast_groups": 0, "fallback_groups": 0, "dense_stats": 0}
+SUPPORTED_VERSIONS = ("3.8.2", "3.11.2")
 
 
 class LazyCallbacks(cbook.CallbackRegistry):
@@ -53,6 +54,8 @@ def dense_stats(X, whis, labels):
     columns = np.ascontiguousarray(X.T)
     ncols, nsamples = columns.shape
     if labels is not None and len(labels) != ncols:
+        if mpl.__version__ == "3.8.2":
+            raise ValueError("Dimensions of labels and X must be compatible")
         raise ValueError(f"The number of labels ({len(labels)}) must match the"
                          f" number of columns ({ncols}).")
     q1, med, q3 = np.percentile(columns, [25, 50, 75], axis=1)
@@ -128,7 +131,10 @@ class BoxplotArtists:
             and not any(key in kw for kw in styles
                         for key in ("transform", "clip_path", "clip_box")))
         if eligible:
-            cycle_keys = axes._get_lines._prop_cycle._cycler_items[0]
+            # 3.8 keeps cycle state on _get_lines; 3.11 uses _prop_cycle.
+            cycle = (axes._get_lines if mpl.__version__ == "3.8.2"
+                     else axes._get_lines._prop_cycle)
+            cycle_keys = cycle._cycler_items[0]
             eligible = not any(kw.get(key) is None for kw in line_styles for key in cycle_keys)
         if eligible:
             for stat in stats:
@@ -154,7 +160,9 @@ class BoxplotArtists:
         result = type(prototype).__new__(type(prototype))
         result.__dict__ = prototype.__dict__.copy()
         result._callbacks = LazyCallbacks()
-        result._sticky_edges = None
+        # 3.8 exposes this pair directly; 3.11 initializes it lazily from None.
+        result._sticky_edges = (type(prototype.sticky_edges)([], [])
+                                if mpl.__version__ == "3.8.2" else None)
         # Keep independent mutable clip bounds and their normal invalidation.
         if prototype.clipbox is not None:
             result.clipbox = TransformedBbox(Bbox.unit(), prototype.clipbox._transform)
@@ -208,10 +216,7 @@ def patched_bxp_source():
             line_styles.append(mean_kw)
         if showbox and not patch_artist:
             line_styles.append(box_kw)
-        for kw in (whisker_kw, cap_kw, flier_kw):
-            kw.setdefault('label', '_nolegend_')
-        if showbox:
-            median_kw.setdefault('label', '_nolegend_')
+LABEL_DEFAULTS
         fast = _official_boxplot_factory(
             self, bxpstats, line_styles, box_kw if showbox and patch_artist else None)
         if fast is not None:
@@ -224,17 +229,27 @@ def patched_bxp_source():
                 return fast.patch(x, y)
 
 '''
-    if original.count(anchor) != 1 or original.count("        # Set legend labels\n") != 1:
+    # Legend-label defaults were added after 3.8. Preserve each version's
+    # original labels, including _childN numbering on 3.8.
+    label_defaults = "" if mpl.__version__ == "3.8.2" else '''        for kw in (whisker_kw, cap_kw, flier_kw):
+            kw.setdefault('label', '_nolegend_')
+        if showbox:
+            median_kw.setdefault('label', '_nolegend_')'''
+    insertion = insertion.replace("LABEL_DEFAULTS", label_defaults)
+    finish_anchor = ("        if manage_ticks:\n" if mpl.__version__ == "3.8.2"
+                     else "        # Set legend labels\n")
+    if original.count(anchor) != 1 or original.count(finish_anchor) != 1:
         raise RuntimeError("Official bxp source does not match the supported version")
     updated = original.replace(anchor, insertion + anchor)
-    updated = updated.replace("        # Set legend labels\n",
-                              "        if fast is not None:\n            fast.finish()\n\n        # Set legend labels\n")
+    updated = updated.replace(finish_anchor,
+                              "        if fast is not None:\n            fast.finish()\n\n" + finish_anchor)
     return original, updated
 
 
 def install(*, artists=True, statistics=True):
-    if mpl.__version__ != "3.11.2":
-        raise RuntimeError("This experimental patch requires official Matplotlib 3.11.2")
+    if mpl.__version__ not in SUPPORTED_VERSIONS:
+        raise RuntimeError("This experimental patch requires official Matplotlib "
+                           + " or ".join(SUPPORTED_VERSIONS))
     COUNTS.update(fast_groups=0, fallback_groups=0, dense_stats=0)
     if artists:
         _, source = patched_bxp_source()
@@ -244,9 +259,9 @@ def install(*, artists=True, statistics=True):
         source = "".join(line[4:] if line.startswith("    ") else line
                          for line in source.splitlines(keepends=True))
         exec(compile(source, "<official-boxplot-fastpath>", "exec"), namespace)
-        Axes.bxp = namespace["bxp"]
-    if statistics:
-        cbook.boxplot_stats = boxplot_stats
+    # Repeated install calls must not retain components from an earlier mode.
+    Axes.bxp = namespace["bxp"] if artists else ORIGINAL_BXP
+    cbook.boxplot_stats = boxplot_stats if statistics else ORIGINAL_STATS
 
 
 def uninstall():
@@ -268,4 +283,4 @@ def export_patch(destination):
     before, after = patched_bxp_source()
     FilePath(destination).write_text("".join(difflib.unified_diff(
         before.splitlines(True), after.splitlines(True),
-        fromfile="official-3.11.2/Axes.bxp", tofile="optimized/Axes.bxp")))
+        fromfile=f"official-{mpl.__version__}/Axes.bxp", tofile="optimized/Axes.bxp")))

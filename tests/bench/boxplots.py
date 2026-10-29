@@ -69,6 +69,7 @@ def worker(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
+    from PIL import __version__ as pillow_version
     if args.impl == "mpl" and args.official_optimization != "none":
         import official_boxplot_fastpath
         official_boxplot_fastpath.install(
@@ -149,7 +150,8 @@ def worker(args):
     print(json.dumps({
         "impl": args.impl, "matplotlib_api_version": matplotlib.__version__,
         "python_source": str(args.python_source.resolve()),
-        "numpy_version": np.__version__, "data_sha256": data_hash,
+        "numpy_version": np.__version__, "pillow_version": pillow_version,
+        "python_version": platform.python_version(), "data_sha256": data_hash,
         "rgba_sha256": image_hash, "image": str(args.image),
         "shape": list(rgba.shape), "box_count": args.groups * args.boxes,
         "line_count": len(ax.lines), "peak_rss_mib": peak_mib,

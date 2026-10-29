@@ -158,6 +158,11 @@ import 包含 NumPy／pyplot，第一次存檔包含首次繪製成本，後續�
 30 次執行的 PNG 位元組亦完全一致。分項優化與繪製對照見
 [官方版優化實驗報告](docs/benchmarks/official-boxplot-optimization.md)。
 
+同一實驗補丁另支援 **Python 3.10／Matplotlib 3.8.2**，沿用該版原始 API。
+五輪建圖中位數 **23.240 → 3.033 秒（7.66×）**，建圖＋首次繪製加速 **3.38×**，
+24 次執行的 PNG 位元組全部一致。安裝、使用與完整數據見
+[3.8.2 相容版本報告](docs/benchmarks/official-boxplot-optimization-3.8.2.md)。
+
 ## 開發與重跑測試
 
 ```bash

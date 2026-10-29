@@ -52,8 +52,23 @@ class OfficialFastpathTests(unittest.TestCase):
             self.assertEqual([s.get("label") for s in fast.ORIGINAL_STATS(x, labels=labels)],
                              [s.get("label") for s in fast.boxplot_stats(x, labels=labels)])
         for labels in [[], ["one"]]:
-            with self.assertRaisesRegex(ValueError, "number of labels"):
+            with self.assertRaises(ValueError) as expected:
+                fast.ORIGINAL_STATS(x, labels=labels)
+            with self.assertRaises(ValueError) as actual:
                 fast.boxplot_stats(x, labels=labels)
+            self.assertEqual(str(expected.exception), str(actual.exception))
+
+    def test_install_modes_and_original_api(self):
+        import inspect
+
+        for artists, statistics in [(True, True), (False, True), (True, False), (False, False)]:
+            fast.install(artists=artists, statistics=statistics)
+            self.assertEqual(inspect.signature(Axes.bxp), inspect.signature(fast.ORIGINAL_BXP))
+            self.assertEqual(Axes.bxp is fast.ORIGINAL_BXP, not artists)
+            self.assertEqual(mpl.cbook.boxplot_stats is fast.ORIGINAL_STATS, not statistics)
+        if mpl.__version__ == "3.8.2":
+            self.assertIn("vert", inspect.signature(Axes.boxplot).parameters)
+            self.assertNotIn("orientation", inspect.signature(Axes.boxplot).parameters)
 
     def render(self, optimized, options, mutate=False, cycle=False, scale="linear"):
         fast.uninstall()
@@ -117,11 +132,13 @@ class OfficialFastpathTests(unittest.TestCase):
 
     def test_pixels_and_mutable_artist_semantics(self):
         variants = [{}, {"patch_artist": True}, {"patch_artist": True, "notch": True},
-                    {"orientation": "horizontal", "patch_artist": True},
+                    {**({"vert": False} if mpl.__version__ == "3.8.2"
+                        else {"orientation": "horizontal"}), "patch_artist": True},
                     {"showmeans": True, "meanline": True},
                     {"showbox": False, "showcaps": False, "showfliers": False},
                     {"manage_ticks": False, "widths": [0.2, 0.3, 0.4, 0.5], "capwidths": 0.1},
-                    {"patch_artist": True, "label": ["a", "b", "c", "d"]},
+                    {"patch_artist": True,
+                     "labels" if mpl.__version__ == "3.8.2" else "label": ["a", "b", "c", "d"]},
                     {"medianprops": {"color": None}},
                     {"whiskerprops": {"drawstyle": "steps"}}]
         for options in variants:

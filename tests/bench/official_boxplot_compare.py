@@ -1,11 +1,12 @@
 """Measure upstream-only boxplot optimizations, ablations and the Rust control.
 
 Every variant uses the same workload, official Pillow PNG level 6, fresh
-sequential processes, one excluded warmup and a balanced rotating run order.
+sequential processes, one excluded warmup and a rotating run order.
 """
 import argparse
 import csv
 import hashlib
+from importlib.metadata import version
 import json
 import os
 from pathlib import Path
@@ -34,10 +35,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=boxplots.positive, default=5)
-    parser.add_argument("--variants", nargs="+", choices=tuple(VARIANTS), default=list(VARIANTS))
+    # The official-only helper supports Python 3.10; the Rust distribution
+    # currently requires Python >=3.11 and is not a 3.8.2 implementation.
+    rust_control_supported = sys.version_info >= (3, 11) and version("matplotlib") == "3.11.2"
+    default_variants = list(VARIANTS) if rust_control_supported else list(VARIANTS)[:-1]
+    parser.add_argument("--variants", nargs="+", choices=tuple(VARIANTS), default=default_variants)
     opts = parser.parse_args()
     if "official" not in opts.variants or len(set(opts.variants)) != len(opts.variants):
         parser.error("variants must be unique and include official")
+    if not rust_control_supported and "rust_0_0_2" in opts.variants:
+        parser.error("the Rust control requires Python >=3.11 and official Matplotlib 3.11.2; "
+                     "use the four official variants for the 3.8.2 experiment")
     output = opts.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     result_path = output / "results.json"
@@ -110,7 +118,7 @@ def main():
             writer.writerow({"variant": row["variant"], "round": row["round"],
                              **row["seconds"], "peak_rss_mib": row["peak_rss_mib"]})
     lines = ["# Official Matplotlib boxplot experiment", "",
-             "Five-round medians in seconds; identical data, 5,400 boxes and 32,400 lines.",
+             f"{opts.rounds}-round medians in seconds; identical data, 5,400 boxes and 32,400 lines.",
              "PNG encoding uses Pillow level 6 for every implementation.", "",
              "| Variant | Build | First draw | Build + draw | Redraw | Save PNG | Peak RSS MiB | Build speedup |",
              "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"]

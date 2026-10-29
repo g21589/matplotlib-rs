@@ -63,6 +63,16 @@ git push origin vX.Y.Z
 GitHub Release 流程使用 `GITHUB_TOKEN`，不需新增外部發布密鑰。
 不要移動已公開版本的 tag；修正後應發布下一版。
 
+## 官方 Matplotlib 優化補丁相容性
+
+[Official boxplot workflow](../.github/workflows/official-boxplot.yml) 在相關程式變更時，
+分別使用 Python 3.10／Matplotlib 3.8.2 與 Python 3.12／Matplotlib 3.11.2 執行
+`tests/bench/test_official_boxplot_fastpath.py`，也可手動啟動。
+五項測試涵蓋統計逐值比較、原始 API／啟用模式、24 組圖像與可修改物件情境、
+特殊 Axes／transform 回退、PNG／SVG／PDF／EPS 內容與 Figure pickle。
+兩項工作都不建置或匯入本專案 Rust extension，執行紀錄上傳為 artifact。
+這個相容性工作流驗證實驗補丁，套件的主要 CI 與發布 Python 版本仍由原流程管理。
+
 ## PyPI 發布
 
 [Publish PyPI workflow](../.github/workflows/publish-pypi.yml) 在 Release workflow 成功後自動啟動，

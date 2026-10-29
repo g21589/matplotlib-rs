@@ -1,0 +1,65 @@
+name: Official Matplotlib boxplot compatibility
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'tests/bench/**'
+      - 'tests/mplrc/**'
+      - 'requirements-ci.txt'
+      - '.github/workflows/official-boxplot.yml'
+  pull_request:
+    paths:
+      - 'tests/bench/**'
+      - 'tests/mplrc/**'
+      - 'requirements-ci.txt'
+      - '.github/workflows/official-boxplot.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: official-boxplot-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compatibility:
+    name: Python ${{ matrix.python }} / Matplotlib ${{ matrix.matplotlib }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: '3.10'
+            matplotlib: '3.8.2'
+            requirements: tests/bench/requirements-official-3.8.2.txt
+          - python: '3.12'
+            matplotlib: '3.11.2'
+            requirements: requirements-ci.txt
+    env:
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+      - name: Install official Matplotlib and pinned dependencies
+        run: python -m pip install -r '${{ matrix.requirements }}'
+      - name: Statistics, pixels, mutable artists, four formats and pickle
+        shell: bash
+        run: |
+          mkdir -p tests/output/official-compatibility
+          python tests/bench/test_official_boxplot_fastpath.py 2>&1 | tee tests/output/official-compatibility/tests.log
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: official-boxplot-py${{ matrix.python }}-mpl${{ matrix.matplotlib }}
+          path: tests/output/official-compatibility
+          if-no-files-found: warn
+          retention-days: 14

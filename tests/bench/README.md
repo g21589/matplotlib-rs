@@ -2,7 +2,8 @@
 
 ## 官方 Matplotlib 的 Python 優化對照
 
-`official_boxplot_fastpath.py` 對官方 Matplotlib 3.11.2 套用行程內的 Python／NumPy 實驗補丁，
+`official_boxplot_fastpath.py` 支援官方 Matplotlib **3.8.2 與 3.11.2**，
+套用行程內的 Python／NumPy 實驗補丁，
 不載入本專案的 Rust extension；`official_boxplot_compare.py` 使用相同 5,400 箱工作負載，
 比較原版、僅統計優化、僅物件流程優化、兩者合併與 matplotlib-rs 0.0.2。
 全部使用 Pillow 壓縮等級 6，各預熱一次、各量測五輪，保留全部 37,800 個 artists。
@@ -19,6 +20,26 @@ python tests/bench/official_boxplot_compare.py \
     --output tests/output/official-boxplots-python-only --rounds 5 \
     --variants official statistics_only artists_only python_optimized
 ```
+
+### Python 3.10／Matplotlib 3.8.2
+
+使用獨立環境及固定依賴，保留 3.8.2 的 `vert=False`、`labels` 與原始 artist labels 行為：
+
+```bash
+python3.10 -m venv .venv-mpl382
+. .venv-mpl382/bin/activate
+python -m pip install -r tests/bench/requirements-official-3.8.2.txt
+python tests/bench/test_official_boxplot_fastpath.py
+python tests/bench/official_boxplot_compare.py \
+    --output tests/output/official-boxplots-mpl382-new --rounds 5 \
+    --variants official statistics_only artists_only python_optimized
+```
+
+在此環境，量測工具預設只比較四個官方版本，不需要建置或匯入 Rust extension。
+matplotlib-rs 0.0.2 發布套件的 Python >=3.11 要求仍適用。
+3.8.2 的實測結果與使用方式見 [相容版本報告](../../docs/benchmarks/official-boxplot-optimization-3.8.2.md)。
+五輪建圖中位數 **23.240 → 3.033 秒（7.66×）**，建圖＋首次繪製 **28.197 → 8.353 秒（3.38×）**；
+24 次執行（含預熱）的 PNG 位元組全部一致。
 
 ## 5,400 個箱形圖
 
