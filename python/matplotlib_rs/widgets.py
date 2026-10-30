@@ -16,7 +16,7 @@ import itertools
 import weakref
 from numbers import Integral, Number
 
-from cycler import cycler
+from matplotlib_rs.rcsetup import ccycler as cycler
 import numpy as np
 
 import matplotlib_rs as mpl

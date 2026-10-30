@@ -18,14 +18,15 @@ its column(s) and row(s) specified when it is created.
 """
 
 import itertools
-import kiwisolver as kiwi
 import logging
 import numpy as np
 
 import matplotlib_rs as mpl
 import matplotlib_rs.patches as mpatches
 from matplotlib_rs.transforms import Bbox
+from matplotlib_rs import _kiwi
 
+kiwi = _kiwi.load()  # the Rust port of kiwi (or kiwisolver, see _kiwi.load)
 _log = logging.getLogger(__name__)
 
 

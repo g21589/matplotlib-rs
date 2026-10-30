@@ -36,8 +36,13 @@ from .colors import Colormap, is_color_like
 from ._fontconfig_pattern import parse_fontconfig_pattern
 from ._enums import JoinStyle, CapStyle
 
-# Don't let the original cycler collide with our validating cycler
-from cycler import Cycler, concat as cconcat, cycler as ccycler
+# Don't let the original cycler collide with our validating cycler.  An
+# installed cycler is used (so that its Cycler objects validate), else the
+# vendored copy: matplotlib_rs needs only NumPy.
+try:
+    from cycler import Cycler, concat as cconcat, cycler as ccycler
+except ImportError:
+    from ._vendor.cycler import Cycler, concat as cconcat, cycler as ccycler
 
 
 class ValidateInStrings:

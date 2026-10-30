@@ -12,10 +12,9 @@ import subprocess
 from tempfile import TemporaryDirectory
 import weakref
 
-from PIL import Image
 
 import matplotlib_rs as mpl
-from matplotlib_rs import cbook, font_manager as fm
+from matplotlib_rs import _png, cbook, font_manager as fm
 from matplotlib_rs.backend_bases import (
     _Backend, FigureCanvasBase, FigureManagerBase, RendererBase
 )
@@ -665,7 +664,11 @@ class RendererPgf(RendererBase):
         # save the images to png files
         path = pathlib.Path(self.fh.name)
         fname_img = "%s-img%d.png" % (path.stem, self.image_counter)
-        Image.fromarray(im[::-1]).save(path.parent / fname_img)
+        Image = _png.pil_image()
+        if Image is None:
+            _png.write(path.parent / fname_img, im[::-1])
+        else:
+            Image.fromarray(im[::-1]).save(path.parent / fname_img)
         self.image_counter += 1
 
         # reference the image in the pgf picture

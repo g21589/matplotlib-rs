@@ -15,7 +15,6 @@ import uuid
 import warnings
 
 import numpy as np
-from PIL import Image
 
 import matplotlib_rs as mpl
 from matplotlib_rs._animation_data import (
@@ -490,9 +489,12 @@ class PillowWriter(AbstractMovieWriter):
 
     @classmethod
     def isAvailable(cls):
-        return True
+        from matplotlib_rs import _png
+        return _png.pil_image() is not None
 
     def setup(self, fig, outfile, dpi=None):
+        from matplotlib_rs import _png
+        _png.require_pil("PillowWriter")
         super().setup(fig, outfile, dpi=dpi)
         self._frames = []
 
@@ -501,6 +503,7 @@ class PillowWriter(AbstractMovieWriter):
         buf = BytesIO()
         self.fig.savefig(
             buf, **{**savefig_kwargs, "format": "rgba", "dpi": self.dpi})
+        from PIL import Image
         im = Image.frombuffer(
             "RGBA", self.frame_size, buf.getbuffer(), "raw", "RGBA", 0, 1)
         if im.getextrema()[3][0] < 255:

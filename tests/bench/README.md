@@ -36,7 +36,8 @@ python tests/bench/official_boxplot_compare.py \
 ```
 
 在此環境，量測工具預設只比較四個官方版本，不需要建置或匯入 Rust extension。
-matplotlib-rs 0.0.2 發布套件的 Python >=3.11 要求仍適用。
+matplotlib-rs 0.0.2 發布套件的 Python >=3.11 要求仍適用；0.0.3 支援 Python 3.10，
+與 3.8.2 的比較見下方〈0.0.3：批次建立與 Python 3.10〉。
 3.8.2 的實測結果與使用方式見 [相容版本報告](../../docs/benchmarks/official-boxplot-optimization-3.8.2.md)。
 五輪建圖中位數 **23.240 → 3.033 秒（7.66×）**，建圖＋首次繪製 **28.197 → 8.353 秒（3.38×）**；
 24 次執行（含預熱）的 PNG 位元組全部一致。
@@ -166,6 +167,49 @@ python tests/bench/boxplot_build_compare.py \
 共用目前 Python 與 NumPy，不修改基準套件或工作負載。
 程式會檢查資料指紋、畫布指紋與物件數；建圖中位數加速未達指定門檻會以非零退出碼結束。
 逐輪資料、前後 PNG 與原始碼來源在本地 `tests/output/boxplots-build-before-after/`。
+
+### 0.0.3：批次建立與 Python 3.10
+
+0.0.3 進一步把每個 `bxp` 呼叫的 artists 一次建立：統計值為一般浮點數時，以 NumPy 逐元素計算
+與原迴圈相同的座標，每種元件一次複製 Rust handle，再由 Rust 建立各自獨立屬性字典的 Python 物件，
+子物件與資料範圍各更新一次；callback registry 改在首次使用時建立，建立期間暫停循環垃圾回收。
+離群值整批計算，`merge_kw_rc` 只讀 `boxplot.*` 設定。剖析顯示其餘建圖時間主要是
+37,800 個 Python 物件本身與 CPython 3.12 的完整垃圾回收；繪製時間主要是 Agg 點陣化。
+
+`boxplots.py` 新增 `--mpl-python` 與 `--rs-python`，兩端可用不同直譯器；
+沒有 Pillow 時 worker 仍可執行（不設定 `--png-compress-level`）。五輪中位數（括號為最小～最大值）：
+
+| 比較（秒） | 前 | 0.0.3 | 中位數加速 |
+| --- | --- | --- | --- |
+| 0.0.2 → 0.0.3，Python 3.12 建圖 | 1.119（1.081～1.231） | 0.470（0.432～0.506） | 2.38× |
+| 0.0.2 → 0.0.3，Python 3.12 建圖＋首次繪製 | 1.374（1.345～1.450） | 0.705（0.638～0.726） | 1.95× |
+| Matplotlib 3.8.2 → 0.0.3 只有 NumPy，Python 3.10 建圖 | 17.664（17.481～19.737） | 0.492（0.469～0.681） | 35.87× |
+| 同上，首次繪製 | 4.152（4.056～4.481） | 0.215（0.213～0.293） | 19.34× |
+| 同上，建圖＋首次繪製 | 21.986（21.613～24.218） | 0.712（0.683～0.974） | 30.89× |
+| Matplotlib 3.11.2 → 0.0.3，Python 3.12 建圖 | 15.006（14.751～15.186） | 0.451（0.422～0.485） | 33.30× |
+| 同上，建圖＋首次繪製 | 18.837（18.603～19.045） | 0.672（0.645～0.752） | 28.05× |
+
+- 0.0.2 對 0.0.3 交錯量測，五輪建圖倍率 2.71、2.14、2.37、2.51、2.62；12 次執行畫布相同。
+- Python 3.10 端：官方為 Matplotlib 3.8.2、NumPy 1.26.4、Pillow 10.2.0；matplotlib-rs 只安裝 NumPy 2.2.6。
+  matplotlib-rs 畫布與 Matplotlib 3.11.2 相同；與 3.8.2 有 20,688 個差異像素，全部位於標題與刻度文字，
+  繪圖區內為 0（3.8 與 3.11 的文字繪製不同）。最高 RSS 中位數 594.9 → 295.5 MiB。
+- Python 3.12 對 Matplotlib 3.11.2：PNG 0 個差異像素，最高 RSS 526.3 → 270.2 MiB。
+- 主機 4 vCPU Intel Xeon 2.80GHz、Linux x86_64；數值會隨環境改變。
+  三組原始數據見 [`docs/benchmarks/boxplots-0.0.3.json`](../../docs/benchmarks/boxplots-0.0.3.json)。
+
+重跑：
+
+```bash
+# 0.0.2 wheel 對目前版本（同一直譯器）
+python tests/bench/boxplot_build_compare.py --baseline-wheel /path/to/matplotlib_rs-0.0.2-*.whl \
+    --output tests/output/boxplots-0.0.3 --rounds 5 --min-speedup 1
+# Python 3.10：官方 Matplotlib 3.8.2 環境對只有 NumPy 的 matplotlib-rs 環境
+python3.10 -m venv /tmp/mpl382 && /tmp/mpl382/bin/pip install -r tests/bench/requirements-official-3.8.2.txt
+python3.10 -m venv /tmp/numpy-only && /tmp/numpy-only/bin/pip install numpy
+PYTHON=/tmp/numpy-only/bin/python sh scripts/dev_build.sh --locked
+/tmp/mpl382/bin/python tests/bench/boxplots.py --mpl-python /tmp/mpl382/bin/python \
+    --rs-python /tmp/numpy-only/bin/python --output tests/output/boxplots-py310 --rounds 5
+```
 
 ## 一般四格圖
 

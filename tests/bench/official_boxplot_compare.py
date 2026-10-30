@@ -35,8 +35,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--rounds", type=boxplots.positive, default=5)
-    # The official-only helper supports Python 3.10; the Rust distribution
-    # currently requires Python >=3.11 and is not a 3.8.2 implementation.
+    # The official-only helper supports Python 3.10; the matplotlib-rs 0.0.2
+    # control requires Python >=3.11 and is not a 3.8.2 implementation (0.0.3
+    # runs on 3.10: compare it with boxplots.py --mpl-python/--rs-python).
     rust_control_supported = sys.version_info >= (3, 11) and version("matplotlib") == "3.11.2"
     default_variants = list(VARIANTS) if rust_control_supported else list(VARIANTS)[:-1]
     parser.add_argument("--variants", nargs="+", choices=tuple(VARIANTS), default=default_variants)

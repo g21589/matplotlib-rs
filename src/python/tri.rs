@@ -197,7 +197,91 @@ fn delaunay<'py>(
     Ok((PyArray1::from_vec(py, t).reshape([ntri, 3])?, PyArray1::from_vec(py, n).reshape([ntri, 3])?))
 }
 
+extern "C" {
+    fn mplrs_qhull_delaunay(
+        npoints: std::os::raw::c_int,
+        x: *const f64,
+        y: *const f64,
+        hide_errors: std::os::raw::c_int,
+        ntri: *mut std::os::raw::c_int,
+        triangles: *mut *mut std::os::raw::c_int,
+        neighbors: *mut *mut std::os::raw::c_int,
+        leaked: *mut std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+    fn mplrs_qhull_free(p: *mut std::os::raw::c_int);
+    fn mplrs_qhull_version() -> *const std::os::raw::c_char;
+}
+
+const QHULL_ERROR_MSG: [&str; 6] = [
+    "",
+    "input inconsistency",
+    "singular input data",
+    "precision error",
+    "insufficient memory",
+    "internal error",
+];
+
+/// matplotlib's `_qhull.delaunay(x, y, verbose)`, computed by the same qhull
+/// (extern/qhull): ``(triangles, neighbors)``, int arrays of shape (ntri, 3).
+/// *x* and *y* have been checked by `matplotlib_rs._qhull`.
+#[pyfunction]
+fn qhull_delaunay<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'_, f64>,
+    y: PyReadonlyArray1<'_, f64>,
+    verbose: i32,
+) -> PyResult<(Bound<'py, PyArray2<i32>>, Bound<'py, PyArray2<i32>>)> {
+    let (x, y) = (x.as_slice()?, y.as_slice()?);
+    if x.len() != y.len() || x.len() > i32::MAX as usize {
+        return Err(PyValueError::new_err("x and y must be 1D arrays of the same length"));
+    }
+    let (mut ntri, mut leaked) = (0, 0);
+    let (mut tri, mut nbr) = (std::ptr::null_mut(), std::ptr::null_mut());
+    let hide = (verbose == 0) as std::os::raw::c_int;
+    let code = unsafe {
+        mplrs_qhull_delaunay(x.len() as i32, x.as_ptr(), y.as_ptr(), hide, &mut ntri, &mut tri, &mut nbr, &mut leaked)
+    };
+    if leaked != 0 {
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyRuntimeWarning>(),
+            c"Qhull could not free all allocated memory",
+            1,
+        )?;
+    }
+    if code != 0 {
+        if code < 0 {
+            return Err(PyRuntimeError::new_err("Could not allocate memory for qhull"));
+        }
+        let mut msg = format!(
+            "Error in qhull Delaunay triangulation calculation: {} (exitcode={})",
+            QHULL_ERROR_MSG.get(code as usize).copied().unwrap_or("unknown error"),
+            code
+        );
+        if hide != 0 {
+            msg += "; use python verbose option (-v) to see original qhull error.";
+        }
+        return Err(PyRuntimeError::new_err(msg));
+    }
+    let n = ntri as usize;
+    let take = |p: *mut std::os::raw::c_int| {
+        let v = unsafe { std::slice::from_raw_parts(p, 3 * n).to_vec() };
+        unsafe { mplrs_qhull_free(p) };
+        v
+    };
+    let (t, nb) = (take(tri), take(nbr));
+    Ok((PyArray1::from_vec(py, t).reshape([n, 3])?, PyArray1::from_vec(py, nb).reshape([n, 3])?))
+}
+
+/// qhull's version string.
+#[pyfunction]
+fn qhull_version() -> String {
+    unsafe { std::ffi::CStr::from_ptr(mplrs_qhull_version()) }.to_string_lossy().into_owned()
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(qhull_delaunay, m)?)?;
+    m.add_function(wrap_pyfunction!(qhull_version, m)?)?;
     m.add_class::<PyTriangulation>()?;
     m.add_class::<PyTriContourGenerator>()?;
     m.add_class::<PyTrapezoidMapTriFinder>()?;

@@ -709,6 +709,22 @@ def _create_lookup_table(N, data, gamma=1.0):
     return np.clip(lut, 0.0, 1.0)
 
 
+def _save_repr_png(fh, pixels, title, author):
+    """Write the PNG of a colormap's ``_repr_png_`` (with Pillow if installed)."""
+    text = [('Title', title), ('Description', title), ('Author', author),
+            ('Software', author)]
+    try:
+        from PIL import Image, PngImagePlugin
+    except ImportError:
+        from matplotlib_rs import _png
+        _png.write(fh, pixels, text=text)
+        return
+    pnginfo = PngImagePlugin.PngInfo()
+    for k, v in text:
+        pnginfo.add_text(k, v)
+    Image.fromarray(pixels).save(fh, format='png', pnginfo=pnginfo)
+
+
 class Colormap:
     """
     Baseclass for all scalar to RGBA mappings.
@@ -1034,12 +1050,7 @@ class Colormap:
         png_bytes = io.BytesIO()
         title = self.name + ' colormap'
         author = f'Matplotlib v{mpl.__version__}, https://matplotlib.org'
-        pnginfo = __import__('PIL.PngImagePlugin', fromlist=['PngInfo']).PngInfo()
-        pnginfo.add_text('Title', title)
-        pnginfo.add_text('Description', title)
-        pnginfo.add_text('Author', author)
-        pnginfo.add_text('Software', author)
-        __import__('PIL.Image', fromlist=['Image']).fromarray(pixels).save(png_bytes, format='png', pnginfo=pnginfo)
+        _save_repr_png(png_bytes, pixels, title, author)
         return png_bytes.getvalue()
 
     def _repr_html_(self):
@@ -1670,12 +1681,7 @@ class MultivarColormap:
         png_bytes = io.BytesIO()
         title = self.name + ' multivariate colormap'
         author = f'Matplotlib v{mpl.__version__}, https://matplotlib.org'
-        pnginfo = __import__('PIL.PngImagePlugin', fromlist=['PngInfo']).PngInfo()
-        pnginfo.add_text('Title', title)
-        pnginfo.add_text('Description', title)
-        pnginfo.add_text('Author', author)
-        pnginfo.add_text('Software', author)
-        __import__('PIL.Image', fromlist=['Image']).fromarray(pixels).save(png_bytes, format='png', pnginfo=pnginfo)
+        _save_repr_png(png_bytes, pixels, title, author)
         return png_bytes.getvalue()
 
     def _repr_html_(self):
@@ -2141,12 +2147,7 @@ class BivarColormap:
         png_bytes = io.BytesIO()
         title = self.name + ' BivarColormap'
         author = f'Matplotlib v{mpl.__version__}, https://matplotlib.org'
-        pnginfo = __import__('PIL.PngImagePlugin', fromlist=['PngInfo']).PngInfo()
-        pnginfo.add_text('Title', title)
-        pnginfo.add_text('Description', title)
-        pnginfo.add_text('Author', author)
-        pnginfo.add_text('Software', author)
-        __import__('PIL.Image', fromlist=['Image']).fromarray(pixels).save(png_bytes, format='png', pnginfo=pnginfo)
+        _save_repr_png(png_bytes, pixels, title, author)
         return png_bytes.getvalue()
 
     def _repr_html_(self):

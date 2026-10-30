@@ -3,6 +3,9 @@
 Run from the project root: python tests/bench/boxplots.py
 Each implementation runs in a fresh subprocess, sequentially. Data generation
 is excluded from plotting timings. PNG saving includes another complete draw.
+--mpl-python/--rs-python run a side with another interpreter, e.g. official
+Matplotlib 3.8.2 on Python 3.10 against matplotlib_rs on Python 3.10 with NumPy
+as its only installed package.
 """
 
 import argparse
@@ -49,6 +52,10 @@ def arguments(argv=None):
                         default="none", help="experimental optimization of official Matplotlib")
     parser.add_argument("--png-compress-level", type=int, choices=range(10),
                         help="use the same Pillow compression level for all implementations")
+    parser.add_argument("--mpl-python", type=Path, default=Path(sys.executable),
+                        help="interpreter for the Matplotlib side")
+    parser.add_argument("--rs-python", type=Path, default=Path(sys.executable),
+                        help="interpreter for the matplotlib_rs side")
     parser.add_argument("--impl", choices=("mpl", "rs"), help=argparse.SUPPRESS)
     parser.add_argument("--image", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -69,7 +76,10 @@ def worker(args):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
-    from PIL import __version__ as pillow_version
+    try:
+        from PIL import __version__ as pillow_version
+    except ImportError:  # matplotlib_rs needs only NumPy
+        pillow_version = None
     if args.impl == "mpl" and args.official_optimization != "none":
         import official_boxplot_fastpath
         official_boxplot_fastpath.install(
@@ -175,7 +185,8 @@ def worker(args):
 
 def run_one(args, impl, label):
     image = args.output / f"{label}-{impl}.png"
-    cmd = [sys.executable, str(Path(__file__).resolve()), "--impl", impl,
+    python = args.mpl_python if impl == "mpl" else args.rs_python
+    cmd = [str(python), str(Path(__file__).resolve()), "--impl", impl,
            "--image", str(image), "--groups", str(args.groups), "--boxes", str(args.boxes),
            "--samples", str(args.samples), "--seed", str(args.seed),
            "--redraws", str(args.redraws), "--dpi", str(args.dpi),
@@ -242,6 +253,7 @@ def main():
     from PIL import Image
     a = np.asarray(Image.open(args.output / "matplotlib.png").convert("RGBA"))
     b = np.asarray(Image.open(args.output / "matplotlib-rs.png").convert("RGBA"))
+    payload["interpreters"] = {"mpl": str(args.mpl_python), "rs": str(args.rs_python)}
     assert a.shape == b.shape
     differences = np.any(a != b, axis=2)
     payload["png_comparison"] = {"shape": list(a.shape), "different_pixels": int(differences.sum()),

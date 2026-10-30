@@ -13,7 +13,10 @@ import numpy as np
 import sys
 
 
-import PIL
+try:
+    import PIL
+except ImportError:  # Pillow is optional: PNG files are read and written natively
+    PIL = None
 
 
 def _pil_getattr(name):
@@ -27,11 +30,11 @@ def _pil_getattr(name):
     raise AttributeError(f"module 'PIL' has no attribute {name!r}")
 
 
-if not hasattr(PIL, "__getattr__"):
+if PIL is not None and not hasattr(PIL, "__getattr__"):
     PIL.__getattr__ = _pil_getattr
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, cbook
+from matplotlib_rs import _api, _png, cbook
 # For clarity, names from _image are given explicitly in this module
 from matplotlib_rs import _image
 # For user convenience, the names from _image are also imported into
@@ -684,7 +687,10 @@ class _ImageBase(mcolorizer.ColorizingArtist):
         """Write the image to png file *fname*."""
         im = self.to_rgba(self._A[::-1] if self.origin == 'lower' else self._A,
                           bytes=True, norm=True)
-        PIL.Image.fromarray(im).save(fname, format="png")
+        if PIL is None:
+            _png.write(fname, im)
+        else:
+            PIL.Image.fromarray(im).save(fname, format="png")
 
     @staticmethod
     def _normalize_image_array(A):
@@ -1600,6 +1606,14 @@ def imread(fname, format=None):
             ext = 'png'
     else:
         ext = format
+    if PIL is None:
+        if ext != 'png':
+            _png.require_pil(f"Reading {ext!r} images")
+        if isinstance(fname, str) and len(parse.urlparse(fname).scheme) > 1:
+            raise ValueError(
+                "Please open the URL for reading and pass the result to imread, e.g. "
+                "with ``imread(urllib.request.urlopen(url))``.")
+        return _png.read(fname)
     img_open = (
         PIL.PngImagePlugin.PngImageFile if ext == 'png' else PIL.Image.open)
     if isinstance(fname, str) and len(parse.urlparse(fname).scheme) > 1:
@@ -1712,6 +1726,18 @@ def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
             pil_kwargs = pil_kwargs.copy()
         pil_shape = (rgba.shape[1], rgba.shape[0])
         rgba = np.require(rgba, requirements='C')
+        if PIL is None:
+            if format != "png" or pil_kwargs:
+                _png.require_pil(f"Saving {format!r} images" if format != "png"
+                                 else "pil_kwargs")
+            metadata = {
+                "Software": (f"Matplotlib version{mpl.__version__}, "
+                             f"https://matplotlib.org/"),
+                **(metadata if metadata is not None else {}),
+            }
+            _png.write(fname, np.asarray(rgba), dpi,
+                       [(k, v) for k, v in metadata.items() if v is not None])
+            return
         image = PIL.Image.frombuffer(
             "RGBA", pil_shape, rgba, "raw", "RGBA", 0, 1)
         if format == "png":

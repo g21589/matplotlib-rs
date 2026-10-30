@@ -1331,7 +1331,7 @@ class QuadContourSet(ContourSet):
             self._maxs = args[0]._maxs
             self._algorithm = args[0]._algorithm
         else:
-            import contourpy
+            from matplotlib_rs import _contour
 
             algorithm = mpl._val_or_rc(algorithm, 'contour.algorithm')
             mpl.rcParams.validate["contour.algorithm"](algorithm)
@@ -1348,10 +1348,9 @@ class QuadContourSet(ContourSet):
 
             x, y, z = self._contour_args(args, kwargs)
 
-            contour_generator = contourpy.contour_generator(
+            # contourpy if installed, else the built-in mpl2014 algorithm
+            contour_generator = _contour.contour_generator(
                 x, y, z, name=self._algorithm, corner_mask=self._corner_mask,
-                line_type=contourpy.LineType.SeparateCode,
-                fill_type=contourpy.FillType.OuterCode,
                 chunk_size=self.nchunk)
 
             t = self.get_transform()

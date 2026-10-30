@@ -1,0 +1,1976 @@
+{
+ "description": "5,400-boxplot workload (tests/bench/boxplots.py, 30 groups x 180 boxes x 100 samples, seed 20261026, 3600x1200 px). Each variant: 1 warmup + 5 fresh-process rounds, sequential.",
+ "environment": {
+  "cpu": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+  "visible_cpus": 4,
+  "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39"
+ },
+ "matplotlib_rs_0.0.2_vs_0.0.3_python3.12": {
+  "baseline_wheel": "<0.0.2 wheel>/matplotlib_rs-0.0.2-cp312-cp312-manylinux_2_35_x86_64.whl",
+  "baseline_sha256": "13385c086fb1482d5823b5e9299aeb833a64064452de1522c2d62e5be6ddaad9",
+  "benchmark_sha256": "47f1b54d3b26bae0c58f0fcb44c53b9efaf894a25a8024a70793e6e7f69e4d4c",
+  "parameters": {
+   "groups": 30,
+   "boxes": 180,
+   "samples": 100,
+   "seed": 20261026,
+   "rounds": 5,
+   "warmups": 1,
+   "redraws": 2,
+   "dpi": 100,
+   "width": 36,
+   "height": 12,
+   "timeout": 300,
+   "output": "<scratch>/bench_A",
+   "python_source": "<repo>/python",
+   "official_optimization": "none",
+   "png_compress_level": null,
+   "mpl_python": "<python3.12, matplotlib 3.11.2>",
+   "rs_python": "<python3.12, matplotlib 3.11.2>",
+   "impl": null,
+   "image": null
+  },
+  "warmups": [
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/warmup-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 279.0625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.025285790999987512,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.890326792000451,
+     "build": 1.174433524000051,
+     "first_draw": 0.22122369699991395,
+     "build_and_first_draw": 1.395657220999965,
+     "redraw": 0.20485187499980384,
+     "save_png": 0.3024475669999447
+    },
+    "cpu_seconds": {
+     "build": 1.1591097799999999,
+     "first_draw": 0.2195658410000001,
+     "build_and_first_draw": 1.378675621,
+     "redraw": 0.19939391799999995,
+     "save_png": 0.2934995589999998
+    },
+    "redraw_seconds": [
+     0.19513863700012735,
+     0.21456511299948033
+    ],
+    "round": "warmup-before",
+    "variant": "before"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/warmup-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.26953125,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.022473310999885143,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2785966739993455,
+     "build": 0.43599084400011634,
+     "first_draw": 0.217247683000096,
+     "build_and_first_draw": 0.6532385270002123,
+     "redraw": 0.17385502800016184,
+     "save_png": 0.2805235719997654
+    },
+    "cpu_seconds": {
+     "build": 0.43512784399999993,
+     "first_draw": 0.20796709999999985,
+     "build_and_first_draw": 0.6430949439999998,
+     "redraw": 0.17353971200000007,
+     "save_png": 0.280118066
+    },
+    "redraw_seconds": [
+     0.17523635800080228,
+     0.1724736979995214
+    ],
+    "round": "warmup-after",
+    "variant": "after"
+   }
+  ],
+  "runs": [
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-01-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.22265625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.024758065000241913,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24293067300004623,
+     "build": 0.4319374560000142,
+     "first_draw": 0.2061208329996589,
+     "build_and_first_draw": 0.6380582889996731,
+     "redraw": 0.18118242549962815,
+     "save_png": 0.21183824299987464
+    },
+    "cpu_seconds": {
+     "build": 0.431364357,
+     "first_draw": 0.205105557,
+     "build_and_first_draw": 0.636469914,
+     "redraw": 0.1808755310000001,
+     "save_png": 0.20853507700000007
+    },
+    "redraw_seconds": [
+     0.1816806489996452,
+     0.1806842019996111
+    ],
+    "round": "round-01-after",
+    "variant": "after"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-01-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 276.72265625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.024905491000026814,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24550366699986625,
+     "build": 1.1699540449999404,
+     "first_draw": 0.20832525799960422,
+     "build_and_first_draw": 1.3782793029995446,
+     "redraw": 0.18391061700003775,
+     "save_png": 0.2807717120003872
+    },
+    "cpu_seconds": {
+     "build": 1.1669563809999999,
+     "first_draw": 0.20830687799999992,
+     "build_and_first_draw": 1.3752632589999998,
+     "redraw": 0.18385578150000015,
+     "save_png": 0.2806623049999999
+    },
+    "redraw_seconds": [
+     0.18401402500057884,
+     0.18380720899949665
+    ],
+    "round": "round-01-before",
+    "variant": "before"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-02-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 276.76171875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.02691612000035093,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2424585480002861,
+     "build": 1.0814110040000742,
+     "first_draw": 0.2922688939997897,
+     "build_and_first_draw": 1.373679897999864,
+     "redraw": 0.230802357000357,
+     "save_png": 0.24734884700046678
+    },
+    "cpu_seconds": {
+     "build": 1.07810776,
+     "first_draw": 0.290542104,
+     "build_and_first_draw": 1.368649864,
+     "redraw": 0.22906785650000017,
+     "save_png": 0.24641565399999976
+    },
+    "redraw_seconds": [
+     0.19832410600065487,
+     0.26328060800005915
+    ],
+    "round": "round-02-before",
+    "variant": "before"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-02-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.234375,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.03355252399978781,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2804246890000286,
+     "build": 0.505855628000063,
+     "first_draw": 0.21869623099973978,
+     "build_and_first_draw": 0.7245518589998028,
+     "redraw": 0.2401940054996885,
+     "save_png": 0.2113301159997718
+    },
+    "cpu_seconds": {
+     "build": 0.49748149799999997,
+     "first_draw": 0.2186591899999999,
+     "build_and_first_draw": 0.7161406879999999,
+     "redraw": 0.23749540550000003,
+     "save_png": 0.21079043700000022
+    },
+    "redraw_seconds": [
+     0.29097963599997456,
+     0.18940837499940244
+    ],
+    "round": "round-02-after",
+    "variant": "after"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-03-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.23828125,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.02665350499955821,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2633814169994366,
+     "build": 0.4698065720003797,
+     "first_draw": 0.25667343700024503,
+     "build_and_first_draw": 0.7264800090006247,
+     "redraw": 0.2081441274995086,
+     "save_png": 0.2221476860004259
+    },
+    "cpu_seconds": {
+     "build": 0.46601907100000006,
+     "first_draw": 0.25565469899999993,
+     "build_and_first_draw": 0.72167377,
+     "redraw": 0.20445800149999993,
+     "save_png": 0.21938249799999987
+    },
+    "redraw_seconds": [
+     0.21940091799933725,
+     0.19688733699967997
+    ],
+    "round": "round-03-after",
+    "variant": "after"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-03-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 276.734375,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.027175147999514593,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2418379870005083,
+     "build": 1.112358578000567,
+     "first_draw": 0.23287925600016024,
+     "build_and_first_draw": 1.3452378340007272,
+     "redraw": 0.22096153649999906,
+     "save_png": 0.2597827409999809
+    },
+    "cpu_seconds": {
+     "build": 1.109392153,
+     "first_draw": 0.22500915099999985,
+     "build_and_first_draw": 1.3344013039999998,
+     "redraw": 0.2167321954999999,
+     "save_png": 0.258153058
+    },
+    "redraw_seconds": [
+     0.24292109399993933,
+     0.19900197900005878
+    ],
+    "round": "round-03-before",
+    "variant": "before"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-04-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 276.8359375,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.028956010000001697,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2547061109999049,
+     "build": 1.11880436499996,
+     "first_draw": 0.25044347300081427,
+     "build_and_first_draw": 1.3692478380007742,
+     "redraw": 0.19169030499961082,
+     "save_png": 0.2139559540000846
+    },
+    "cpu_seconds": {
+     "build": 1.1141272249999998,
+     "first_draw": 0.24945708300000002,
+     "build_and_first_draw": 1.3635843079999999,
+     "redraw": 0.19163427350000006,
+     "save_png": 0.21385944300000004
+    },
+    "redraw_seconds": [
+     0.19162005099951784,
+     0.1917605589997038
+    ],
+    "round": "round-04-before",
+    "variant": "before"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-04-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.19921875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.02323975400031486,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2626008819997878,
+     "build": 0.44643334099964704,
+     "first_draw": 0.2067881889997807,
+     "build_and_first_draw": 0.6532215299994277,
+     "redraw": 0.17935483849987577,
+     "save_png": 0.20513149599992175
+    },
+    "cpu_seconds": {
+     "build": 0.44625111800000006,
+     "first_draw": 0.20539752,
+     "build_and_first_draw": 0.6516486380000001,
+     "redraw": 0.1791314195000001,
+     "save_png": 0.20513975099999993
+    },
+    "redraw_seconds": [
+     0.17917602800025634,
+     0.1795336489994952
+    ],
+    "round": "round-04-after",
+    "variant": "after"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-05-after-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.171875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.0314558850004687,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2579983679997895,
+     "build": 0.47017302599942923,
+     "first_draw": 0.2349785790001988,
+     "build_and_first_draw": 0.705151604999628,
+     "redraw": 0.20004594750025717,
+     "save_png": 0.21346373000051244
+    },
+    "cpu_seconds": {
+     "build": 0.4673267660000001,
+     "first_draw": 0.23007205899999983,
+     "build_and_first_draw": 0.6973988249999999,
+     "redraw": 0.19921940250000003,
+     "save_png": 0.21162839300000003
+    },
+    "redraw_seconds": [
+     0.211620000000039,
+     0.18847189500047534
+    ],
+    "round": "round-05-after",
+    "variant": "after"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<scratch>/bench_A/baseline/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_A/round-05-before-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 276.7890625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.025788852000005136,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.26609119400018244,
+     "build": 1.2309504579998247,
+     "first_draw": 0.2192390849995718,
+     "build_and_first_draw": 1.4501895429993965,
+     "redraw": 0.20867086150019531,
+     "save_png": 0.22232271899974876
+    },
+    "cpu_seconds": {
+     "build": 1.2176914170000002,
+     "first_draw": 0.2189524810000001,
+     "build_and_first_draw": 1.4366438980000003,
+     "redraw": 0.20812275449999995,
+     "save_png": 0.22176708400000011
+    },
+    "redraw_seconds": [
+     0.212726649000615,
+     0.20461507399977563
+    ],
+    "round": "round-05-before",
+    "variant": "before"
+   }
+  ],
+  "summary": {
+   "before": {
+    "import": {
+     "median": 0.24550366699986625,
+     "min": 0.2418379870005083,
+     "max": 0.26609119400018244
+    },
+    "build": {
+     "median": 1.11880436499996,
+     "min": 1.0814110040000742,
+     "max": 1.2309504579998247
+    },
+    "first_draw": {
+     "median": 0.23287925600016024,
+     "min": 0.20832525799960422,
+     "max": 0.2922688939997897
+    },
+    "build_and_first_draw": {
+     "median": 1.373679897999864,
+     "min": 1.3452378340007272,
+     "max": 1.4501895429993965
+    },
+    "redraw": {
+     "median": 0.20867086150019531,
+     "min": 0.18391061700003775,
+     "max": 0.230802357000357
+    },
+    "save_png": {
+     "median": 0.24734884700046678,
+     "min": 0.2139559540000846,
+     "max": 0.2807717120003872
+    },
+    "peak_rss_mib": 276.76171875
+   },
+   "after": {
+    "import": {
+     "median": 0.2626008819997878,
+     "min": 0.24293067300004623,
+     "max": 0.2804246890000286
+    },
+    "build": {
+     "median": 0.4698065720003797,
+     "min": 0.4319374560000142,
+     "max": 0.505855628000063
+    },
+    "first_draw": {
+     "median": 0.21869623099973978,
+     "min": 0.2061208329996589,
+     "max": 0.25667343700024503
+    },
+    "build_and_first_draw": {
+     "median": 0.705151604999628,
+     "min": 0.6380582889996731,
+     "max": 0.7264800090006247
+    },
+    "redraw": {
+     "median": 0.20004594750025717,
+     "min": 0.17935483849987577,
+     "max": 0.2401940054996885
+    },
+    "save_png": {
+     "median": 0.21183824299987464,
+     "min": 0.20513149599992175,
+     "max": 0.2221476860004259
+    },
+    "peak_rss_mib": 270.22265625
+   }
+  },
+  "build_speedup": 2.3814148879106267,
+  "all_rgba_identical": true
+ },
+ "official_matplotlib_3.8.2_vs_matplotlib_rs_0.0.3_numpy_only_python3.10": {
+  "parameters": {
+   "groups": 30,
+   "boxes": 180,
+   "samples": 100,
+   "seed": 20261026,
+   "rounds": 5,
+   "warmups": 1,
+   "redraws": 2,
+   "dpi": 100,
+   "width": 36,
+   "height": 12,
+   "timeout": 300,
+   "output": "<scratch>/bench_B",
+   "python_source": "<repo>/python",
+   "official_optimization": "none",
+   "png_compress_level": null,
+   "mpl_python": "<python3.10, matplotlib 3.8.2>",
+   "rs_python": "<python3.10, numpy only>"
+  },
+  "python": "3.10.20 (main, Jul 18 2026, 17:02:35) [Clang 22.1.3 ]",
+  "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+  "git_commit": "4e86b1dba7990b609fa8fe5e9089b0b81f00117f",
+  "warmups": [
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/warmup-01-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 597.50390625,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.049381097000150476,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 1.7609761869998692,
+     "build": 17.812739768999563,
+     "first_draw": 4.2120512419996885,
+     "build_and_first_draw": 22.02479101099925,
+     "redraw": 2.171361966000404,
+     "save_png": 2.2177757460003704
+    },
+    "cpu_seconds": {
+     "build": 17.635292672,
+     "first_draw": 4.352343388000001,
+     "build_and_first_draw": 21.98763606,
+     "redraw": 2.1504533010000006,
+     "save_png": 2.2115478999999993
+    },
+    "redraw_seconds": [
+     2.219279784000719,
+     2.1234441480000896
+    ],
+    "round": "warmup-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/warmup-01-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.6640625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.03259310799967352,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2616689200003748,
+     "build": 0.50795466100044,
+     "first_draw": 0.2478012920000765,
+     "build_and_first_draw": 0.7557559530005165,
+     "redraw": 0.2125315954999678,
+     "save_png": 0.288963994000369
+    },
+    "cpu_seconds": {
+     "build": 0.501689027,
+     "first_draw": 0.23771283500000018,
+     "build_and_first_draw": 0.7394018620000001,
+     "redraw": 0.21048770900000013,
+     "save_png": 0.28567946099999997
+    },
+    "redraw_seconds": [
+     0.1935149969995109,
+     0.2315481940004247
+    ],
+    "round": "warmup-01"
+   }
+  ],
+  "runs": [
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/round-01-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 594.86328125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.0500725779993445,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.4444960529999662,
+     "build": 19.737180555000123,
+     "first_draw": 4.480993280000803,
+     "build_and_first_draw": 24.218173835000925,
+     "redraw": 2.197595855500367,
+     "save_png": 2.7393729720006377
+    },
+    "cpu_seconds": {
+     "build": 19.610516197000003,
+     "first_draw": 4.623309584999998,
+     "build_and_first_draw": 24.233825782,
+     "redraw": 2.1565727359999993,
+     "save_png": 2.7272546529999957
+    },
+    "redraw_seconds": [
+     2.1845454410004095,
+     2.210646270000325
+    ],
+    "round": "round-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/round-01-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.6875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.04676144499990187,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24786129699987214,
+     "build": 0.4924044879999201,
+     "first_draw": 0.2529462960001183,
+     "build_and_first_draw": 0.7453507840000384,
+     "redraw": 0.2108222214997113,
+     "save_png": 0.2833842670006561
+    },
+    "cpu_seconds": {
+     "build": 0.4874085479999999,
+     "first_draw": 0.251995054,
+     "build_and_first_draw": 0.7394036019999999,
+     "redraw": 0.21044860200000004,
+     "save_png": 0.27173879600000017
+    },
+    "redraw_seconds": [
+     0.2334890219999579,
+     0.1881554209994647
+    ],
+    "round": "round-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/round-02-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.48046875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.05059887900006288,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24641369500022847,
+     "build": 0.6805939409996427,
+     "first_draw": 0.2932483710001179,
+     "build_and_first_draw": 0.9738423119997606,
+     "redraw": 0.21163410249982917,
+     "save_png": 0.23465725799997017
+    },
+    "cpu_seconds": {
+     "build": 0.67925911,
+     "first_draw": 0.290788611,
+     "build_and_first_draw": 0.970047721,
+     "redraw": 0.2050199304999999,
+     "save_png": 0.233861847
+    },
+    "redraw_seconds": [
+     0.20780312199985929,
+     0.21546508299979905
+    ],
+    "round": "round-02"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/round-02-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 594.8671875,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.05040485700010322,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.5811823899994124,
+     "build": 17.640756222000164,
+     "first_draw": 4.056406468000205,
+     "build_and_first_draw": 21.69716269000037,
+     "redraw": 2.029417014000046,
+     "save_png": 2.073093386000437
+    },
+    "cpu_seconds": {
+     "build": 17.539924226,
+     "first_draw": 4.225398007999999,
+     "build_and_first_draw": 21.765322234,
+     "redraw": 2.0192627945000012,
+     "save_png": 2.0715345370000016
+    },
+    "redraw_seconds": [
+     2.0536983540005167,
+     2.0051356739995754
+    ],
+    "round": "round-02"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/round-03-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 594.875,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.06686181700024463,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.4479451289998906,
+     "build": 17.480505322999306,
+     "first_draw": 4.132687518999774,
+     "build_and_first_draw": 21.61319284199908,
+     "redraw": 2.1076801565000096,
+     "save_png": 2.286606949999623
+    },
+    "cpu_seconds": {
+     "build": 17.398806509,
+     "first_draw": 4.295591003000002,
+     "build_and_first_draw": 21.694397512000002,
+     "redraw": 2.099778759000001,
+     "save_png": 2.2560612560000024
+    },
+    "redraw_seconds": [
+     2.2877017259997956,
+     1.9276585870002236
+    ],
+    "round": "round-03"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/round-03-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.51171875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.03294576499956747,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24792437799987965,
+     "build": 0.46925604799980647,
+     "first_draw": 0.21340425300058996,
+     "build_and_first_draw": 0.6826603010003964,
+     "redraw": 0.19063897100022587,
+     "save_png": 0.2787864759993681
+    },
+    "cpu_seconds": {
+     "build": 0.46841795399999986,
+     "first_draw": 0.21325360800000004,
+     "build_and_first_draw": 0.6816715619999999,
+     "redraw": 0.18979344899999995,
+     "save_png": 0.2768793979999997
+    },
+    "redraw_seconds": [
+     0.19124093699974765,
+     0.19003700500070408
+    ],
+    "round": "round-03"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/round-04-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.47265625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.03195805899940751,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.25903652899978624,
+     "build": 0.49695905600037804,
+     "first_draw": 0.21472185400034505,
+     "build_and_first_draw": 0.7116809100007231,
+     "redraw": 0.2093091049996474,
+     "save_png": 0.2874440739997226
+    },
+    "cpu_seconds": {
+     "build": 0.4797896239999999,
+     "first_draw": 0.21301437499999998,
+     "build_and_first_draw": 0.6928039989999999,
+     "redraw": 0.208386874,
+     "save_png": 0.28363327799999993
+    },
+    "redraw_seconds": [
+     0.23263804799989884,
+     0.18598016199939593
+    ],
+    "round": "round-04"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/round-04-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 594.90625,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.051578761999735434,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.4487173190000249,
+     "build": 18.255487068000548,
+     "first_draw": 4.151967341999807,
+     "build_and_first_draw": 22.407454410000355,
+     "redraw": 2.0673293964996446,
+     "save_png": 2.29682847300046
+    },
+    "cpu_seconds": {
+     "build": 18.077149657,
+     "first_draw": 4.290768954000001,
+     "build_and_first_draw": 22.367918611,
+     "redraw": 2.0513064064999984,
+     "save_png": 2.2925433429999984
+    },
+    "redraw_seconds": [
+     2.0170438609993653,
+     2.117614931999924
+    ],
+    "round": "round-04"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.8.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "1.26.4",
+    "pillow_version": "10.2.0",
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "22789471c1f44efc892577568cdba285ae5a8877af606a995d3278bf0157fe8e",
+    "image": "<scratch>/bench_B/round-05-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 594.95703125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.06255934599994362,
+    "png_bytes": 481338,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.4293461670004035,
+     "build": 17.664469766000366,
+     "first_draw": 4.321893844999977,
+     "build_and_first_draw": 21.986363611000343,
+     "redraw": 2.3269169534996763,
+     "save_png": 2.6427310399994894
+    },
+    "cpu_seconds": {
+     "build": 17.562931323,
+     "first_draw": 4.470096541,
+     "build_and_first_draw": 22.033027864,
+     "redraw": 2.3018015025,
+     "save_png": 2.6238011840000013
+    },
+    "redraw_seconds": [
+     2.482600814999387,
+     2.171233091999966
+    ],
+    "round": "round-05"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.2.6",
+    "pillow_version": null,
+    "python_version": "3.10.20",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_B/round-05-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 295.54296875,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.032052219999968656,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.24407562199940003,
+     "build": 0.49088636899978155,
+     "first_draw": 0.2130237709998255,
+     "build_and_first_draw": 0.703910139999607,
+     "redraw": 0.19059911200019997,
+     "save_png": 0.2766858189997947
+    },
+    "cpu_seconds": {
+     "build": 0.4881300879999999,
+     "first_draw": 0.21189612699999993,
+     "build_and_first_draw": 0.7000262149999998,
+     "redraw": 0.19032893500000003,
+     "save_png": 0.275860172
+    },
+    "redraw_seconds": [
+     0.1859820600002422,
+     0.19521616400015773
+    ],
+    "round": "round-05"
+   }
+  ],
+  "summary": {
+   "mpl": {
+    "import": {
+     "median": 0.4479451289998906,
+     "min": 0.4293461670004035,
+     "max": 0.5811823899994124
+    },
+    "build": {
+     "median": 17.664469766000366,
+     "min": 17.480505322999306,
+     "max": 19.737180555000123
+    },
+    "first_draw": {
+     "median": 4.151967341999807,
+     "min": 4.056406468000205,
+     "max": 4.480993280000803
+    },
+    "build_and_first_draw": {
+     "median": 21.986363611000343,
+     "min": 21.61319284199908,
+     "max": 24.218173835000925
+    },
+    "redraw": {
+     "median": 2.1076801565000096,
+     "min": 2.029417014000046,
+     "max": 2.3269169534996763
+    },
+    "save_png": {
+     "median": 2.29682847300046,
+     "min": 2.073093386000437,
+     "max": 2.7393729720006377
+    },
+    "peak_rss_mib_median": 594.875
+   },
+   "rs": {
+    "import": {
+     "median": 0.24786129699987214,
+     "min": 0.24407562199940003,
+     "max": 0.25903652899978624
+    },
+    "build": {
+     "median": 0.4924044879999201,
+     "min": 0.46925604799980647,
+     "max": 0.6805939409996427
+    },
+    "first_draw": {
+     "median": 0.21472185400034505,
+     "min": 0.2130237709998255,
+     "max": 0.2932483710001179
+    },
+    "build_and_first_draw": {
+     "median": 0.7116809100007231,
+     "min": 0.6826603010003964,
+     "max": 0.9738423119997606
+    },
+    "redraw": {
+     "median": 0.2093091049996474,
+     "min": 0.19059911200019997,
+     "max": 0.21163410249982917
+    },
+    "save_png": {
+     "median": 0.2787864759993681,
+     "min": 0.23465725799997017,
+     "max": 0.2874440739997226
+    },
+    "peak_rss_mib_median": 295.51171875
+   }
+  },
+  "speedup_median": {
+   "import": 1.8072411240554498,
+   "build": 35.873900820341895,
+   "first_draw": 19.33649167351701,
+   "build_and_first_draw": 30.89356943827256,
+   "redraw": 10.069701251188095,
+   "save_png": 8.2386653253785
+  },
+  "all_canvas_rgba_identical": false,
+  "interpreters": {
+   "mpl": "<python3.10, matplotlib 3.8.2>",
+   "rs": "<python3.10, numpy only>"
+  },
+  "png_comparison": {
+   "shape": [
+    1200,
+    3600,
+    4
+   ],
+   "different_pixels": 20688,
+   "max_channel_difference": 255
+  }
+ },
+ "official_matplotlib_3.11.2_vs_matplotlib_rs_0.0.3_python3.12": {
+  "parameters": {
+   "groups": 30,
+   "boxes": 180,
+   "samples": 100,
+   "seed": 20261026,
+   "rounds": 5,
+   "warmups": 1,
+   "redraws": 2,
+   "dpi": 100,
+   "width": 36,
+   "height": 12,
+   "timeout": 300,
+   "output": "<scratch>/bench_D",
+   "python_source": "<repo>/python",
+   "official_optimization": "none",
+   "png_compress_level": null,
+   "mpl_python": "<python3.12, matplotlib 3.11.2>",
+   "rs_python": "<python3.12, matplotlib 3.11.2>"
+  },
+  "python": "3.12.3 (main, Aug 31 2026, 10:18:26) [GCC 13.3.0]",
+  "platform": "Linux-6.18.44-fc-v185-x86_64-with-glibc2.39",
+  "git_commit": "4e86b1dba7990b609fa8fe5e9089b0b81f00117f",
+  "warmups": [
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/warmup-01-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.328125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.04604089600070438,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.5293581360001554,
+     "build": 16.650459667999712,
+     "first_draw": 3.6775279029998273,
+     "build_and_first_draw": 20.32798757099954,
+     "redraw": 1.8022023915004866,
+     "save_png": 1.9752619729997605
+    },
+    "cpu_seconds": {
+     "build": 16.513448245,
+     "first_draw": 3.6318833690000005,
+     "build_and_first_draw": 20.145331614,
+     "redraw": 1.7926119270000012,
+     "save_png": 1.9553313659999993
+    },
+    "redraw_seconds": [
+     1.9490509880006357,
+     1.6553537950003374
+    ],
+    "round": "warmup-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/warmup-01-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.203125,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.025566586999957508,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2425669360000029,
+     "build": 0.4461455760001627,
+     "first_draw": 0.21706231200005277,
+     "build_and_first_draw": 0.6632078880002155,
+     "redraw": 0.2172337140000309,
+     "save_png": 0.30914091399972676
+    },
+    "cpu_seconds": {
+     "build": 0.44382359800000015,
+     "first_draw": 0.21588334499999995,
+     "build_and_first_draw": 0.6597069430000001,
+     "redraw": 0.21342340299999996,
+     "save_png": 0.3078920230000002
+    },
+    "redraw_seconds": [
+     0.2388035250005487,
+     0.19566390299951308
+    ],
+    "round": "warmup-01"
+   }
+  ],
+  "runs": [
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-01-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.26953125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.04540653299955011,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.5262408470007358,
+     "build": 15.185600982000324,
+     "first_draw": 3.7843869939997603,
+     "build_and_first_draw": 18.969987976000084,
+     "redraw": 1.838882784999896,
+     "save_png": 2.1430565339996974
+    },
+    "cpu_seconds": {
+     "build": 15.110064349999998,
+     "first_draw": 3.7492228589999996,
+     "build_and_first_draw": 18.859287208999998,
+     "redraw": 1.812625648500001,
+     "save_png": 2.123383598
+    },
+    "redraw_seconds": [
+     1.9420523609996962,
+     1.735713209000096
+    ],
+    "round": "round-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-01-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.18359375,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.024844186000336776,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.25637167599961685,
+     "build": 0.475049339999714,
+     "first_draw": 0.2039601180003956,
+     "build_and_first_draw": 0.6790094580001096,
+     "redraw": 0.2272784669999055,
+     "save_png": 0.2860008910001852
+    },
+    "cpu_seconds": {
+     "build": 0.47094224399999995,
+     "first_draw": 0.2034258120000001,
+     "build_and_first_draw": 0.674368056,
+     "redraw": 0.22304891550000006,
+     "save_png": 0.28222393599999984
+    },
+    "redraw_seconds": [
+     0.2154514809999455,
+     0.23910545299986552
+    ],
+    "round": "round-01"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-02-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.1953125,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.038938409999900614,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.3091846409997743,
+     "build": 0.4846087899995837,
+     "first_draw": 0.2678483870004129,
+     "build_and_first_draw": 0.7524571769999966,
+     "redraw": 0.18819777899989276,
+     "save_png": 0.26356532299996616
+    },
+    "cpu_seconds": {
+     "build": 0.48185916299999987,
+     "first_draw": 0.26157467199999984,
+     "build_and_first_draw": 0.7434338349999997,
+     "redraw": 0.18566090149999992,
+     "save_png": 0.26204631600000017
+    },
+    "redraw_seconds": [
+     0.1842314309997164,
+     0.19216412700006913
+    ],
+    "round": "round-02"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-02-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.33203125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.04372406600032264,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.5546903949998523,
+     "build": 14.937161018999177,
+     "first_draw": 3.6662855630002014,
+     "build_and_first_draw": 18.60344658199938,
+     "redraw": 1.8126577779999025,
+     "save_png": 1.8575462819999302
+    },
+    "cpu_seconds": {
+     "build": 14.820930692000001,
+     "first_draw": 3.6416760130000014,
+     "build_and_first_draw": 18.462606705000002,
+     "redraw": 1.803769405999999,
+     "save_png": 1.8484634809999996
+    },
+    "redraw_seconds": [
+     1.850440164000247,
+     1.774875391999558
+    ],
+    "round": "round-02"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-03-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.3203125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.0438733119999597,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.510893507000219,
+     "build": 15.113826251000319,
+     "first_draw": 3.6683087350002097,
+     "build_and_first_draw": 18.78213498600053,
+     "redraw": 1.815145792000294,
+     "save_png": 1.8702304589996857
+    },
+    "cpu_seconds": {
+     "build": 14.954701077,
+     "first_draw": 3.6532946720000012,
+     "build_and_first_draw": 18.607995749,
+     "redraw": 1.7982858514999993,
+     "save_png": 1.8620192359999983
+    },
+    "redraw_seconds": [
+     1.7598276329999862,
+     1.8704639510006018
+    ],
+    "round": "round-03"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-03-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.15625,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.03062065900030575,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.23591650900016248,
+     "build": 0.4215262059997258,
+     "first_draw": 0.22331339799984562,
+     "build_and_first_draw": 0.6448396039995714,
+     "redraw": 0.18240501249965746,
+     "save_png": 0.32456121599989274
+    },
+    "cpu_seconds": {
+     "build": 0.41947246699999996,
+     "first_draw": 0.22194719299999988,
+     "build_and_first_draw": 0.6414196599999998,
+     "redraw": 0.1812919919999999,
+     "save_png": 0.3239278320000001
+    },
+    "redraw_seconds": [
+     0.17692396299935353,
+     0.18788606199996138
+    ],
+    "round": "round-03"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-04-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.1328125,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.023045945999911055,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.23528054200050974,
+     "build": 0.45059091499933857,
+     "first_draw": 0.2209953730007328,
+     "build_and_first_draw": 0.6715862880000714,
+     "redraw": 0.23284576700007165,
+     "save_png": 0.2235287959993002
+    },
+    "cpu_seconds": {
+     "build": 0.433745743,
+     "first_draw": 0.21099121499999995,
+     "build_and_first_draw": 0.644736958,
+     "redraw": 0.22903235249999998,
+     "save_png": 0.22334612200000015
+    },
+    "redraw_seconds": [
+     0.18704153199996654,
+     0.27865000200017676
+    ],
+    "round": "round-04"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-04-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.3125,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.04419826999946963,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.43058284300059313,
+     "build": 15.005638894000185,
+     "first_draw": 3.8318289970002297,
+     "build_and_first_draw": 18.837467891000415,
+     "redraw": 1.920284014000572,
+     "save_png": 2.1528800260002754
+    },
+    "cpu_seconds": {
+     "build": 14.883016253000001,
+     "first_draw": 3.826607358000002,
+     "build_and_first_draw": 18.709623611000005,
+     "redraw": 1.9091837639999998,
+     "save_png": 2.105377032
+    },
+    "redraw_seconds": [
+     1.919911110000612,
+     1.9206569180005317
+    ],
+    "round": "round-04"
+   },
+   {
+    "impl": "mpl",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-05-mpl.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 526.359375,
+    "official_optimization": "none",
+    "rust_extension_loaded": false,
+    "line_paths_ready_after_build": 32400,
+    "pre_draw_check_seconds": 0.043247614999927464,
+    "png_bytes": 492545,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.4516904740003156,
+     "build": 14.750616045999777,
+     "first_draw": 4.294164035999529,
+     "build_and_first_draw": 19.044780081999306,
+     "redraw": 1.9357001899998068,
+     "save_png": 2.1721836999995503
+    },
+    "cpu_seconds": {
+     "build": 14.612909557,
+     "first_draw": 4.265419960999999,
+     "build_and_first_draw": 18.878329518,
+     "redraw": 1.9275497149999996,
+     "save_png": 2.162255912999999
+    },
+    "redraw_seconds": [
+     1.6342685130002792,
+     2.2371318669993343
+    ],
+    "round": "round-05"
+   },
+   {
+    "impl": "rs",
+    "matplotlib_api_version": "3.11.2",
+    "python_source": "<repo>/python",
+    "numpy_version": "2.3.5",
+    "pillow_version": "13.0.0",
+    "python_version": "3.12.3",
+    "data_sha256": "2deceaf8bf3036b1f0aec85870e130fda94bb96f18ad36f9189186e24748c414",
+    "rgba_sha256": "24af5490562fd3b7e067fc091daeaa7e4f4893a480cb87a4a18263d1140e8591",
+    "image": "<scratch>/bench_D/round-05-rs.png",
+    "shape": [
+     1200,
+     3600,
+     4
+    ],
+    "box_count": 5400,
+    "line_count": 32400,
+    "peak_rss_mib": 270.0859375,
+    "official_optimization": null,
+    "rust_extension_loaded": true,
+    "line_paths_ready_after_build": 0,
+    "pre_draw_check_seconds": 0.02543446900017443,
+    "png_bytes": 926740,
+    "optimization_counts": {},
+    "seconds": {
+     "import": 0.2690135619995999,
+     "build": 0.43486509199919965,
+     "first_draw": 0.2116072440003336,
+     "build_and_first_draw": 0.6464723359995332,
+     "redraw": 0.2284666020000259,
+     "save_png": 0.2245588290006708
+    },
+    "cpu_seconds": {
+     "build": 0.429853974,
+     "first_draw": 0.21057020699999995,
+     "build_and_first_draw": 0.640424181,
+     "redraw": 0.22837542099999997,
+     "save_png": 0.22401849399999985
+    },
+    "redraw_seconds": [
+     0.2665039789999355,
+     0.19042922500011628
+    ],
+    "round": "round-05"
+   }
+  ],
+  "summary": {
+   "mpl": {
+    "import": {
+     "median": 0.510893507000219,
+     "min": 0.43058284300059313,
+     "max": 0.5546903949998523
+    },
+    "build": {
+     "median": 15.005638894000185,
+     "min": 14.750616045999777,
+     "max": 15.185600982000324
+    },
+    "first_draw": {
+     "median": 3.7843869939997603,
+     "min": 3.6662855630002014,
+     "max": 4.294164035999529
+    },
+    "build_and_first_draw": {
+     "median": 18.837467891000415,
+     "min": 18.60344658199938,
+     "max": 19.044780081999306
+    },
+    "redraw": {
+     "median": 1.838882784999896,
+     "min": 1.8126577779999025,
+     "max": 1.9357001899998068
+    },
+    "save_png": {
+     "median": 2.1430565339996974,
+     "min": 1.8575462819999302,
+     "max": 2.1721836999995503
+    },
+    "peak_rss_mib_median": 526.3203125
+   },
+   "rs": {
+    "import": {
+     "median": 0.25637167599961685,
+     "min": 0.23528054200050974,
+     "max": 0.3091846409997743
+    },
+    "build": {
+     "median": 0.45059091499933857,
+     "min": 0.4215262059997258,
+     "max": 0.4846087899995837
+    },
+    "first_draw": {
+     "median": 0.2209953730007328,
+     "min": 0.2039601180003956,
+     "max": 0.2678483870004129
+    },
+    "build_and_first_draw": {
+     "median": 0.6715862880000714,
+     "min": 0.6448396039995714,
+     "max": 0.7524571769999966
+    },
+    "redraw": {
+     "median": 0.2272784669999055,
+     "min": 0.18240501249965746,
+     "max": 0.23284576700007165
+    },
+    "save_png": {
+     "median": 0.26356532299996616,
+     "min": 0.2235287959993002,
+     "max": 0.32456121599989274
+    },
+    "peak_rss_mib_median": 270.15625
+   }
+  },
+  "speedup_median": {
+   "import": 1.99278451883656,
+   "build": 33.30213369708578,
+   "first_draw": 17.124281574832843,
+   "build_and_first_draw": 28.04921456496207,
+   "redraw": 8.090879920448693,
+   "save_png": 8.131026151721684
+  },
+  "all_canvas_rgba_identical": true,
+  "interpreters": {
+   "mpl": "<python3.12, matplotlib 3.11.2>",
+   "rs": "<python3.12, matplotlib 3.11.2>"
+  },
+  "png_comparison": {
+   "shape": [
+    1200,
+    3600,
+    4
+   ],
+   "different_pixels": 0,
+   "max_channel_difference": 0
+  }
+ }
+}

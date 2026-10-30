@@ -1,27 +1,28 @@
 # matplotlib-rs
 
 以 Rust 實作繪圖與字型核心，提供與 Matplotlib 相容的 Python／`pyplot` 介面。
-目前發行版本為 `0.0.2`，包含大量箱形圖的物件建立優化；Python 層包含依 Matplotlib 3.11 調整的模組，
-原生核心經 PyO3 與 NumPy 連接，處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
-部分功能仍由 Python 與其他套件處理，例如 ContourPy 等高線及 Kiwi constrained layout。
+目前發行版本為 `0.0.3`：支援 **Python 3.10**，執行期**只依賴 NumPy**，並進一步加快大量箱形圖。
+Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 NumPy 連接，
+處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
 
 ## 安裝
 
-需要 Python 3.11 以上。Linux x86_64、glibc 2.28 以上、CPython 3.11～3.13 可直接安裝預編譯 wheel：
+需要 Python 3.10 以上；唯一的執行期依賴是 NumPy 1.25 以上。
+Linux x86_64、glibc 2.28 以上、CPython 3.10～3.13 可直接安裝預編譯 wheel：
 
 ```bash
-python -m pip install matplotlib-rs==0.0.2
+python -m pip install matplotlib-rs==0.0.3
+python -m pip list   # 只會多出 matplotlib-rs 與 numpy
 ```
 
-套件已發布於 [PyPI](https://pypi.org/project/matplotlib-rs/0.0.2/)。
-從原始碼安裝另需 Rust stable 工具鏈與本機 C linker。
-本機實測環境為 Linux x86_64、CPython 3.12；CI 涵蓋 CPython 3.11～3.13。
-其他平台尚未驗證。
+PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.3) 使用完全相同的已測試套件；
+Release 另附 source distribution、效能原始紀錄與 `SHA256SUMS`。
+發布流程在只有 NumPy 的乾淨環境測試每個 wheel；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
 
 從 release 原始碼安裝：
 
 ```bash
-git clone --branch v0.0.2 https://github.com/g21589/matplotlib-rs.git
+git clone --branch v0.0.3 https://github.com/g21589/matplotlib-rs.git
 cd matplotlib-rs
 python -m venv .venv
 source .venv/bin/activate
@@ -29,13 +30,28 @@ python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-pip 會透過 maturin 編譯 Rust extension 並安裝所需 Python 依賴。
-也可從 [Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.2) 下載符合 Python 版本的 wheel，
-執行 `python -m pip install /path/to/matplotlib_rs-0.0.2-*.whl`，不需自行編譯 Rust。
-發布流程建置 CPython 3.11／3.12／3.13、Linux x86_64、glibc 2.28 以上的 wheel，
-並附上 source distribution、效能原始紀錄與 `SHA256SUMS`。
-PyPI 與 GitHub Release 使用完全相同的已測試套件。
+需要 Rust stable 工具鏈與本機 C 編譯器（Linux 上的 `cc`／gcc；Windows 為 MSVC），
+pip 會透過 maturin 編譯 Rust extension 與內建的 qhull。
 發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
+
+Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
+
+| Matplotlib 依賴 | matplotlib-rs 0.0.3 的作法 |
+| --- | --- |
+| cycler、pyparsing、python-dateutil（含 six） | 純 Python，原樣內建於 `matplotlib_rs._vendor`（`tools/vendor_deps.py` 可重現）；已安裝的 cycler 會優先使用 |
+| kiwisolver（constrained layout） | Rust 移植 kiwi 1.5 求解器，運算順序與 kiwi 相同 |
+| ContourPy（等高線） | Rust 移植預設的 `mpl2014` 演算法，頂點逐位元相同 |
+| qhull（Delaunay 三角網格） | 內建並編譯 Matplotlib 使用的 qhull 8.0.2，三角形順序相同 |
+| Pillow（PNG 讀寫、PDF／SVG 內嵌影像） | Rust 讀寫 PNG；`imread` 的數值與 Matplotlib／Pillow 相同 |
+| fontTools、packaging | 只有 Type 42 字型嵌入需要 fontTools；packaging 改為內建版本解析 |
+
+已安裝 Pillow 時仍由 Pillow 編碼內嵌影像，與 Matplotlib 的檔案逐位元組相同。
+下列功能仍需選用套件（`pip install "matplotlib-rs[full]"`），缺少時會丟出說明用途的 `ImportError`：
+JPEG／TIFF／WebP／GIF／AVIF 讀寫、`pil_kwargs`、`PillowWriter` 需要 Pillow；
+`pdf.fonttype`／`ps.fonttype` 設為 42 需要 fontTools；`contour.algorithm` 為
+`serial`／`threaded`／`mpl2005` 需要 ContourPy。usetex、GUI 後端與影片輸出需要的外部程式不變。
+
+先前的 0.0.2 需要 Python 3.11 以上，並會安裝 ContourPy、Pillow、kiwisolver 等 Matplotlib 依賴。
 
 ## 基本使用
 
@@ -59,7 +75,8 @@ plt.close(fig)
 
 也可以直接使用 `import matplotlib_rs.pyplot as plt`。
 `install()` 會將 `matplotlib` 與 `mpl_toolkits` 匯入導向本套件；
-請在獨立的 Python 行程內選擇實作。
+若未安裝 cycler 或 python-dateutil，為 Matplotlib 撰寫的腳本中 `from cycler import cycler`、
+`import dateutil` 也會取得內建版本。請在獨立的 Python 行程內選擇實作。
 套件發行版本可透過 `importlib.metadata.version("matplotlib-rs")` 查詢；
 `matplotlib_rs.__version__` 保留 `3.11.2`，供沿用的 Matplotlib 相容程式判斷 API 版本。
 
@@ -76,7 +93,8 @@ plt.close(fig)
 這是測試案例覆蓋的功能清單，並不代表完整 Matplotlib API、所有參數或 GUI 後端均已相容。
 本次以 Agg 離線繪圖為驗證範圍；GUI 互動、外部 TeX／影片工具及跨平台行為未完成驗證。
 逐像素與向量格式比對結果、官方 gallery 的差異及略過項目會列於
-[0.0.1 完整驗證報告](docs/releases/0.0.1.md)；本版新增測試見 [0.0.2 發行紀錄](docs/releases/0.0.2.md)。
+[0.0.1 完整驗證報告](docs/releases/0.0.1.md)；之後新增的測試見
+[0.0.2](docs/releases/0.0.2.md) 與 [0.0.3](docs/releases/0.0.3.md) 發行紀錄。
 
 ## 測試與功能覆蓋率
 
@@ -113,6 +131,22 @@ CI 比對時亦明確保留參考端 transform 的生命週期，詳見 [CI 說�
 
 完整結果與可重現命令見 [驗證報告](docs/releases/0.0.1.md)。
 功能案例通過率與原始碼行／分支覆蓋率是不同指標；本版未量測原始碼覆蓋率。
+
+### 0.0.3 實測：Python 3.10 與只有 NumPy 的環境
+
+| 測試範圍 | 結果 |
+| --- | --- |
+| CPython 3.11／3.12／3.13（安裝參考套件） | Rust 5／5；全部單元、底層差異與模型測試通過；58／58 案例的 PNG／SVG／PDF／EPS 全部一致 |
+| **CPython 3.10、只裝 NumPy** 對 Matplotlib 3.11.2（Python 3.12） | **58／58 案例一致**：PNG 逐像素、EPS 逐位元組；9 個含內嵌點陣影像的案例 SVG／PDF 解碼後像素相同，其餘內容逐位元組相同 |
+| 內建 kiwi | 6 種 constrained layout（含 subfigures、colorbar、mosaic、`outside` legend）座標與 kiwisolver 逐位元相同；400 組隨機系統誤差 < 1e-9 |
+| 內建 mpl2014 等高線 | 200 個隨機場（遮罩、NaN、chunk、corner mask）共 3,600 組線與填色結果與 ContourPy 逐位元相同 |
+| 內建 qhull | 150 組點集（含共圓格點、重複點、極端長寬比）三角形與鄰接陣列和 Matplotlib `_qhull` 完全相同 |
+| PNG 讀寫 | 12 種 Pillow 產生的 PNG（1／2／4／8／16 bit、調色盤與透明、interlace）讀出與 Matplotlib 的 `imread` 數值相同 |
+| NumPy 1.25.2／1.26.4（Python 3.10） | 與 NumPy 2.x 輸出相同；僅 SVG clip-path id 不同（Matplotlib 以 `str()` 雜湊 NumPy 數值，NumPy 2 改變了顯示格式，官方版亦同） |
+| 安裝 | cp310 wheel 與 sdist（含 Rust 與 qhull 編譯）在乾淨 Python 3.10 venv 安裝後只有 `matplotlib-rs` 與 `numpy`，煙霧測試通過 |
+
+constrained layout 的 kiwisolver 會依變數記憶體位址排序，同一份腳本只要輸出路徑長度不同，
+SVG 座標末位就可能改變；內建 kiwi 以建立順序排序，結果固定，實測常見版面與 kiwisolver 相同。
 
 ## 效能測試
 
@@ -163,6 +197,23 @@ import 包含 NumPy／pyplot，第一次存檔包含首次繪製成本，後續�
 24 次執行的 PNG 位元組全部一致。安裝、使用與完整數據見
 [3.8.2 相容版本報告](docs/benchmarks/official-boxplot-optimization-3.8.2.md)。
 
+#### 0.0.3：批次建立箱形圖、Python 3.10 只有 NumPy
+
+0.0.3 一次建立每個 `bxp` 呼叫的全部 artists（NumPy 計算座標、Rust 批次複製 handle 與 Python 物件），
+並在建立期間暫停循環垃圾回收；每個箱體與線段仍是可獨立修改的物件。五輪中位數：
+
+| 比較 | 建圖 | 建圖＋首次繪製 |
+| --- | --- | --- |
+| matplotlib-rs 0.0.2 → 0.0.3（Python 3.12，交錯量測） | 1.119 → **0.470 秒（2.38×）** | 1.374 → 0.705 秒（1.95×） |
+| 官方 Matplotlib 3.8.2 → 0.0.3 只有 NumPy（**Python 3.10**） | 17.664 → **0.492 秒（35.9×）** | 21.986 → **0.712 秒（30.9×）** |
+| 官方 Matplotlib 3.11.2 → 0.0.3（Python 3.12） | 15.006 → **0.451 秒（33.3×）** | 18.837 → 0.672 秒（28.0×） |
+
+0.0.3 在 Python 3.10 只有 NumPy 時的畫布與 Matplotlib 3.11.2 逐像素相同；
+與 3.8.2 的差異只在文字（3.8 與 3.11 的文字繪製不同），繪圖區內沒有差異像素。
+Python 3.10 的最高 RSS 為 594.9（3.8.2）→ 295.5 MiB。
+主機為 4 vCPU Intel Xeon 2.80GHz；數據見 [`docs/benchmarks/boxplots-0.0.3.json`](docs/benchmarks/boxplots-0.0.3.json)，
+重跑方式見 [壓測說明](tests/bench/README.md#003批次建立與-python-310)。
+
 ## 開發與重跑測試
 
 ```bash
@@ -181,6 +232,13 @@ for test in tests/unit/test_*.py tests/lowlevel/diff_*.py tests/model/first_plot
     python "$test" || exit 1
 done
 COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
+
+# Python 3.10、只有 NumPy 的環境（參考端使用上面的 Python 與套件）：
+python3.10 -m venv /tmp/numpy-only && /tmp/numpy-only/bin/pip install numpy
+PYTHON=/tmp/numpy-only/bin/python sh scripts/dev_build.sh --locked
+NUMPY_ONLY_PYTHON=/tmp/numpy-only/bin/python python tests/unit/test_numpy_only.py
+COMPARE_RS_PYTHON=/tmp/numpy-only/bin/python COMPARE_DECODE_IMAGES=1 \
+    COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
 ```
 
 Rust 單元測試的 PyO3／libpython 連結方式、官方 gallery 的取得與執行方式，
@@ -196,9 +254,10 @@ maturin sdist --out dist
 
 ## CI 與版本發布
 
-GitHub Actions 在 push／PR 執行 Python 3.11～3.13 的 Rust、單元、底層與四格式圖形比較。
-推送 `vX.Y.Z` 標籤後，發布流程會檢查版本一致性、執行測試、建置 wheel 與 sdist、
-在乾淨環境驗證 wheel，並與 0.0.1 基準版交錯量測 5,400 個箱形圖。
+GitHub Actions 在 push／PR 執行 Python 3.11～3.13 的 Rust、單元、底層與四格式圖形比較，
+並另以 **Python 3.10 只安裝 NumPy** 的環境對 Matplotlib 3.11.2 跑同一套比較（含 NumPy 1.25.2 最低版本）。
+推送 `vX.Y.Z` 標籤後，發布流程會檢查版本一致性、執行測試、建置 CPython 3.10～3.13 的 wheel 與 sdist、
+在只有 NumPy 的乾淨環境驗證 wheel，並與 0.0.1 基準版交錯量測 5,400 個箱形圖。
 必須像素一致且建圖中位數至少加速 10 倍，才能發布 GitHub Release。
 GitHub Release 成功後，PyPI 流程會沿用同一組已驗證的套件，以 Trusted Publishing 發布。
 完整流程、首次授權設定與本機入口見 [CI／CD 說明](docs/CI.md)。
@@ -207,3 +266,8 @@ GitHub Release 成功後，PyPI 流程會沿用同一組已驗證的套件，以
 
 依 [`PSF-2.0`](licenses/LICENSE_MATPLOTLIB) 授權；
 本專案包含由 Matplotlib 衍生的 Python 程式碼與資料，保留其授權及版權聲明。
+內建的第三方程式碼各依其授權：cycler（[BSD](licenses/LICENSE_CYCLER)）、
+pyparsing（[MIT](licenses/LICENSE_PYPARSING)）、python-dateutil（[Apache-2.0／BSD](licenses/LICENSE_DATEUTIL)）、
+six（[MIT](licenses/LICENSE_SIX)）、qhull（[Qhull](licenses/LICENSE_QHULL)）；
+Rust 移植的 kiwi 與 ContourPy mpl2014 演算法分別依 [BSD](licenses/LICENSE_KIWISOLVER) 與
+[BSD-3-Clause](licenses/LICENSE_CONTOURPY)。

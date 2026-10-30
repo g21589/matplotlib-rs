@@ -4303,6 +4303,7 @@ or pandas.DataFrame
 
     @_api.make_keyword_only("3.10", "notch")
     @_preprocess_data()
+    @cbook._gc_paused  # (many artists: see _boxplot.py)
     def boxplot(self, x, notch=None, sym=None, vert=None,
                 orientation='vertical', whis=None, positions=None,
                 widths=None, patch_artist=None, bootstrap=None,
@@ -4640,6 +4641,7 @@ or pandas.DataFrame
         return artists
 
     @_api.make_keyword_only("3.10", "widths")
+    @cbook._gc_paused  # (many artists: see _boxplot.py)
     def bxp(self, bxpstats, positions=None, widths=None, vert=None,
             orientation='vertical', patch_artist=False, shownotches=False,
             showmeans=False, showcaps=True, showbox=True, showfliers=True,
@@ -4806,8 +4808,11 @@ or pandas.DataFrame
 
         zdelta = 0.1
 
+        # (as rcParams.items(), in key order, but reading the boxplot keys only)
+        boxplot_rc = [k for k in mpl.rcParams if k.startswith('boxplot.')]
+
         def merge_kw_rc(subkey, explicit, zdelta=0, usemarker=True):
-            d = {k.split('.')[-1]: v for k, v in mpl.rcParams.items()
+            d = {k.split('.')[-1]: mpl.rcParams[k] for k in boxplot_rc
                  if k.startswith(f'boxplot.{subkey}props')}
             d['zorder'] = zorder + zdelta
             if not usemarker:
@@ -4926,8 +4931,19 @@ or pandas.DataFrame
                 x, y = [xs, ys][maybe_swap]
                 return fast.patch(x, y)
 
-        for pos, width, stats, capwidth in zip(positions, widths, bxpstats,
-                                               capwidths):
+        built = None if fast is None else fast.build(
+            bxpstats, positions, widths, capwidths, orientation == 'vertical',
+            showbox=showbox, patch_artist=patch_artist, shownotches=shownotches,
+            showcaps=showcaps, showmeans=showmeans, meanline=meanline,
+            showfliers=showfliers, box_kw=box_kw, whisker_kw=whisker_kw,
+            cap_kw=cap_kw, median_kw=median_kw, mean_kw=mean_kw, flier_kw=flier_kw)
+        if built is not None:
+            whiskers, caps, boxes, medians, means, fliers = built
+            datalabels = [stats.get('label', pos)
+                          for pos, stats in zip(positions, bxpstats)]
+        for pos, width, stats, capwidth in zip(
+                *([] if built is not None else
+                  [positions, widths, bxpstats, capwidths])):
             # try to find a new label
             datalabels.append(stats.get('label', pos))
 

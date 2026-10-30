@@ -57,7 +57,7 @@ import threading
 import time
 from typing import IO, TYPE_CHECKING, cast, overload
 
-from cycler import cycler  # noqa: F401
+from matplotlib_rs.rcsetup import ccycler as cycler  # noqa: F401, cycler.cycler
 import matplotlib_rs as matplotlib
 import matplotlib_rs.image; import matplotlib_rs as matplotlib
 from matplotlib_rs import _api

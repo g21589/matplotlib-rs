@@ -83,8 +83,16 @@ class _ExceptionInfo:
     def to_exception(self):
         exc = self._cls(*self._args)
         for note in self._notes:
-            exc.add_note(note)
+            _add_note(exc, note)
         return exc
+
+
+def _add_note(exc, note):
+    """``exc.add_note(note)``, also on Python 3.10 (which lacks it)."""
+    if hasattr(exc, "add_note"):
+        exc.add_note(note)
+    else:
+        exc.__notes__ = [*getattr(exc, "__notes__", []), note]
 
 
 def _get_running_interactive_framework():
@@ -1178,6 +1186,28 @@ def _broadcast_with_masks(*args, compress=False):
     return inputs
 
 
+def _gc_paused(func):
+    """
+    Run *func* with the cyclic garbage collector paused (and then restored).
+
+    Creating tens of thousands of artists (e.g. by boxplot) otherwise triggers
+    many collections, each traversing all the live artists created so far;
+    the collector only runs later instead.
+    """
+    import gc
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            if enabled:
+                gc.enable()
+    return wrapper
+
+
 def _boxplot_stats_dense(X, whis, labels):
     """The regular finite float64 case, with the same per-column arithmetic.
 
@@ -1199,15 +1229,22 @@ def _boxplot_stats_dense(X, whis, labels):
     hi = np.max(columns, axis=1, where=columns <= hival[:, None], initial=-np.inf)
     lo = np.where((lo == np.inf) | (lo > q1), q1, lo)
     hi = np.where((hi == -np.inf) | (hi < q3), q3, hi)
+    # The fliers of each column: those below lo, then those above hi, each
+    # in sample order (as concatenating x[x < lo] and x[x > hi]).
+    low = columns < lo[:, None]
+    high = columns > hi[:, None]
+    rows, cols = np.nonzero(low | high)
+    order = np.lexsort((cols, high[rows, cols], rows))
+    values = columns[rows[order], cols[order]]
+    counts = np.bincount(rows, minlength=ncols)
+    fliers = [f.copy() for f in np.split(values, np.cumsum(counts)[:-1])]
     result = []
-    for i, x in enumerate(columns):
+    for i, stat in enumerate(zip(means, iqr, cilo, cihi, hi, lo, fliers, q1, med, q3)):
         stats = {}
         if labels is not None and labels[i] is not None:
             stats['label'] = labels[i]
-        stats.update(mean=means[i], iqr=iqr[i], cilo=cilo[i], cihi=cihi[i],
-                     whishi=hi[i], whislo=lo[i],
-                     fliers=np.concatenate([x[x < lo[i]], x[x > hi[i]]]),
-                     q1=q1[i], med=med[i], q3=q3[i])
+        stats.update(zip(('mean', 'iqr', 'cilo', 'cihi', 'whishi', 'whislo', 'fliers',
+                          'q1', 'med', 'q3'), stat))
         result.append(stats)
     return result
 

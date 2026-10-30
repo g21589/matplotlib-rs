@@ -7,9 +7,21 @@
 Linux x86_64／Ubuntu 24.04，Python 3.11、3.12、3.13 分別建置 release extension，執行：
 
 - Python／Cargo／lockfile 版本檢查。
+- 以 `tools/vendor_deps.py` 重新產生內建的 cycler／pyparsing／python-dateutil／six，必須與提交內容完全相同。
 - Rust 單元測試與 doctest 探索。
 - 全部 `tests/unit/test_*.py`、`tests/lowlevel/diff_*.py` 與原生模型案例。
+  `test_native_ports.py` 將內建的 kiwi、mpl2014 等高線、qhull 與 PNG 讀寫，
+  逐位元比較 kiwisolver、ContourPy、Matplotlib `_qhull` 與 Pillow 的結果；
+  `test_numpy_only.py` 以不含 site-packages、只有 NumPy 的子行程繪圖，與完整環境比較。
 - 全部自有繪圖案例；PNG 逐像素一致，SVG／PDF／EPS 內容一致。
+
+另一項工作在 **Python 3.10 只安裝 NumPy** 的虛擬環境執行本專案（參考端仍為 Python 3.12 的 Matplotlib 3.11.2）：
+
+- 建置 3.10 extension，執行 Rust 測試與 `test_native_ports.py`（沒有參考套件時只做自我檢查）。
+- `test_numpy_only.py` 以該 3.10 環境為子行程；另建立 NumPy 1.25.2 環境重跑，確認宣告的最低版本。
+- 全部繪圖案例以 `COMPARE_RS_PYTHON` 跨直譯器比較。沒有 Pillow 時內嵌影像由本專案編碼，
+  `COMPARE_DECODE_IMAGES=1` 會在 SVG／PDF 不同時解碼內嵌影像再比較像素，其餘內容仍須逐位元相同；
+  PNG 與 EPS 仍要求完全一致。
 
 參考版本與數值依賴固定於 [`requirements-ci.txt`](../requirements-ci.txt)。
 Python 3.11 使用相容的 ContourPy 1.3.3；Python 3.12 以上使用 1.4.0。
@@ -32,6 +44,16 @@ sh scripts/test_rust.sh
 bash scripts/ci_test.sh
 ```
 
+Python 3.10／只有 NumPy 的對照（參考端使用上面的環境）：
+
+```bash
+python3.10 -m venv /tmp/numpy-only && /tmp/numpy-only/bin/pip install numpy
+PYTHON=/tmp/numpy-only/bin/python sh scripts/dev_build.sh --locked
+NUMPY_ONLY_PYTHON=/tmp/numpy-only/bin/python python tests/unit/test_numpy_only.py
+COMPARE_RS_PYTHON=/tmp/numpy-only/bin/python COMPARE_DECODE_IMAGES=1 \
+    COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
+```
+
 測試輸出與日誌位於 `tests/output/ci/`；CI 成功或失敗皆上傳為 Actions artifact，保留 14 天。
 完整上游 gallery 不在每次 CI 執行範圍。
 
@@ -40,8 +62,9 @@ bash scripts/ci_test.sh
 [Release workflow](../.github/workflows/release.yml) 由 `vX.Y.Z` tag push 觸發，流程如下：
 
 1. 檢查 tag、`pyproject.toml`、`Cargo.toml`、`Cargo.lock` 相符，且存在該版 release notes。
-2. 呼叫完整 CI；同時建置 CPython 3.11／3.12／3.13 的 manylinux_2_28 x86_64 wheel 與 sdist。
-3. 每個 wheel 安裝到沒有參考 Matplotlib 的乾淨 venv，測試可變 boxplot、mathtext、layout 與 PNG／SVG／PDF／EPS。
+2. 呼叫完整 CI；同時建置 CPython 3.10／3.11／3.12／3.13 的 manylinux_2_28 x86_64 wheel 與 sdist。
+3. 每個 wheel 安裝到乾淨 venv（只會一併安裝 NumPy），確認沒有其他套件，
+   測試可變 boxplot、mathtext、constrained layout、等高線、三角網格與 PNG／SVG／PDF／EPS。
 4. 從不可變的 `v0.0.1` tag 建置原始 wheel，與目前版在同一 Python／NumPy 環境交錯量測。
    每版預熱 1 次、量測 5 次，使用完全相同的 30 × 180 箱形圖、每箱 100 樣本。
    保留 5,400 個箱體與 32,400 條線；資料與 RGBA hash 必須相同，建圖中位數至少加速 10 倍。

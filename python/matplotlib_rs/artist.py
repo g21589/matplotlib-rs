@@ -330,6 +330,18 @@ def _rs_transform_from_spec(spec, axes, figure):
     raise ValueError(spec)
 
 
+class _LazyCallbacks:
+    """Class attribute standing in for an artist's ``_callbacks`` registry
+    until it is used (an artist's own registry, set by `Artist.__init__`,
+    takes precedence)."""
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        registry = obj.__dict__["_callbacks"] = cbook.CallbackRegistry(signals=["pchanged"])
+        return registry
+
+
 class Artist:
     """
     Abstract base class for objects that render into a FigureCanvas.
@@ -455,6 +467,9 @@ Supported properties are
 
     # -- matplotlib_rs: mirror properties into the Rust artist -------------
     _h = None  # the Rust handle (set by subclasses)
+    # Artists cloned without a callback registry (boxplot's, see
+    # axes/_boxplot.py) create theirs on first use.
+    _callbacks = _LazyCallbacks()
 
     def _rs_props(self):
         return _rs_base_props(self, {})
