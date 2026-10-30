@@ -1,28 +1,38 @@
 # matplotlib-rs
 
 以 Rust 實作繪圖與字型核心，提供與 Matplotlib 相容的 Python／`pyplot` 介面。
-最新發行版本為 `0.0.2`；開發中的 `0.0.3`（尚未發布）支援 **Python 3.10**，
-執行期**只依賴 NumPy**，並進一步加快大量箱形圖。Python 層包含依 Matplotlib 3.11 調整的模組，
-原生核心經 PyO3 與 NumPy 連接，處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
+目前發行版本為 `0.0.3`：支援 **Python 3.10**，執行期**只依賴 NumPy**，並進一步加快大量箱形圖。
+Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 NumPy 連接，
+處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
 
 ## 安裝
 
-### 0.0.3（開發中，原始碼）：Python 3.10 以上，只需 NumPy
+需要 Python 3.10 以上；唯一的執行期依賴是 NumPy 1.25 以上。
+Linux x86_64、glibc 2.28 以上、CPython 3.10～3.13 可直接安裝預編譯 wheel：
 
 ```bash
-git clone https://github.com/g21589/matplotlib-rs.git
+python -m pip install matplotlib-rs==0.0.3
+python -m pip list   # 只會多出 matplotlib-rs 與 numpy
+```
+
+PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.3) 使用完全相同的已測試套件；
+Release 另附 source distribution、效能原始紀錄與 `SHA256SUMS`。
+發布流程在只有 NumPy 的乾淨環境測試每個 wheel；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
+
+從 release 原始碼安裝：
+
+```bash
+git clone --branch v0.0.3 https://github.com/g21589/matplotlib-rs.git
 cd matplotlib-rs
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install .
-python -m pip list   # 只會多出 matplotlib-rs 與 numpy
 ```
 
 需要 Rust stable 工具鏈與本機 C 編譯器（Linux 上的 `cc`／gcc；Windows 為 MSVC），
 pip 會透過 maturin 編譯 Rust extension 與內建的 qhull。
-支援 CPython 3.10～3.13 與 NumPy 1.25 以上；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
-發布流程已改為建置 CPython 3.10～3.13 的 manylinux_2_28 x86_64 wheel，並在只有 NumPy 的乾淨環境測試。
+發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
 
 Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
 
@@ -41,21 +51,7 @@ JPEG／TIFF／WebP／GIF／AVIF 讀寫、`pil_kwargs`、`PillowWriter` 需要 Pi
 `pdf.fonttype`／`ps.fonttype` 設為 42 需要 fontTools；`contour.algorithm` 為
 `serial`／`threaded`／`mpl2005` 需要 ContourPy。usetex、GUI 後端與影片輸出需要的外部程式不變。
 
-### 0.0.2（已發布）：Python 3.11 以上
-
-Linux x86_64、glibc 2.28 以上、CPython 3.11～3.13 可直接安裝預編譯 wheel：
-
-```bash
-python -m pip install matplotlib-rs==0.0.2
-```
-
-套件已發布於 [PyPI](https://pypi.org/project/matplotlib-rs/0.0.2/)；
-此版本仍會安裝 ContourPy、Pillow、kiwisolver 等 Matplotlib 依賴。
-也可從 [Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.2) 下載符合 Python 版本的 wheel，
-執行 `python -m pip install /path/to/matplotlib_rs-0.0.2-*.whl`，不需自行編譯 Rust。
-發布流程會附上 source distribution、效能原始紀錄與 `SHA256SUMS`，
-PyPI 與 GitHub Release 使用完全相同的已測試套件。
-發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
+先前的 0.0.2 需要 Python 3.11 以上，並會安裝 ContourPy、Pillow、kiwisolver 等 Matplotlib 依賴。
 
 ## 基本使用
 
@@ -136,7 +132,7 @@ CI 比對時亦明確保留參考端 transform 的生命週期，詳見 [CI 說�
 完整結果與可重現命令見 [驗證報告](docs/releases/0.0.1.md)。
 功能案例通過率與原始碼行／分支覆蓋率是不同指標；本版未量測原始碼覆蓋率。
 
-### 0.0.3（開發中）實測：Python 3.10 與只有 NumPy 的環境
+### 0.0.3 實測：Python 3.10 與只有 NumPy 的環境
 
 | 測試範圍 | 結果 |
 | --- | --- |
