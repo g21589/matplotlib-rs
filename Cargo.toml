@@ -1,6 +1,6 @@
 [package]
 name = "matplotlib-rs"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 description = "A Rust reimplementation of matplotlib's rendering pipeline with a drop-in Python API"
 license = "PSF-2.0"
@@ -15,6 +15,9 @@ numpy = "0.30"
 harfrust = "0.15"
 png = "0.18"
 delaunator = "1"
+
+[build-dependencies]
+cc = "1"
 
 [profile.release]
 opt-level = 3

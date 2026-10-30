@@ -473,6 +473,25 @@ impl PyPatch {
         Ok(())
     }
 
+    /// One `copy_with_path` per (m, 2) vertex block of the (n, m, 2) array
+    /// *verts*, all with the path codes *codes*.
+    fn copy_many_paths(&self, verts: numpy::PyReadonlyArray3<'_, f64>, codes: Vec<u8>) -> PyResult<Vec<Self>> {
+        let v = verts.as_array();
+        if v.shape()[2] != 2 || v.shape()[1] != codes.len() {
+            return Err(PyValueError::new_err("copy_many_paths: mismatched shapes"));
+        }
+        let style = self.lk().clone();
+        Ok((0..v.shape()[0])
+            .map(|i| {
+                let mut patch = style.clone();
+                let block = v.index_axis(numpy::ndarray::Axis(0), i);
+                let pts = block.rows().into_iter().map(|r| [r[0], r[1]]).collect();
+                patch.kind = PatchKind::Generic { path: path_from_parts(pts, Some(codes.clone())), patch_transform: None };
+                Self { inner: shared(patch) }
+            })
+            .collect())
+    }
+
     /// Copy a PathPatch's style with independent replacement geometry.
     fn copy_with_path(&self, verts: Vec<[f64; 2]>, codes: Option<Vec<u8>>) -> Self {
         let mut patch = self.lk().clone();
@@ -1617,6 +1636,12 @@ impl PyAxes {
         self.with(|a, _| a.children.push(c))
     }
 
+    /// `add_child_raw` for each of *objs*, in order.
+    fn add_children_raw(&self, objs: Vec<Bound<'_, PyAny>>) -> PyResult<()> {
+        let cs = objs.iter().map(child_from).collect::<PyResult<Vec<_>>>()?;
+        self.with(|a, _| a.children.extend(cs))
+    }
+
     fn remove_child(&self, obj: &Bound<'_, PyAny>) -> PyResult<bool> {
         let c = child_from(obj)?;
         self.with(|a, _| {
@@ -2756,8 +2781,10 @@ fn encode_png_bytes(rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, Stri
             3 => png::Compression::Balanced,
             _ => png::Compression::High,
         });
-        let ppm = (dpi / 0.0254).round() as u32;
-        enc.set_pixel_dims(Some(png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
+        if dpi > 0.0 {
+            let ppm = (dpi / 0.0254).round() as u32;
+            enc.set_pixel_dims(Some(png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
+        }
         for (k, v) in meta {
             enc.add_text_chunk(k.clone(), v.clone()).map_err(std::io::Error::other)?;
         }
@@ -2768,7 +2795,47 @@ fn encode_png_bytes(rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, Stri
     Ok(out)
 }
 
+/// Decode a PNG file: ``(width, height, color_type, bit_depth, samples,
+/// palette, trns)`` with the samples as stored (rows of packed samples,
+/// 16-bit samples big-endian, interlacing undone) and the PLTE/tRNS chunk
+/// data (or None), for `matplotlib_rs._png.read`.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+fn decode_png<'py>(
+    py: Python<'py>,
+    data: &[u8],
+) -> PyResult<(
+    u32,
+    u32,
+    u8,
+    u8,
+    Bound<'py, pyo3::types::PyBytes>,
+    Option<Bound<'py, pyo3::types::PyBytes>>,
+    Option<Bound<'py, pyo3::types::PyBytes>>,
+)> {
+    let fail = |e: png::DecodingError| PyValueError::new_err(format!("cannot decode PNG: {e}"));
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    let mut reader = decoder.read_info().map_err(fail)?;
+    let size = reader.output_buffer_size().ok_or_else(|| PyValueError::new_err("PNG image too large"))?;
+    let mut buf = vec![0; size];
+    let frame = reader.next_frame(&mut buf).map_err(fail)?;
+    buf.truncate(frame.buffer_size());
+    let info = reader.info();
+    let bytes = |b: &[u8]| pyo3::types::PyBytes::new(py, b);
+    Ok((
+        info.width,
+        info.height,
+        info.color_type as u8,
+        info.bit_depth as u8,
+        bytes(&buf),
+        info.palette.as_deref().map(bytes),
+        info.trns.as_deref().map(bytes),
+    ))
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(decode_png, m)?)?;
     m.add_class::<PyFigure>()?;
     m.add_class::<PyAxes>()?;
     m.add_class::<PyText>()?;

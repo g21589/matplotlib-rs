@@ -2,49 +2,19 @@
 Replacement for matplotlib's ``_qhull`` extension module (Delaunay
 triangulation).
 
-matplotlib triangulates with the qhull library.  When matplotlib itself is
-installed next to matplotlib_rs, its compiled ``_qhull`` module is used, so
-that triangulations (including the order of the triangles, which affects
-drawing) are identical.  Otherwise a Rust Delaunay triangulation is used:
-it has the same triangles, possibly in another order.  Set the environment
-variable ``MPLRS_QHULL=rust`` to always use the Rust triangulation.
+The triangulation is computed by the qhull library matplotlib builds
+(extern/qhull, compiled into the Rust extension) with matplotlib's options and
+post-processing, so that the triangles, their order and the order of their
+vertices are identical.  Set the environment variable ``MPLRS_QHULL=rust`` to
+use the Rust Delaunay triangulation instead: it has the same triangles,
+possibly in another order.
 """
 
-import glob
-import importlib.machinery
-import importlib.util
 import os
-import sys
 
 import numpy as np
 
 from . import _mplrs
-
-
-def _find_matplotlib_qhull():
-    if os.environ.get("MPLRS_QHULL") == "rust":
-        return None
-    here = os.path.dirname(os.path.abspath(__file__))
-    for entry in sys.path:
-        d = os.path.join(entry or os.getcwd(), "matplotlib")
-        if os.path.abspath(d) == here:
-            continue
-        for path in glob.glob(os.path.join(d, "_qhull*")):
-            if not path.endswith(tuple(importlib.machinery.EXTENSION_SUFFIXES)):
-                continue
-            try:
-                loader = importlib.machinery.ExtensionFileLoader("matplotlib._qhull", path)
-                spec = importlib.util.spec_from_file_location(
-                    "matplotlib._qhull", path, loader=loader)
-                mod = importlib.util.module_from_spec(spec)
-                loader.exec_module(mod)
-                return mod
-            except Exception:
-                continue
-    return None
-
-
-_qhull = _find_matplotlib_qhull()
 
 
 def _at_least_3_unique_points(x, y):
@@ -76,8 +46,6 @@ def delaunay(x, y, verbose):
     triangles, neighbors : int arrays, shape (ntri, 3)
         Indices of triangle vertices and indices of triangle neighbors.
     """
-    if _qhull is not None:
-        return _qhull.delaunay(x, y, verbose)
     x = np.ascontiguousarray(x, dtype=np.float64)
     y = np.ascontiguousarray(y, dtype=np.float64)
     if x.ndim != 1 or y.ndim != 1:
@@ -88,8 +56,11 @@ def delaunay(x, y, verbose):
         raise ValueError("x and y arrays must have a length of at least 3")
     if not _at_least_3_unique_points(x, y):
         raise ValueError("x and y arrays must consist of at least 3 unique points")
-    return _mplrs.delaunay(x, y)
+    if os.environ.get("MPLRS_QHULL") == "rust":
+        return _mplrs.delaunay(x, y)
+    return _mplrs.qhull_delaunay(x, y, verbose)
 
 
 def version():
-    return _qhull.version() if _qhull is not None else "matplotlib_rs (Rust Delaunay)"
+    """Return the qhull version string."""
+    return _mplrs.qhull_version()

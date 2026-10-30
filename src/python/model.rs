@@ -412,6 +412,58 @@ impl PyLine2D {
         line.set_data(f64_vec(x)?, f64_vec(y)?);
         Ok(Self { inner: shared(line) })
     }
+
+    /// One `copy_with_data` per row of the (n, m) arrays *x* and *y*, with
+    /// the label ``labels[i]`` where it is not None.
+    #[pyo3(signature = (x, y, labels=None))]
+    fn copy_many(
+        &self,
+        x: numpy::PyReadonlyArray2<'_, f64>,
+        y: numpy::PyReadonlyArray2<'_, f64>,
+        labels: Option<Vec<Option<String>>>,
+    ) -> PyResult<Vec<Self>> {
+        let (x, y) = (x.as_array(), y.as_array());
+        if x.shape() != y.shape() || labels.as_ref().is_some_and(|l| l.len() != x.nrows()) {
+            return Err(PyValueError::new_err("copy_many: mismatched shapes"));
+        }
+        let style = self.inner.lk().clone();
+        Ok((0..x.nrows())
+            .map(|i| {
+                let mut line = style.clone();
+                line.set_data(x.row(i).to_vec(), y.row(i).to_vec());
+                if let Some(Some(label)) = labels.as_ref().map(|l| &l[i]) {
+                    line.base.label = label.clone();
+                }
+                Self { inner: shared(line) }
+            })
+            .collect())
+    }
+
+    /// One `copy_with_data` per segment ``offsets[i]:offsets[i + 1]`` of
+    /// the 1D arrays *x* and *y*.
+    fn copy_many_ragged(
+        &self,
+        x: PyReadonlyArray1<'_, f64>,
+        y: PyReadonlyArray1<'_, f64>,
+        offsets: Vec<usize>,
+    ) -> PyResult<Vec<Self>> {
+        let (x, y) = (x.as_array(), y.as_array());
+        if x.len() != y.len() || offsets.windows(2).any(|w| w[0] > w[1]) || offsets.last().is_some_and(|&n| n > x.len()) {
+            return Err(PyValueError::new_err("copy_many_ragged: invalid offsets"));
+        }
+        let style = self.inner.lk().clone();
+        Ok(offsets
+            .windows(2)
+            .map(|w| {
+                let mut line = style.clone();
+                line.set_data(
+                    x.slice(numpy::ndarray::s![w[0]..w[1]]).to_vec(),
+                    y.slice(numpy::ndarray::s![w[0]..w[1]]).to_vec(),
+                );
+                Self { inner: shared(line) }
+            })
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +573,51 @@ fn text_handle(_t: &Shared<Text>) {}
 #[allow(dead_code)]
 fn patch_handle(_p: &Shared<Patch>) {}
 
+/// Instances of the Python class *cls* (created by `object.__new__`)
+/// with independent attribute dicts: for each i, a copy of *template* with
+/// ``_h = handles[i]`` and ``names[k] = columns[k][i]``.  This is the loop that
+/// clones boxplot artists (`matplotlib_rs.axes._boxplot`), without the
+/// interpreter's per-statement overhead.
+#[pyfunction]
+fn clone_instances<'py>(
+    py: Python<'py>,
+    cls: &Bound<'py, pyo3::types::PyType>,
+    template: &Bound<'py, PyDict>,
+    handles: &Bound<'py, PyList>,
+    names: Vec<Bound<'py, pyo3::types::PyString>>,
+    columns: Vec<Bound<'py, PyList>>,
+) -> PyResult<Bound<'py, PyList>> {
+    use pyo3::ffi;
+    let n = handles.len();
+    if names.len() != columns.len() || columns.iter().any(|c| c.len() != n) {
+        return Err(PyValueError::new_err("clone_instances: mismatched columns"));
+    }
+    // `object.__new__(t)`: the callers' classes do not define __new__ (and
+    // object.__new__ refuses classes for which it would be unsafe).
+    let base_new = unsafe { (*std::ptr::addr_of!(ffi::PyBaseObject_Type)).tp_new }
+        .ok_or_else(|| PyTypeError::new_err("object has no tp_new"))?;
+    let empty = PyTuple::empty(py);
+    let object_new = |t: &Bound<'py, pyo3::types::PyType>| -> PyResult<Bound<'py, PyAny>> {
+        unsafe { Bound::from_owned_ptr_or_err(py, base_new(t.as_type_ptr(), empty.as_ptr(), std::ptr::null_mut())) }
+    };
+    let h_name = pyo3::intern!(py, "_h");
+    let dict_name = pyo3::intern!(py, "__dict__");
+    let out = PyList::empty(py);
+    for i in 0..n {
+        let obj = object_new(cls)?;
+        let d = template.copy()?;
+        d.set_item(h_name, handles.get_item(i)?)?;
+        for (name, col) in names.iter().zip(&columns) {
+            d.set_item(name, col.get_item(i)?)?;
+        }
+        obj.setattr(dict_name, d)?;
+        out.append(obj)?;
+    }
+    Ok(out)
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(clone_instances, m)?)?;
     m.add_class::<PyLine2D>()?;
     m.add_function(wrap_pyfunction!(rc_set, m)?)?;
     m.add_function(wrap_pyfunction!(rc_clear, m)?)?;

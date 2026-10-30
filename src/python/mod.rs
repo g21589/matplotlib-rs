@@ -2,9 +2,11 @@
 
 pub mod api;
 pub mod collections;
+pub mod contour;
 pub mod ext;
 pub mod foreign;
 pub mod image;
+pub mod kiwi;
 pub mod lowlevel;
 pub mod mathtext;
 pub mod model;
@@ -22,6 +24,8 @@ fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     pathmod::register(m)?;
     image::register(m)?;
     tri::register(m)?;
+    kiwi::register(m)?;
+    contour::register(m)?;
     foreign::register(m)?;
     mathtext::register(m)?;
     mathtext::register_scale(m)?;

@@ -190,8 +190,8 @@ class UnitData:
             float(val)
         except ValueError:
             try:
-                import dateutil.parser
-                dateutil.parser.parse(val)
+                from matplotlib_rs._vendor.dateutil import parser
+                parser.parse(val)
             except (ValueError, TypeError):
                 # TypeError if dateutil >= 2.8.1 else ValueError
                 return False

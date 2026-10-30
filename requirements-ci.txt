@@ -10,4 +10,5 @@ kiwisolver==1.5.1
 packaging==26.3
 pyparsing==3.3.3
 python-dateutil==3.0.0
+six==1.17.0
 maturin==1.15.0

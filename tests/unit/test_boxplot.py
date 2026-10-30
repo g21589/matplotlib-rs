@@ -103,7 +103,15 @@ class BoxplotTests(unittest.TestCase):
                  [a.get_label() for a in ax.get_children() if isinstance(a, module.lines.Line2D)])
         state += ([type(a.get_xdata()).__name__ + ":" + str(np.asarray(a.get_xdata()).dtype)
                    + "/" + type(a.get_ydata()).__name__ + ":" + str(np.asarray(a.get_ydata()).dtype)
-                   for a in result["whiskers"] + result["medians"]],)
+                   for key in ("whiskers", "caps", "medians", "means", "fliers")
+                   for a in result[key]],)
+        # Children (types, labels and data) in creation order, and the data of
+        # every returned component.
+        state += ([type(a).__name__ + ":" + str(a.get_label()) for a in ax.get_children()],)
+        for key in ("whiskers", "caps", "boxes", "medians", "means", "fliers"):
+            for a in result[key]:
+                state += (a.get_path().vertices if isinstance(a, module.patches.Patch)
+                          else np.asarray(a.get_xydata()),)
         fig.canvas.draw()
         image = np.asarray(fig.canvas.buffer_rgba()).copy()
         pyplot.close(fig)
@@ -118,6 +126,15 @@ class BoxplotTests(unittest.TestCase):
             {"manage_ticks": False, "widths": [0.2, 0.3, 0.4, 0.5], "capwidths": 0.1},
             {"patch_artist": True, "label": ["a", "b", "c", "d"]},
             {"medianprops": {"color": None}},
+            {"positions": [1.5, 2.25, 3.5, 4.75], "patch_artist": True},
+            {"notch": True, "orientation": "horizontal"},
+            {"showmeans": True},
+            {"showmeans": True, "meanline": True, "patch_artist": True, "notch": True},
+            {"showcaps": False, "widths": 0.3},
+            {"whis": (0, 100)},
+            {"widths": [0.2, 0.3, 0.4, 0.5], "capwidths": [0.1, 0.2, 0.3, 0.4],
+             "patch_artist": True, "orientation": "horizontal"},
+            {"positions": np.array([2, 4, 6, 8]), "showmeans": True, "manage_ticks": False},
         ]
         for kw in options:
             for mutate in [False, True]:
@@ -129,8 +146,66 @@ class BoxplotTests(unittest.TestCase):
                     np.testing.assert_array_equal(a, b)
         a, sa = self.render(mpl, mplt, {}, cycle=True)
         b, sb = self.render(rs, rplt, {}, cycle=True)
-        self.assertEqual(sa[-3:], sb[-3:])
+        for x, y in zip(sa[3:], sb[3:]):
+            np.testing.assert_array_equal(x, y)
         np.testing.assert_array_equal(a, b)
+
+    def draw_bxp(self, module, pyplot, stats, **kw):
+        module.rc_file(RC)
+        fig, ax = pyplot.subplots(figsize=(4, 3), dpi=72)
+        result = ax.bxp(copy.deepcopy(stats), **kw)
+        state = [type(a).__name__ + ":" + str(a.get_label()) for a in ax.get_children()]
+        for key, artists in result.items():
+            for a in artists:
+                if isinstance(a, module.lines.Line2D):
+                    x, y = a.get_xdata(), a.get_ydata()
+                    state.append((key, np.asarray(x).dtype.str, np.asarray(y).dtype.str,
+                                  np.asarray(x).tolist(), np.asarray(y).tolist()))
+        state.append(tuple(ax.dataLim.extents))
+        fig.canvas.draw()
+        image = np.asarray(fig.canvas.buffer_rgba()).copy()
+        pyplot.close(fig)
+        return image, state
+
+    def test_bxp_statistics_types(self):
+        # Plain floats take the vectorized path; ints, float32 and lists of
+        # fliers keep the per-box loop and its dtypes.
+        base = [dict(med=2.5, q1=1.5, q3=3.5, whislo=0.5, whishi=4.5, mean=2.75,
+                     cilo=2.0, cihi=3.0, fliers=np.array([-1.0, 6.0])),
+                dict(med=5.0, q1=4.0, q3=6.0, whislo=3.0, whishi=7.0, mean=5.25,
+                     cilo=4.5, cihi=5.5, fliers=np.array([]))]
+        ints = [dict(med=2, q1=1, q3=3, whislo=0, whishi=4, mean=2, cilo=2, cihi=3,
+                     fliers=[-1, 6]), base[1]]
+        f32 = [{k: (np.float32(v) if isinstance(v, float) else v) for k, v in s.items()}
+               for s in base]
+        for stats in (base, ints, f32):
+            for kw in ({}, {"showmeans": True, "shownotches": True},
+                       {"positions": [0.5, 3.0], "widths": [0.4, 0.8], "orientation": "horizontal",
+                        "patch_artist": True, "showmeans": True, "meanline": True}):
+                with self.subTest(stats=type(stats[0]["med"]).__name__, kw=kw):
+                    a, sa = self.draw_bxp(mpl, mplt, stats, **kw)
+                    b, sb = self.draw_bxp(rs, rplt, stats, **kw)
+                    self.assertEqual(sa, sb)
+                    np.testing.assert_array_equal(a, b)
+
+    def test_vectorized_artists_are_independent(self):
+        fig, ax = rplt.subplots()
+        result = ax.boxplot(np.random.default_rng(3).normal(size=(40, 5)), patch_artist=True)
+        whiskers = result["whiskers"]
+        x0 = whiskers[0].get_xdata()
+        x0[:] = 99
+        self.assertTrue(np.all(whiskers[1].get_xdata() != 99))
+        self.assertTrue(np.all(whiskers[2].get_xdata() == 2))
+        boxes = result["boxes"]
+        boxes[0].get_path().vertices[0] = (-5, -5)
+        self.assertNotEqual(tuple(boxes[1].get_path().vertices[0]), (-5, -5))
+        self.assertIsNot(boxes[0].get_path().codes, boxes[1].get_path().codes)
+        self.assertEqual(len({id(a._callbacks) for v in result.values() for a in v}),
+                         sum(map(len, result.values())))
+        # Each artist owns its own native handle, in the order of ax._children.
+        native = [a for a in ax._children if a._rs_native_in]
+        self.assertEqual(len({a._h.ident() for a in native}), len(native))
+        rplt.close(fig)
 
 
 if __name__ == "__main__":

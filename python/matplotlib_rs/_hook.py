@@ -41,7 +41,29 @@ class _Finder(importlib.abc.MetaPathFinder):
         return spec
 
 
+class _FallbackFinder(_Finder):
+    """Resolves matplotlib's pure-Python dependencies that are not installed
+    (consulted last) to the copies vendored in ``matplotlib_rs._vendor``, so
+    that scripts written for matplotlib can import them."""
+
+    def find_spec(self, fullname, path=None, target=None):
+        for prefix, repl in _FALLBACKS:
+            if fullname == prefix or fullname.startswith(prefix + "."):
+                tname = repl + fullname[len(prefix):]
+                break
+        else:
+            return None
+        tspec = importlib.util.find_spec(tname)
+        if tspec is None:
+            return None
+        return importlib.util.spec_from_loader(
+            fullname, _AliasLoader(tname), is_package=tspec.submodule_search_locations is not None)
+
+
+_FALLBACKS = (("cycler", "matplotlib_rs._vendor.cycler"),
+              ("dateutil", "matplotlib_rs._vendor.dateutil"))
 _finder = _Finder()
+_fallback_finder = _FallbackFinder()
 
 
 def install():
@@ -56,12 +78,15 @@ def install():
                             f"{prefix} was already imported; call matplotlib_rs.install() "
                             f"before importing {prefix}")
         sys.meta_path.insert(0, _finder)
+        sys.meta_path.append(_fallback_finder)
         sys.modules[_PREFIX] = sys.modules[_TARGET]
 
 
 def uninstall():
     if _finder in sys.meta_path:
         sys.meta_path.remove(_finder)
+    if _fallback_finder in sys.meta_path:
+        sys.meta_path.remove(_fallback_finder)
     for name in list(sys.modules):
         for prefix, _ in _ALIASES:
             if name == prefix or name.startswith(prefix + "."):

@@ -45,9 +45,11 @@ jobs:
           sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
           sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 fonts-dejavu-core fonts-urw-base35 fonts-lmodern fonts-inter fonts-thai-tlwg fonts-unifont
           python -m pip install -r requirements-ci.txt
-      - name: Check versions and build extension
+      - name: Check versions, vendored packages and build extension
         run: |
           python scripts/check_version.py
+          python tools/vendor_deps.py
+          git diff --exit-code -- python/matplotlib_rs/_vendor licenses
           sh scripts/dev_build.sh --locked
       - name: Rust tests and doctests
         run: sh scripts/test_rust.sh
@@ -58,6 +60,69 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: test-evidence-py${{ matrix.python }}
+          path: tests/output/ci
+          if-no-files-found: warn
+          retention-days: 14
+
+  numpy-only:
+    # matplotlib_rs on Python 3.10 with NumPy as the only installed package,
+    # compared with Matplotlib 3.11.2 on Python 3.12.
+    name: Test Python 3.10 (NumPy only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        id: py310
+        with:
+          python-version: '3.10'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-ci.txt
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ci-numpy-only-py3.10
+          workspaces: |
+            . -> target
+            . -> target/rust-tests
+      - name: Install fonts, reference and NumPy-only environments
+        run: |
+          sudo apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30
+          sudo apt-get install -y -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 fonts-dejavu-core fonts-urw-base35 fonts-lmodern fonts-inter fonts-thai-tlwg fonts-unifont
+          python -m pip install -r requirements-ci.txt
+          "${{ steps.py310.outputs.python-path }}" -m venv "$RUNNER_TEMP/numpy-only"
+          "$RUNNER_TEMP/numpy-only/bin/python" -m pip install 'numpy==2.2.6'
+          "$RUNNER_TEMP/numpy-only/bin/python" -m pip list
+      - name: Build extension for Python 3.10 (and 3.12 for the reference comparisons)
+        run: |
+          PYTHON="$RUNNER_TEMP/numpy-only/bin/python" sh scripts/dev_build.sh --locked
+          PYTHON=python sh scripts/dev_build.sh --locked
+      - name: Rust tests against Python 3.10
+        run: PYTHON="${{ steps.py310.outputs.python-path }}" sh scripts/test_rust.sh
+      - name: NumPy-only unit tests and four output formats against Matplotlib
+        shell: bash
+        run: |
+          mkdir -p tests/output/ci
+          PYTHONPATH="$PWD/python" "$RUNNER_TEMP/numpy-only/bin/python" -u tests/unit/test_native_ports.py 2>&1 | tee tests/output/ci/py310-test_native_ports.log
+          NUMPY_ONLY_PYTHON="$RUNNER_TEMP/numpy-only/bin/python" python -u tests/unit/test_numpy_only.py 2>&1 | tee tests/output/ci/py310-test_numpy_only.log
+          # The oldest supported NumPy.
+          "${{ steps.py310.outputs.python-path }}" -m venv "$RUNNER_TEMP/numpy-1.25"
+          "$RUNNER_TEMP/numpy-1.25/bin/python" -m pip install 'numpy==1.25.2'
+          NUMPY_ONLY_PYTHON="$RUNNER_TEMP/numpy-1.25/bin/python" python -u tests/unit/test_numpy_only.py 2>&1 | tee tests/output/ci/py310-numpy1.25-test_numpy_only.log
+          COMPARE_RS_PYTHON="$RUNNER_TEMP/numpy-only/bin/python" COMPARE_DECODE_IMAGES=1 \
+              COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 COMPARE_OUT="$PWD/tests/output/ci/compare-py310" \
+              python -u tests/compare/compare.py 2>&1 | tee tests/output/ci/compare-py310.log
+      - name: Upload test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-evidence-py3.10-numpy-only
           path: tests/output/ci
           if-no-files-found: warn
           retention-days: 14

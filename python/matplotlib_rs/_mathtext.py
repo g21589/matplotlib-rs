@@ -23,7 +23,7 @@ from typing import NamedTuple
 
 import numpy as np
 from numpy.typing import NDArray
-from pyparsing import (
+from ._vendor.pyparsing import (
     Empty, Forward, Literal, Group, NotAny, OneOrMore, Optional,
     ParseBaseException, ParseException, ParseExpression, ParseFatalException,
     ParserElement, ParseResults, QuotedString, Regex, StringEnd, Token,

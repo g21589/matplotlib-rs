@@ -30,7 +30,6 @@ from collections import namedtuple
 from functools import cache, cached_property, lru_cache, partial, wraps
 from pathlib import Path
 
-import fontTools.agl
 import numpy as np
 
 import matplotlib_rs as mpl
@@ -137,6 +136,7 @@ class Text(namedtuple('Text', 'x y font glyph width')):
                     f"pk{self.glyph:#02x}")
         face = font_manager.get_font(path)
         glyph_name = face.get_glyph_name(self.index)
+        import fontTools.agl  # (usetex only)
         glyph_str = fontTools.agl.toUnicode(glyph_name)
         return glyph_str or glyph_name
 
@@ -525,7 +525,8 @@ class Dvi:
             tfm = _tfmfile(fontname)
         except FileNotFoundError as exc:
             if fontname.startswith("[") and fontname.endswith(";") and c == 0:
-                exc.add_note(
+                cbook._add_note(
+                    exc,
                     "This dvi file was likely generated with a too-old "
                     "version of luaotfload; luaotfload 3.23 is required.")
             # Explicitly allow defining missing fonts for Vf support; we only

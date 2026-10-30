@@ -11,8 +11,6 @@ import functools
 import logging
 import typing
 
-from fontTools import subset
-
 import matplotlib_rs as mpl
 from .. import font_manager, ft2font
 from .._afm import AFM
@@ -81,6 +79,13 @@ def get_glyphs_subset(
     SubsetResults
         The font and new glyph index mapping.
     """
+    try:
+        from fontTools import subset
+    except ImportError:
+        raise ImportError(
+            "Embedding Type 42 fonts (pdf.fonttype / ps.fonttype = 42) requires "
+            "fontTools (pip install fonttools); the default Type 3 fonts do not"
+        ) from None
     options = subset.Options(glyph_names=True, recommended_glyphs=True)
 
     # Prevent subsetting extra tables.

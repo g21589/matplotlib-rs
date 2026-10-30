@@ -23,10 +23,9 @@ import types
 import zlib
 
 import numpy as np
-from PIL import Image
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, _text_helpers, _type1font, cbook, dviread
+from matplotlib_rs import _api, _png, _text_helpers, _type1font, cbook, dviread
 from matplotlib_rs._pylab_helpers import Gcf
 from matplotlib_rs.backend_bases import (
     _Backend, FigureCanvasBase, FigureManagerBase, GraphicsContextBase,
@@ -1666,7 +1665,14 @@ end"""
                'BitsPerComponent': 8}
         if smask:
             obj['SMask'] = smask
-        if mpl.rcParams['pdf.compression']:
+        Image = _png.pil_image()
+        if mpl.rcParams['pdf.compression'] and Image is None:
+            # Without Pillow: PNG-predicted rows (filter type None), deflated.
+            png = {'Predictor': 10, 'Colors': color_channels, 'Columns': width}
+            rows = np.ascontiguousarray(data, np.uint8).reshape(height, -1)
+            png_data = zlib.compress(
+                np.hstack([np.zeros((height, 1), np.uint8), rows]).tobytes(), 6)
+        elif mpl.rcParams['pdf.compression']:
             if data.shape[-1] == 1:
                 data = data.squeeze(axis=-1)
             png = {'Predictor': 10, 'Colors': color_channels, 'Columns': width}

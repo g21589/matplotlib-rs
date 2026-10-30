@@ -20,7 +20,6 @@ from tempfile import TemporaryDirectory
 import textwrap
 import time
 
-import fontTools
 import numpy as np
 
 import matplotlib_rs as mpl
@@ -187,6 +186,7 @@ def _font_to_ps_type42(font_path, subset_index, glyph_indices, fh):
         Where to write the font.
     """
     _log.debug("SUBSET %s:%d characters: %s", font_path, subset_index, glyph_indices)
+    import fontTools.ttLib
     try:
         with (fontTools.ttLib.TTFont(font_path.path,
                                      fontNumber=font_path.face_index) as font,
@@ -316,6 +316,7 @@ def _bounds(font):
         (xMin, yMin, xMax, yMax) of the combined bounding box
         of all the glyphs in the font
     """
+    import fontTools.pens.boundsPen
     gs = font.getGlyphSet(False)
     pen = fontTools.pens.boundsPen.BoundsPen(gs)
     for name in gs.keys():

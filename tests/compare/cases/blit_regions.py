@@ -1,6 +1,5 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from PIL import Image
 
 # blitting as interactive code does it: save the background, draw animated
 # artists over it with draw_artist, restore (part of) it
@@ -16,7 +15,8 @@ assert np.asarray(bg).shape == (y2 - y1, x2 - x1, 4)
 
 
 def save(name):
-    Image.fromarray(np.asarray(fig.canvas.buffer_rgba())).save(name)
+    # (imsave: the case also runs where Pillow is not installed)
+    plt.imsave(name, np.asarray(fig.canvas.buffer_rgba()))
 
 
 for k in range(3):
