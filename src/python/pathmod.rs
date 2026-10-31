@@ -1,6 +1,6 @@
 //! Rust implementations of matplotlib's `_path` extension functions.
 
-use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray2, PyUntypedArrayMethods};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyUntypedArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
@@ -25,8 +25,9 @@ pub fn path_from_py(obj: &Bound<'_, PyAny>) -> PyResult<MplPath> {
     let codes = if codes_obj.is_none() {
         None
     } else {
-        let c: Vec<u8> = codes_obj.call_method1("astype", ("uint8",))?.call_method0("tolist")?.extract()?;
-        Some(c)
+        let np = obj.py().import("numpy")?;
+        let c: PyReadonlyArray1<u8> = np.call_method1("ascontiguousarray", (codes_obj, "uint8"))?.call_method1("ravel", ())?.extract()?;
+        Some(c.as_slice()?.to_vec())
     };
     let should_simplify = obj.getattr("should_simplify").and_then(|v| v.extract()).unwrap_or(false);
     let simplify_threshold = obj.getattr("simplify_threshold").and_then(|v| v.extract()).unwrap_or(1.0 / 9.0);
@@ -38,6 +39,13 @@ pub fn trans_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TransAffine> {
         return Ok(TransAffine::new(1.0, 0.0, 0.0, 1.0, 0.0, 0.0));
     }
     let m = if obj.hasattr("get_matrix")? { obj.call_method0("get_matrix")? } else { obj.clone() };
+    if let Ok(a) = m.extract::<PyReadonlyArray2<f64>>() {
+        let a = a.as_array();
+        if a.shape() != [3, 3] {
+            return Err(PyValueError::new_err("Invalid affine transformation matrix"));
+        }
+        return Ok(TransAffine { sx: a[[0, 0]], shx: a[[0, 1]], tx: a[[0, 2]], shy: a[[1, 0]], sy: a[[1, 1]], ty: a[[1, 2]] });
+    }
     let v: Vec<Vec<f64>> = m.call_method0("tolist").and_then(|l| l.extract()).or_else(|_| m.extract())?;
     if v.len() != 3 || v[0].len() != 3 {
         return Err(PyValueError::new_err("Invalid affine transformation matrix"));
@@ -103,10 +111,44 @@ fn count_bboxes_overlapping_bbox(bbox: &Bound<'_, PyAny>, bboxes: &Bound<'_, PyA
     Ok(count)
 }
 
+/// The loop of matplotlib's `is_sorted_and_has_non_nan<T>`.
+fn sorted_and_has_non_nan<T: PartialOrd + Copy>(a: numpy::ndarray::ArrayView1<'_, T>) -> bool {
+    let mut it = a.iter().copied();
+    #[allow(clippy::eq_op)]
+    let Some(mut last) = it.by_ref().find(|v| v == v) else {
+        return false; // the whole array is non-finite
+    };
+    for current in it {
+        #[allow(clippy::eq_op)]
+        if current == current {
+            if current < last {
+                return false;
+            }
+            last = current;
+        }
+    }
+    true
+}
+
+/// `is_sorted_and_has_non_nan(array)`: like matplotlib, int32, int64,
+/// float32 and float64 arrays are read as they are, others as float64.
 #[pyfunction]
 fn is_sorted_and_has_non_nan(array: &Bound<'_, PyAny>) -> PyResult<bool> {
-    let v: Vec<f64> = array.call_method0("tolist").and_then(|l| l.extract()).or_else(|_| array.extract())?;
-    Ok(crate::mpl::lines::is_sorted_and_has_non_nan(&v))
+    if let Ok(a) = array.extract::<PyReadonlyArray1<f64>>() {
+        return Ok(sorted_and_has_non_nan(a.as_array()));
+    }
+    if let Ok(a) = array.extract::<PyReadonlyArray1<f32>>() {
+        return Ok(sorted_and_has_non_nan(a.as_array()));
+    }
+    if let Ok(a) = array.extract::<PyReadonlyArray1<i64>>() {
+        return Ok(sorted_and_has_non_nan(a.as_array()));
+    }
+    if let Ok(a) = array.extract::<PyReadonlyArray1<i32>>() {
+        return Ok(sorted_and_has_non_nan(a.as_array()));
+    }
+    let np = array.py().import("numpy")?;
+    let a: PyReadonlyArray1<f64> = np.call_method1("asarray", (array, "float64"))?.extract()?;
+    Ok(sorted_and_has_non_nan(a.as_array()))
 }
 
 fn snap_mode_from(obj: &Bound<'_, PyAny>) -> PyResult<SnapMode> {
@@ -254,15 +296,28 @@ fn get_path_collection_extents<'py>(
     let master = trans_from_py(master_transform)?;
     let paths: Vec<MplPath> = paths.try_iter()?.map(|p| path_from_py(&p?)).collect::<PyResult<_>>()?;
     let np = py.import("numpy")?;
-    let tr: Vec<Vec<Vec<f64>>> = np.call_method1("asarray", (transforms, "float64"))?.call_method0("tolist")?.extract().unwrap_or_default();
-    let offs: Vec<Vec<f64>> = np
+    let tr_arr = np.call_method1("ascontiguousarray", (transforms, "float64"))?;
+    let tr: Vec<[[f64; 3]; 3]> = match tr_arr.extract::<PyReadonlyArray3<f64>>() {
+        Ok(a) if a.shape()[1] >= 2 && a.shape()[2] >= 3 => {
+            let a = a.as_array();
+            (0..a.shape()[0])
+                .map(|i| {
+                    let r = |j: usize| [a[[i, j, 0]], a[[i, j, 1]], a[[i, j, 2]]];
+                    [r(0), r(1), [0.0, 0.0, 1.0]]
+                })
+                .collect()
+        }
+        _ => Vec::new(),
+    };
+    let offs_arr: PyReadonlyArray2<f64> = np
         .call_method1("asarray", (offsets, "float64"))?
         .call_method1("reshape", ((-1i64, 2i64),))?
-        .call_method0("tolist")?
+        .call_method0("copy")?
         .extract()?;
+    let offs = offs_arr.as_slice()?;
     let otrans = trans_from_py(offset_transform)?;
     let npaths = paths.len();
-    let noffsets = offs.len();
+    let noffsets = offs.len() / 2;
     let n = npaths.max(noffsets);
     let ntrans = tr.len().min(n);
     let mut e = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY, f64::INFINITY, f64::INFINITY];
@@ -276,7 +331,7 @@ fn get_path_collection_extents<'py>(
                 master
             };
             if noffsets > 0 {
-                let (mut xo, mut yo) = (offs[i % noffsets][0], offs[i % noffsets][1]);
+                let (mut xo, mut yo) = (offs[2 * (i % noffsets)], offs[2 * (i % noffsets) + 1]);
                 otrans.transform(&mut xo, &mut yo);
                 trans.multiply(&TransAffine::translation(xo, yo));
             }

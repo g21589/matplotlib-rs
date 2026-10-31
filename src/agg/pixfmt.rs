@@ -63,9 +63,11 @@ pub fn lerp(p: u8, q: u8, a: u8) -> u8 {
     (p as i32 + (((t >> 8) + t) >> 8)) as u8
 }
 
-/// matplotlib's `fixed_blender_rgba_plain::blend_pix` (without cover).
+/// matplotlib's `fixed_blender_rgba_plain::blend_pix` (without cover), with
+/// Agg's integer divisions (kept for reference and tests).
 #[inline(always)]
-fn blend_pix_plain(p: &mut [u8], cr: u8, cg: u8, cb: u8, alpha: u8) {
+#[cfg_attr(not(test), allow(dead_code))]
+fn blend_pix_plain_div(p: &mut [u8], cr: u8, cg: u8, cb: u8, alpha: u8) {
     if alpha == 0 {
         return;
     }
@@ -83,14 +85,101 @@ fn blend_pix_plain(p: &mut [u8], cr: u8, cg: u8, cb: u8, alpha: u8) {
     p[2] = ((((cb as i64) << 8) - b) * alpha + (b << 8)).wrapping_div(a) as u8;
 }
 
-#[inline(always)]
-fn blend_pix_cover(p: &mut [u8], c: &Rgba8, cover: u8) {
-    blend_pix_plain(p, c.r, c.g, c.b, mult_cover(c.a, cover));
+/// The division of `blend_pix_plain` for the last (alpha, destination
+/// alpha) pair: within a span the pair rarely changes (an opaque destination
+/// keeps it constant), so most pixels need no division.
+///
+/// The numerators are below 2^26 and the divisors d at most 2^16, so with
+/// m = ceil(2^42 / d), floor(n / d) == (n * m) >> 42 exactly (Granlund &
+/// Montgomery: m * d - 2^42 < d <= 2^16).
+#[derive(Clone, Copy)]
+pub struct Recip {
+    key: u32,
+    m: u64,
+}
+
+impl Recip {
+    #[inline(always)]
+    pub const fn new() -> Self {
+        Recip { key: u32::MAX, m: 0 }
+    }
 }
 
 #[inline(always)]
-fn blend_pix(p: &mut [u8], c: &Rgba8) {
-    blend_pix_plain(p, c.r, c.g, c.b, c.a);
+fn magic(d: u32) -> u64 {
+    ((1u64 << 42) + d as u64 - 1) / d as u64
+}
+
+#[inline(always)]
+fn quotient(n: u32, m: u64) -> u8 {
+    ((n as u64 * m) >> 42) as u8
+}
+
+/// matplotlib's `fixed_blender_rgba_plain::blend_pix` (without cover):
+/// identical results to `blend_pix_plain_div`.
+#[inline(always)]
+fn blend_pix_plain(p: &mut [u8], cr: u8, cg: u8, cb: u8, alpha: u8, rc: &mut Recip) {
+    if alpha == 0 {
+        return;
+    }
+    let a0 = p[3] as u32;
+    let alpha = alpha as u32;
+    let a = ((alpha + a0) << 8) - alpha * a0;
+    let key = (alpha << 8) | a0;
+    if key != rc.key {
+        rc.key = key;
+        rc.m = magic(a);
+    }
+    let r = rc.m;
+    // ((c << 8) - x) * alpha + (x << 8) with x = channel * a0, rearranged
+    // into its two non-negative terms
+    let inv = 256 - alpha;
+    let ca = alpha << 8;
+    p[3] = (a >> 8) as u8;
+    p[0] = quotient(cr as u32 * ca + p[0] as u32 * a0 * inv, r);
+    p[1] = quotient(cg as u32 * ca + p[1] as u32 * a0 * inv, r);
+    p[2] = quotient(cb as u32 * ca + p[2] as u32 * a0 * inv, r);
+}
+
+/// `blend_pix_plain` of one colour and alpha over a row: pixels with an
+/// opaque destination (the usual case) use constants computed once.
+#[inline(always)]
+fn blend_row_plain(row: &mut [u8], c: &Rgba8, alpha: u8) {
+    if alpha == 0 {
+        return;
+    }
+    let al = alpha as u32;
+    // For a0 == 255 the divisor d = 65280 + alpha is constant; the
+    // numerators are below 2^26, so (Granlund & Montgomery) floor(n / d) ==
+    // (n * ceil(2^42 / d)) >> 42 exactly.
+    let a = ((al + 255) << 8) - al * 255;
+    let m = magic(a);
+    let ca = al << 8;
+    let k = 255 * (256 - al);
+    let (nr, ng, nb) = (c.r as u32 * ca, c.g as u32 * ca, c.b as u32 * ca);
+    let a_out = (a >> 8) as u8;
+    let q = |n: u32| quotient(n, m);
+    let mut rc = Recip::new();
+    for p in row.chunks_exact_mut(4) {
+        if p[3] == 255 {
+            p[0] = q(nr + p[0] as u32 * k);
+            p[1] = q(ng + p[1] as u32 * k);
+            p[2] = q(nb + p[2] as u32 * k);
+            p[3] = a_out;
+        } else {
+            blend_pix_plain(p, c.r, c.g, c.b, alpha, &mut rc);
+        }
+    }
+}
+
+#[inline(always)]
+fn blend_pix_cover(p: &mut [u8], c: &Rgba8, cover: u8, rc: &mut Recip) {
+    blend_pix_plain(p, c.r, c.g, c.b, mult_cover(c.a, cover), rc);
+}
+
+#[inline(always)]
+fn blend_pix(p: &mut [u8], c: &Rgba8, rc: &mut Recip) {
+    blend_pix_plain(p, c.r, c.g, c.b, c.a, rc);
 }
 
 #[inline(always)]
@@ -102,23 +191,23 @@ fn set_pix(p: &mut [u8], c: &Rgba8) {
 }
 
 #[inline(always)]
-fn copy_or_blend_pix_cover(p: &mut [u8], c: &Rgba8, cover: u8) {
+fn copy_or_blend_pix_cover(p: &mut [u8], c: &Rgba8, cover: u8, rc: &mut Recip) {
     if !c.is_transparent() {
         if c.is_opaque() && cover == 255 {
             set_pix(p, c);
         } else {
-            blend_pix_cover(p, c, cover);
+            blend_pix_cover(p, c, cover, rc);
         }
     }
 }
 
 #[inline(always)]
-fn copy_or_blend_pix(p: &mut [u8], c: &Rgba8) {
+fn copy_or_blend_pix(p: &mut [u8], c: &Rgba8, rc: &mut Recip) {
     if !c.is_transparent() {
         if c.is_opaque() {
             set_pix(p, c);
         } else {
-            blend_pix(p, c);
+            blend_pix(p, c, rc);
         }
     }
 }
@@ -158,7 +247,7 @@ impl PixfmtRgba32 {
 
     pub fn blend_pixel(&mut self, x: i32, y: i32, c: &Rgba8, cover: u8) {
         let o = self.offset(x, y);
-        copy_or_blend_pix_cover(&mut self.buf[o..o + 4], c, cover);
+        copy_or_blend_pix_cover(&mut self.buf[o..o + 4], c, cover, &mut Recip::new());
     }
 }
 
@@ -190,13 +279,9 @@ impl PixFmt for PixfmtRgba32 {
                 set_pix(p, c);
             }
         } else if cover == 255 {
-            for p in row.chunks_exact_mut(4) {
-                blend_pix(p, c);
-            }
+            blend_row_plain(row, c, c.a);
         } else {
-            for p in row.chunks_exact_mut(4) {
-                blend_pix_cover(p, c, cover);
-            }
+            blend_row_plain(row, c, mult_cover(c.a, cover));
         }
     }
 
@@ -207,11 +292,12 @@ impl PixFmt for PixfmtRgba32 {
         let o = self.offset(x, y);
         let row = &mut self.buf[o..o + len as usize * 4];
         let opaque = c.is_opaque();
+        let mut rc = Recip::new();
         for (p, &cv) in row.chunks_exact_mut(4).zip(covers.iter()) {
             if opaque && cv == 255 {
                 set_pix(p, c);
             } else {
-                blend_pix_cover(p, c, cv);
+                blend_pix_cover(p, c, cv, &mut rc);
             }
         }
     }
@@ -219,20 +305,21 @@ impl PixFmt for PixfmtRgba32 {
     fn blend_color_hspan(&mut self, x: i32, y: i32, len: u32, colors: &[Rgba8], covers: Option<&[u8]>, cover: u8) {
         let o = self.offset(x, y);
         let row = &mut self.buf[o..o + len as usize * 4];
+        let mut rc = Recip::new();
         match covers {
             Some(cvs) => {
                 for ((p, c), &cv) in row.chunks_exact_mut(4).zip(colors.iter()).zip(cvs.iter()) {
-                    copy_or_blend_pix_cover(p, c, cv);
+                    copy_or_blend_pix_cover(p, c, cv, &mut rc);
                 }
             }
             None => {
                 if cover == 255 {
                     for (p, c) in row.chunks_exact_mut(4).zip(colors.iter()) {
-                        copy_or_blend_pix(p, c);
+                        copy_or_blend_pix(p, c, &mut rc);
                     }
                 } else {
                     for (p, c) in row.chunks_exact_mut(4).zip(colors.iter()) {
-                        copy_or_blend_pix_cover(p, c, cover);
+                        copy_or_blend_pix_cover(p, c, cover, &mut rc);
                     }
                 }
             }
@@ -416,5 +503,125 @@ impl<'a, P: PixFmt> PixFmt for PixfmtAmaskAdaptor<'a, P> {
         let span = std::mem::take(&mut self.span);
         self.pixf.blend_color_hspan(x, y, len, colors, Some(&span), cover);
         self.span = span;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The division-free blend equals Agg's for every colour channel,
+    /// destination channel, alpha and destination alpha (2^32 cases; run
+    /// with `cargo test --release -- --ignored`).
+    #[test]
+    #[ignore]
+    fn plain_blend_exhaustive() {
+        for alpha in 1..=255u8 {
+            let mut rc = Recip::new();
+            for a0 in 0..=255u8 {
+                for c in 0..=255u8 {
+                    for x in 0..=255u8 {
+                        let mut p = [x, x, x, a0];
+                        let mut q = p;
+                        blend_pix_plain_div(&mut p, c, c, c, alpha);
+                        blend_pix_plain(&mut q, c, c, c, alpha, &mut rc);
+                        assert_eq!(p, q, "alpha {alpha} a0 {a0} c {c} x {x}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn row_blend_opaque_exhaustive() {
+        for alpha in 0..=255u8 {
+            for c in 0..=255u8 {
+                let mut row: Vec<u8> = (0..=255u8).flat_map(|x| [x, x, 255 - x, 255]).collect();
+                let mut expect = row.clone();
+                for p in expect.chunks_exact_mut(4) {
+                    blend_pix_plain_div(p, c, 255 - c, c, alpha);
+                }
+                blend_row_plain(&mut row, &Rgba8::new(c, 255 - c, c, 255), alpha);
+                assert_eq!(row, expect, "alpha {alpha} c {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn row_blend_sampled() {
+        let mut s = 987654321u32;
+        let mut next = || {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            s
+        };
+        for _ in 0..20000 {
+            let n = (next() % 64) as usize + 1;
+            let mut row: Vec<u8> = (0..4 * n).map(|_| next() as u8).collect();
+            for p in row.chunks_exact_mut(4) {
+                if next() % 3 != 0 {
+                    p[3] = 255;
+                }
+            }
+            let [r, g, b, a] = next().to_le_bytes();
+            let c = Rgba8::new(r, g, b, a);
+            let alpha = next() as u8;
+            let mut expect = row.clone();
+            for p in expect.chunks_exact_mut(4) {
+                blend_pix_plain_div(p, c.r, c.g, c.b, alpha);
+            }
+            blend_row_plain(&mut row, &c, alpha);
+            assert_eq!(row, expect);
+        }
+    }
+
+    #[test]
+    fn plain_blend_sampled() {
+        let mut rc = Recip::new();
+        let mut s = 12345u32;
+        for _ in 0..2_000_000 {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            let [a, b, c, d] = s.to_le_bytes();
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            let [e, f, g, h] = s.to_le_bytes();
+            let mut p = [a, b, c, d];
+            let mut q = p;
+            blend_pix_plain_div(&mut p, e, f, g, h);
+            blend_pix_plain(&mut q, e, f, g, h, &mut rc);
+            assert_eq!(p, q);
+        }
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+    #[test]
+    #[ignore]
+    fn row_blend_speed() {
+        let mut row = vec![255u8; 4 * 1000];
+        let c = Rgba8::new(10, 200, 30, 255);
+        let t = std::time::Instant::now();
+        for i in 0..20000 {
+            blend_row_plain(&mut row, &c, (i % 250 + 3) as u8);
+        }
+        let dt = t.elapsed().as_secs_f64();
+        eprintln!("blend_row_plain: {:.3} ns/pixel", dt / 20e6 * 1e9);
+        let mut rc = Recip::new();
+        let t = std::time::Instant::now();
+        for i in 0..20000 {
+            for p in row.chunks_exact_mut(4) {
+                blend_pix_plain_div(p, 10, 200, 30, (i % 250 + 3) as u8);
+            }
+        }
+        let dt = t.elapsed().as_secs_f64();
+        eprintln!("division blend: {:.3} ns/pixel {}", dt / 20e6 * 1e9, row[5]);
+        let t = std::time::Instant::now();
+        for i in 0..20000 {
+            for p in row.chunks_exact_mut(4) {
+                blend_pix_plain(p, 10, 200, 30, (i % 250 + 3) as u8, &mut rc);
+            }
+        }
+        let dt = t.elapsed().as_secs_f64();
+        eprintln!("cached blend: {:.3} ns/pixel {}", dt / 20e6 * 1e9, row[5]);
     }
 }

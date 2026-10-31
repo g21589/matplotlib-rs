@@ -492,6 +492,49 @@ impl PyPatch {
             .collect())
     }
 
+    /// Copies of this (unrotated) Rectangle's style, one per bound
+    /// ``(x0[i], y0[i], x1[i], y1[i])``, with the patch transform
+    /// ``[[x1 - x0, 0, x0], [0, y1 - y0, y0]]`` that
+    /// `Rectangle.get_patch_transform` gives for finite bounds, and
+    /// ``sticky[i]`` as their only sticky edge on the x (*sticky_axis* 0) or
+    /// y (1) axis, as `Axes.bar` sets it.
+    fn copy_many_rects(
+        &self,
+        x0: numpy::PyReadonlyArray1<'_, f64>,
+        y0: numpy::PyReadonlyArray1<'_, f64>,
+        x1: numpy::PyReadonlyArray1<'_, f64>,
+        y1: numpy::PyReadonlyArray1<'_, f64>,
+        sticky_axis: usize,
+        sticky: numpy::PyReadonlyArray1<'_, f64>,
+    ) -> PyResult<Vec<Self>> {
+        let (x0, y0, x1, y1, sticky) = (x0.as_array(), y0.as_array(), x1.as_array(), y1.as_array(), sticky.as_array());
+        let n = x0.len();
+        if [y0.len(), x1.len(), y1.len(), sticky.len()].iter().any(|&m| m != n) || sticky_axis > 1 {
+            return Err(PyValueError::new_err("copy_many_rects: mismatched shapes"));
+        }
+        let style = self.lk().clone();
+        let PatchKind::Generic { path, .. } = &style.kind else {
+            return Err(PyValueError::new_err("copy_many_rects: not a generic patch"));
+        };
+        let path = path.clone();
+        let mut base = style.clone();
+        base.sticky_x.clear();
+        base.sticky_y.clear();
+        Ok((0..n)
+            .map(|i| {
+                let mut patch = base.clone();
+                let mtx = [[x1[i] - x0[i], 0.0, x0[i]], [0.0, y1[i] - y0[i], y0[i]], [0.0, 0.0, 1.0]];
+                patch.kind = PatchKind::Generic { path: path.clone(), patch_transform: Some(mtx) };
+                if sticky_axis == 0 {
+                    patch.sticky_x.push(sticky[i]);
+                } else {
+                    patch.sticky_y.push(sticky[i]);
+                }
+                Self { inner: shared(patch) }
+            })
+            .collect())
+    }
+
     /// Copy a PathPatch's style with independent replacement geometry.
     fn copy_with_path(&self, verts: Vec<[f64; 2]>, codes: Option<Vec<u8>>) -> Self {
         let mut patch = self.lk().clone();

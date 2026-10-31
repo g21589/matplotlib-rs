@@ -38,12 +38,24 @@ from matplotlib_rs import _api, _docstring, _preprocess_data, _style_helpers
 from matplotlib_rs.axes._base import (
     _AxesBase, _TransformedBoundsLocator, _process_plot_format)
 from matplotlib_rs.axes._secondary_axes import SecondaryAxis
+from matplotlib_rs.axes import _bar
 from matplotlib_rs.container import (
     BarContainer, ErrorbarContainer, PieContainer, StemContainer)
 from matplotlib_rs.text import Text
 from matplotlib_rs.transforms import _ScaledRotation
 
 _log = logging.getLogger(__name__)
+
+# Scalar types that unit conversion returns unchanged.
+_PLAIN_SCALARS = frozenset({
+    int, float, np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16,
+    np.uint32, np.uint64, np.float16, np.float32, np.float64})
+
+
+def _plain_scalar(x):
+    """Whether *x* is a plain number (or 0-d numeric array)."""
+    return (type(x) in _PLAIN_SCALARS
+            or type(x) is np.ndarray and x.ndim == 0 and x.dtype.kind in "iuf")
 
 
 # The axes module contains all the wrappers to plotting functions.
@@ -2243,7 +2255,12 @@ class Axes(_AxesBase):
             except (TypeError, IndexError, KeyError):
                 x = xconv
 
-            if np.iterable(dx):
+            if (type(dx) is np.ndarray and dx.ndim == 1 and dx.dtype.kind in "if"
+                    and _plain_scalar(x0) and _plain_scalar(x)):
+                # matplotlib_rs: plain numbers need no conversion; the same
+                # element-wise arithmetic as the loop below, at once.
+                dx = list((x0 + dx) - x)
+            elif np.iterable(dx):
                 dx = [convert(x0 + ddx) - x for ddx in dx]
             else:
                 dx = convert(x0 + dx) - x
@@ -2560,6 +2577,8 @@ class Axes(_AxesBase):
             raise ValueError(f'number of labels ({len(patch_labels)}) '
                              f'does not match number of bars ({len(x)}).')
 
+        linewidths, hatches, facecolors = linewidth, hatch, facecolor
+        edgecolors = None if edgecolor is None else mcolors.to_rgba_array(edgecolor)
         linewidth = itertools.cycle(np.atleast_1d(linewidth))
         hatch = itertools.cycle(np.atleast_1d(hatch))
         facecolor = itertools.chain(itertools.cycle(facecolor),
@@ -2569,7 +2588,7 @@ class Axes(_AxesBase):
             edgecolor = itertools.repeat(None)
         else:
             edgecolor = itertools.chain(
-                itertools.cycle(mcolors.to_rgba_array(edgecolor)),
+                itertools.cycle(edgecolors),
                 # Fallback if edgecolor == "none".
                 itertools.repeat('none'))
 
@@ -2597,9 +2616,16 @@ class Axes(_AxesBase):
             left = x
             bottom = y
 
-        patches = []
+        # matplotlib_rs: many bars of a few styles are created at once.
+        patches = _bar.rectangles(
+            self, left, bottom, width, height, facecolors, edgecolors,
+            linewidths, hatches, patch_labels, kwargs, orientation)
         args = zip(left, bottom, width, height, facecolor, edgecolor, linewidth,
                    hatch, patch_labels)
+        if patches is not None:
+            args = ()
+        else:
+            patches = []
         for l, b, w, h, c, e, lw, htch, lbl in args:
             r = mpatches.Rectangle(
                 xy=(l, b), width=w, height=h,

@@ -5,7 +5,7 @@
 use numpy::{PyArray3, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, PyArrayMethods};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyDictMethods};
+use pyo3::types::{PyBytes, PyDict, PyDictMethods, PyList, PyListMethods};
 
 use crate::agg::pixfmt::Rgba;
 use crate::agg::stroke::{LineCap, LineJoin};
@@ -302,7 +302,7 @@ impl PyRendererAgg {
         &mut self,
         gc: &Bound<'_, PyDict>,
         master_transform: PyReadonlyArray2<f64>,
-        paths: Vec<(PyReadonlyArray2<f64>, Option<PyReadonlyArray1<u8>>)>,
+        paths: &Bound<'_, PyList>,
         transforms: PyReadonlyArray3<f64>,
         offsets: PyReadonlyArray2<f64>,
         offset_trans: PyReadonlyArray2<f64>,
@@ -314,8 +314,16 @@ impl PyRendererAgg {
         hatchcolors: Option<PyReadonlyArray2<f64>>,
     ) -> PyResult<()> {
         let gc = gc_from(gc)?;
-        let paths: Vec<MplPath> =
-            paths.iter().map(|(v, c)| path_from(v, c.as_ref(), false, 1.0 / 9.0)).collect::<PyResult<_>>()?;
+        // One path's arrays borrowed at a time: numpy's borrow tracking
+        // checks each new borrow against all live ones of the same base
+        // array (the segments of a LineCollection share one).
+        let paths: Vec<MplPath> = paths
+            .iter()
+            .map(|item| {
+                let (v, c): (PyReadonlyArray2<f64>, Option<PyReadonlyArray1<u8>>) = item.extract()?;
+                path_from(&v, c.as_ref(), false, 1.0 / 9.0)
+            })
+            .collect::<PyResult<_>>()?;
         let t = transforms.as_array();
         let transforms: Vec<TransAffine> = if t.shape()[0] == 0 || t.len() == 0 {
             Vec::new()
