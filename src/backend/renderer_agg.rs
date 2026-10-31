@@ -763,7 +763,7 @@ impl RendererAgg {
         let do_clip = nfacecolors == 0 && !has_hatch;
 
         if !has_clippath && !has_hatch && gc.sketch.is_none() && n >= PARALLEL_MIN_PATHS {
-            let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).min(8);
+            let threads = collection_threads();
             if threads > 1 {
                 let c = Collection {
                     master_transform,
@@ -1032,6 +1032,19 @@ fn blend_from_rgba<P: PixFmt>(
 /// Below this many paths `draw_path_collection` draws on one thread.
 const PARALLEL_MIN_PATHS: usize = 256;
 
+/// The threads of `draw_path_collection_parallel`: the available
+/// parallelism (at most 8), or `MPLRS_THREADS` (1 draws on one thread).
+fn collection_threads() -> usize {
+    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::env::var("MPLRS_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&t| t >= 1)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |t| t.get()).min(8))
+    })
+}
+
 /// The arguments of a `draw_path_collection` call.
 struct Collection<'a> {
     master_transform: &'a TransAffine,
@@ -1248,54 +1261,75 @@ impl RendererAgg {
             PathWorker { ras, sl_p8: ScanlineP8::new(), sl_bin: ScanlineBin::new() }
         };
 
-        // Batches: rasterize in parallel, then render in order.
+        // Batches: the threads (started once) rasterize their share of a
+        // batch into their own buffers, then this thread renders the batch
+        // in order.  Small batches keep the recorded scanlines in cache.
         const PER_THREAD: usize = 512;
         let batch = PER_THREAD * threads;
-        let mut recorded: Vec<RecordedPath> = (0..batch.min(n)).map(|_| RecordedPath::default()).collect();
-        let mut workers: Vec<(PathWorker, Gc)> = (0..threads)
+        let share = |start: usize, t: usize| {
+            let end = (start + batch).min(n);
+            let per = (end - start).div_ceil(threads);
+            let a = (start + t * per).min(end);
+            (a, (a + per).min(end))
+        };
+        let slots: Vec<std::sync::Mutex<(PathWorker, Gc, Vec<RecordedPath>)>> = (0..threads)
             .map(|_| {
                 let mut gc = gc0.clone();
                 gc.linewidth = 0.0;
-                (new_worker(), gc)
+                std::sync::Mutex::new((new_worker(), gc, Vec::new()))
             })
             .collect();
-        let mut start = 0;
-        while start < n {
-            let end = (start + batch).min(n);
-            let out = &mut recorded[..end - start];
-            let per = (end - start).div_ceil(threads);
-            std::thread::scope(|s| {
-                let mut rest: &mut [RecordedPath] = out;
-                let mut i0 = start;
-                for (worker, gc) in workers.iter_mut() {
-                    if rest.is_empty() {
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let finished = std::sync::atomic::AtomicBool::new(false);
+        let go = std::sync::Barrier::new(threads + 1);
+        let done = std::sync::Barrier::new(threads + 1);
+        let pixf = &mut self.pixf;
+        std::thread::scope(|s| {
+            for (t, slot) in slots.iter().enumerate() {
+                let (rasterize, share, next, finished, go, done) = (&rasterize, &share, &next, &finished, &go, &done);
+                s.spawn(move || loop {
+                    go.wait();
+                    if finished.load(std::sync::atomic::Ordering::Acquire) {
                         break;
                     }
-                    let k = per.min(rest.len());
-                    let (mine, tail) = rest.split_at_mut(k);
-                    rest = tail;
-                    let first = i0;
-                    i0 += k;
-                    let rasterize = &rasterize;
-                    // (the state gc_for gives path i depends on i only)
-                    s.spawn(move || {
-                        for (j, out) in mine.iter_mut().enumerate() {
-                            rasterize(worker, gc, first + j, out);
+                    let (a, b) = share(next.load(std::sync::atomic::Ordering::Acquire), t);
+                    {
+                        let mut g = slot.lock().unwrap();
+                        let (worker, gc, out) = &mut *g;
+                        if out.len() < b - a {
+                            out.resize_with(b - a, RecordedPath::default);
                         }
-                    });
-                }
-            });
-            // (as render_current: clipped by the rasterizer, not here)
-            let mut rb = RendererBase::new(&mut self.pixf);
-            for r in &recorded[..end - start] {
-                if let Some(fc) = &r.face {
-                    r.face_rows.replay(&mut rb, fc, r.isaa);
-                }
-                if let Some(ec) = &r.stroke {
-                    r.stroke_rows.replay(&mut rb, ec, r.isaa);
-                }
+                        // (the state gc_for gives path i depends on i only)
+                        for (j, i) in (a..b).enumerate() {
+                            rasterize(worker, gc, i, &mut out[j]);
+                        }
+                    }
+                    done.wait();
+                });
             }
-            start = end;
-        }
+            let mut start = 0;
+            while start < n {
+                next.store(start, std::sync::atomic::Ordering::Release);
+                go.wait();
+                done.wait();
+                // (as render_current: clipped by the rasterizer, not here)
+                let mut rb = RendererBase::new(&mut *pixf);
+                for (t, slot) in slots.iter().enumerate() {
+                    let (a, b) = share(start, t);
+                    let g = slot.lock().unwrap();
+                    for r in &g.2[..b - a] {
+                        if let Some(fc) = &r.face {
+                            r.face_rows.replay(&mut rb, fc, r.isaa);
+                        }
+                        if let Some(ec) = &r.stroke {
+                            r.stroke_rows.replay(&mut rb, ec, r.isaa);
+                        }
+                    }
+                }
+                start = (start + batch).min(n);
+            }
+            finished.store(true, std::sync::atomic::Ordering::Release);
+            go.wait();
+        });
     }
 }

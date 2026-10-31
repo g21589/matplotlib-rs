@@ -11,8 +11,11 @@ from .. import _mplrs
 
 try:  # NumPy 2
     from numpy.lib._histograms_impl import _get_bin_edges
-except ImportError:  # NumPy 1.25, 1.26
-    from numpy.lib.histograms import _get_bin_edges
+except ImportError:
+    try:  # NumPy 1.25, 1.26
+        from numpy.lib.histograms import _get_bin_edges
+    except ImportError:  # (numpy.histogram is used as it is)
+        _get_bin_edges = None
 
 # Below this many values numpy is used as it is.
 MIN_SIZE = 1 << 16
@@ -21,7 +24,7 @@ MIN_SIZE = 1 << 16
 def histogram(a, bins=10, range=None, density=None, weights=None):
     """`numpy.histogram`, with the same results."""
     if (weights is not None or density or type(a) is not np.ndarray
-            or a.dtype != np.float64 or a.size < MIN_SIZE):
+            or a.dtype != np.float64 or a.size < MIN_SIZE or _get_bin_edges is None):
         return np.histogram(a, bins, range=range, density=density, weights=weights)
     a = a.ravel()
     try:

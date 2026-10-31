@@ -148,16 +148,7 @@ fn blend_row_plain(row: &mut [u8], c: &Rgba8, alpha: u8) {
     if alpha == 0 {
         return;
     }
-    let al = alpha as u32;
-    // For a0 == 255 the divisor d = 65280 + alpha is constant; the
-    // numerators are below 2^26, so (Granlund & Montgomery) floor(n / d) ==
-    // (n * ceil(2^42 / d)) >> 42 exactly.
-    let a = ((al + 255) << 8) - al * 255;
-    let m = magic(a);
-    let ca = al << 8;
-    let k = 255 * (256 - al);
-    let (nr, ng, nb) = (c.r as u32 * ca, c.g as u32 * ca, c.b as u32 * ca);
-    let a_out = (a >> 8) as u8;
+    let (nr, ng, nb, k, m) = opaque_blend_constants(c, alpha);
     let q = |n: u32| quotient(n, m);
     let mut rc = Recip::new();
     for p in row.chunks_exact_mut(4) {
@@ -165,11 +156,44 @@ fn blend_row_plain(row: &mut [u8], c: &Rgba8, alpha: u8) {
             p[0] = q(nr + p[0] as u32 * k);
             p[1] = q(ng + p[1] as u32 * k);
             p[2] = q(nb + p[2] as u32 * k);
-            p[3] = a_out;
+            // (((alpha + 255) << 8) - alpha * 255) >> 8
+            p[3] = 255;
         } else {
             blend_pix_plain(p, c.r, c.g, c.b, alpha, &mut rc);
         }
     }
+}
+
+/// `blend_row_plain` with the opaque-destination results of `luts`.
+#[inline(always)]
+fn blend_row_plain_lut(row: &mut [u8], c: &Rgba8, alpha: u8, luts: &mut BlendLuts) {
+    if alpha == 0 {
+        return;
+    }
+    let t = luts.get(c, alpha);
+    let mut rc = Recip::new();
+    for p in row.chunks_exact_mut(4) {
+        if p[3] == 255 {
+            p[0] = t[0][p[0] as usize];
+            p[1] = t[1][p[1] as usize];
+            p[2] = t[2][p[2] as usize];
+        } else {
+            blend_pix_plain(p, c.r, c.g, c.b, alpha, &mut rc);
+        }
+    }
+}
+
+/// For a0 == 255 the divisor d = 65280 + alpha of `blend_pix_plain` is
+/// constant; the numerators are below 2^26, so (Granlund & Montgomery)
+/// floor(n / d) == (n * ceil(2^42 / d)) >> 42 exactly.  Returns the colour
+/// terms of the numerators, the factor of the old channel value and the
+/// multiplier.
+#[inline(always)]
+fn opaque_blend_constants(c: &Rgba8, alpha: u8) -> (u32, u32, u32, u32, u64) {
+    let al = alpha as u32;
+    let a = ((al + 255) << 8) - al * 255;
+    let ca = al << 8;
+    (c.r as u32 * ca, c.g as u32 * ca, c.b as u32 * ca, 255 * (256 - al), magic(a))
 }
 
 #[inline(always)]
@@ -222,17 +246,50 @@ pub trait PixFmt {
     fn blend_color_hspan(&mut self, x: i32, y: i32, len: u32, colors: &[Rgba8], covers: Option<&[u8]>, cover: u8);
 }
 
+/// Rows at least this long are blended through a `BlendLuts` table.
+const LUT_MIN_PIXELS: usize = 64;
+
+/// `blend_row_plain` results over an opaque destination for recent (colour,
+/// alpha) pairs: the new value of each channel for each old value (the same
+/// arithmetic, tabulated), one slot per alpha.
+#[derive(Clone, Default)]
+struct BlendLuts {
+    slots: Vec<Option<(u32, Box<[[u8; 256]; 3]>)>>,
+}
+
+impl BlendLuts {
+    fn get(&mut self, c: &Rgba8, alpha: u8) -> &[[u8; 256]; 3] {
+        if self.slots.is_empty() {
+            self.slots.resize(256, None);
+        }
+        let key = u32::from_le_bytes([c.r, c.g, c.b, 0]);
+        let slot = &mut self.slots[alpha as usize];
+        if !matches!(slot, Some((k, _)) if *k == key) {
+            let (nr, ng, nb, k, m) = opaque_blend_constants(c, alpha);
+            let mut t = Box::new([[0u8; 256]; 3]);
+            for x in 0..256u32 {
+                t[0][x as usize] = quotient(nr + x * k, m);
+                t[1][x as usize] = quotient(ng + x * k, m);
+                t[2][x as usize] = quotient(nb + x * k, m);
+            }
+            *slot = Some((key, t));
+        }
+        &slot.as_ref().unwrap().1
+    }
+}
+
 /// RGBA32 image buffer (top row first) with matplotlib's plain blender.
 #[derive(Clone)]
 pub struct PixfmtRgba32 {
     pub width: u32,
     pub height: u32,
     pub buf: Vec<u8>,
+    luts: BlendLuts,
 }
 
 impl PixfmtRgba32 {
     pub fn new(width: u32, height: u32) -> Self {
-        PixfmtRgba32 { width, height, buf: vec![0; width as usize * height as usize * 4] }
+        PixfmtRgba32 { width, height, buf: vec![0; width as usize * height as usize * 4], luts: BlendLuts::default() }
     }
 
     #[inline(always)]
@@ -278,10 +335,13 @@ impl PixFmt for PixfmtRgba32 {
             for p in row.chunks_exact_mut(4) {
                 set_pix(p, c);
             }
-        } else if cover == 255 {
-            blend_row_plain(row, c, c.a);
         } else {
-            blend_row_plain(row, c, mult_cover(c.a, cover));
+            let alpha = if cover == 255 { c.a } else { mult_cover(c.a, cover) };
+            if len as usize >= LUT_MIN_PIXELS {
+                blend_row_plain_lut(row, c, alpha, &mut self.luts);
+            } else {
+                blend_row_plain(row, c, alpha);
+            }
         }
     }
 
@@ -544,6 +604,35 @@ mod tests {
                 blend_row_plain(&mut row, &Rgba8::new(c, 255 - c, c, 255), alpha);
                 assert_eq!(row, expect, "alpha {alpha} c {c}");
             }
+        }
+    }
+
+    #[test]
+    fn row_blend_lut_sampled() {
+        let mut s = 4242u32;
+        let mut next = || {
+            s = s.wrapping_mul(1664525).wrapping_add(1013904223);
+            s
+        };
+        let mut luts = BlendLuts::default();
+        for _ in 0..20000 {
+            let n = (next() % 300) as usize + 1;
+            let mut row: Vec<u8> = (0..4 * n).map(|_| next() as u8).collect();
+            for p in row.chunks_exact_mut(4) {
+                if next() % 4 != 0 {
+                    p[3] = 255;
+                }
+            }
+            // few colours and alphas, so that the cached tables are reused
+            let [r, g, b, _] = (next() % 3 * 0x203040).to_le_bytes();
+            let c = Rgba8::new(r, g, b, 255);
+            let alpha = (next() % 6 * 51) as u8;
+            let mut expect = row.clone();
+            for p in expect.chunks_exact_mut(4) {
+                blend_pix_plain_div(p, c.r, c.g, c.b, alpha);
+            }
+            blend_row_plain_lut(&mut row, &c, alpha, &mut luts);
+            assert_eq!(row, expect);
         }
     }
 

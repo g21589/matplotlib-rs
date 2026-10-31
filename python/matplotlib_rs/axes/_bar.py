@@ -51,6 +51,18 @@ def _same(values):
     return first
 
 
+def _scalars(values):
+    """``list(values)``: the NumPy scalars the loop over *values* gives (one,
+    repeated, if they are all the same: scalars are immutable)."""
+    first = values[0]
+    same = values == first  # (never for NaN)
+    if values.dtype.kind == "f":
+        same &= np.signbit(values) == np.signbit(first)  # -0.0 == 0.0
+    if same.all():
+        return [first] * len(values)
+    return list(values)
+
+
 @cbook._gc_paused
 def rectangles(ax, left, bottom, width, height, facecolor, edgecolor,
                linewidth, hatch, patch_labels, kwargs, orientation):
@@ -127,8 +139,8 @@ def rectangles(ax, left, bottom, width, height, facecolor, edgecolor,
     vertical = orientation == "vertical"
     sticky_values = bottom if vertical else left
     sticky = sticky_values.astype(float)
-    cols = {"_x0": list(left), "_y0": list(bottom), "_width": list(width),
-            "_height": list(height)}
+    cols = {"_x0": _scalars(left), "_y0": _scalars(bottom), "_width": _scalars(width),
+            "_height": _scalars(height)}
     XYPair = artist._XYPair
     if vertical:
         cols["_sticky_edges"] = [XYPair([], [v]) for v in sticky_values]

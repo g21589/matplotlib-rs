@@ -331,7 +331,7 @@ fn patch_set(p: &mut Patch, name: &str, v: &Bound<'_, PyAny>) -> PyResult<()> {
         "generic" => {
             let (verts, codes, mtx): (Vec<[f64; 2]>, Option<Vec<u8>>, Option<Vec<Vec<f64>>>) = v.extract()?;
             let pt = mtx.map(|m| [[m[0][0], m[0][1], m[0][2]], [m[1][0], m[1][1], m[1][2]], [0.0, 0.0, 1.0]]);
-            p.kind = PatchKind::Generic { path: path_from_parts(verts, codes), patch_transform: pt };
+            p.kind = PatchKind::Generic { path: Arc::new(path_from_parts(verts, codes)), patch_transform: pt };
         }
         "edge_default" => {
             p.edge_default = v.extract()?;
@@ -443,7 +443,7 @@ impl PyPatch {
             "generic" => {
                 let (verts, codes, mtx): (Vec<[f64; 2]>, Option<Vec<u8>>, Option<Vec<Vec<f64>>>) = args.extract()?;
                 let pt = mtx.map(|m| [[m[0][0], m[0][1], m[0][2]], [m[1][0], m[1][1], m[1][2]], [0.0, 0.0, 1.0]]);
-                PatchKind::Generic { path: path_from_parts(verts, codes), patch_transform: pt }
+                PatchKind::Generic { path: Arc::new(path_from_parts(verts, codes)), patch_transform: pt }
             }
             "fancybbox" => {
                 let (x, y, w, h, bs): (f64, f64, f64, f64, String) = args.extract()?;
@@ -486,7 +486,8 @@ impl PyPatch {
                 let mut patch = style.clone();
                 let block = v.index_axis(numpy::ndarray::Axis(0), i);
                 let pts = block.rows().into_iter().map(|r| [r[0], r[1]]).collect();
-                patch.kind = PatchKind::Generic { path: path_from_parts(pts, Some(codes.clone())), patch_transform: None };
+                patch.kind =
+                    PatchKind::Generic { path: Arc::new(path_from_parts(pts, Some(codes.clone()))), patch_transform: None };
                 Self { inner: shared(patch) }
             })
             .collect())
@@ -512,12 +513,11 @@ impl PyPatch {
         if [y0.len(), x1.len(), y1.len(), sticky.len()].iter().any(|&m| m != n) || sticky_axis > 1 {
             return Err(PyValueError::new_err("copy_many_rects: mismatched shapes"));
         }
-        let style = self.lk().clone();
-        let PatchKind::Generic { path, .. } = &style.kind else {
+        let mut base = self.lk().clone();
+        let PatchKind::Generic { path, .. } = &base.kind else {
             return Err(PyValueError::new_err("copy_many_rects: not a generic patch"));
         };
         let path = path.clone();
-        let mut base = style.clone();
         base.sticky_x.clear();
         base.sticky_y.clear();
         Ok((0..n)
@@ -538,9 +538,7 @@ impl PyPatch {
     /// Copy a PathPatch's style with independent replacement geometry.
     fn copy_with_path(&self, verts: Vec<[f64; 2]>, codes: Option<Vec<u8>>) -> Self {
         let mut patch = self.lk().clone();
-        patch.kind = PatchKind::Generic {
-            path: path_from_parts(verts, codes), patch_transform: None,
-        };
+        patch.kind = PatchKind::Generic { path: Arc::new(path_from_parts(verts, codes)), patch_transform: None };
         Self { inner: shared(patch) }
     }
 
