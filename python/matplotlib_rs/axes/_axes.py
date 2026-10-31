@@ -38,7 +38,7 @@ from matplotlib_rs import _api, _docstring, _preprocess_data, _style_helpers
 from matplotlib_rs.axes._base import (
     _AxesBase, _TransformedBoundsLocator, _process_plot_format)
 from matplotlib_rs.axes._secondary_axes import SecondaryAxis
-from matplotlib_rs.axes import _bar
+from matplotlib_rs.axes import _bar, _hist
 from matplotlib_rs.container import (
     BarContainer, ErrorbarContainer, PieContainer, StemContainer)
 from matplotlib_rs.text import Text
@@ -7586,7 +7586,8 @@ such objects
         for i in range(nx):
             # this will automatically overwrite bins,
             # so that each histogram uses the same bins
-            m, bins = np.histogram(x[i], bins, weights=w[i], **hist_kwargs)
+            # matplotlib_rs: numpy's counts, computed in Rust for large data
+            m, bins = _hist.histogram(x[i], bins, weights=w[i], **hist_kwargs)
             tops.append(m)
         tops = np.array(tops, float)  # causes problems later if it's an int
         bins = np.array(bins, float)  # causes problems if float16
