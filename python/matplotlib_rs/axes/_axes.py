@@ -7961,8 +7961,9 @@ such objects
            elements into account.
         """
 
-        h, xedges, yedges = np.histogram2d(x, y, bins=bins, range=range,
-                                           density=density, weights=weights)
+        # matplotlib_rs: numpy's histogram, counted in Rust for large data
+        h, xedges, yedges = _hist.histogram2d(x, y, bins=bins, range=range,
+                                              density=density, weights=weights)
 
         if cmin is not None:
             h[h < cmin] = None

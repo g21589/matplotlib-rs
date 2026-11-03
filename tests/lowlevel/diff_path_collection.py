@@ -1,6 +1,7 @@
-"""Differential test of large draw_path_collection calls (which matplotlib_rs
-rasterizes on several threads and renders in order) against matplotlib's C++
-RendererAgg: every call's RGBA buffer must be byte-for-byte identical.
+"""Differential test of large draw_path_collection and draw_quad_mesh calls
+(which matplotlib_rs rasterizes on several threads and renders in order)
+against matplotlib's C++ RendererAgg: every call's RGBA buffer must be
+byte-for-byte identical.
 
 Usage: python diff_path_collection.py [iterations] [seeds]
 """
@@ -70,6 +71,36 @@ def run(n_iter=40, seed=0):
         if not compare(mr, rr.buffer_rgba(), f"it{it} n={n} paths={len(paths)} {d}"):
             failures += 1
     print(f"{n_iter} iterations, {failures} failures")
+    return failures + run_quad_mesh(max(4, n_iter // 4), seed)
+
+
+def run_quad_mesh(n_iter, seed):
+    rng = np.random.default_rng(seed + 1000)
+    failures = 0
+    for it in range(n_iter):
+        mr = MplRenderer(W, H, DPI)
+        rr = RsRenderer(W, H, DPI)
+        gc = random_gc(rng)
+        gc.set_clip_path(None)
+        d = gc_to_dict(gc)
+        w, h = (int(v) for v in rng.choice([1, 3, 17, 120, 300], 2))
+        x, y = np.meshgrid(np.linspace(-0.1, 1.1, w + 1) * W, np.linspace(-0.1, 1.1, h + 1) * H)
+        coords = np.stack([x, y], axis=-1)
+        if rng.random() < 0.5:  # distorted (non-rectilinear) cells
+            coords = coords + rng.normal(0, 0.3, coords.shape)
+        fcs = rng.random((w * h if rng.random() < 0.8 else 1, 4))
+        if rng.random() < 0.5:
+            fcs[:, 3] = 1
+        ecs = rng.random((1, 4)) if rng.random() < 0.3 else fcs
+        aa = bool(rng.random() < 0.5)
+        master = Affine2D() if rng.random() < 0.7 else random_trans(rng)
+        offsets = np.zeros((0, 2))
+        mr.draw_quad_mesh(gc, master.frozen(), w, h, coords, offsets, Affine2D().frozen(), fcs, aa, ecs)
+        rr.draw_quad_mesh(d, master.get_matrix(), w, h, np.ascontiguousarray(coords), offsets,
+                          Affine2D().get_matrix(), fcs, aa, ecs)
+        if not compare(mr, rr.buffer_rgba(), f"quad mesh it{it} {w}x{h} aa={aa} {d}"):
+            failures += 1
+    print(f"{n_iter} quad meshes, {failures} failures")
     return failures
 
 

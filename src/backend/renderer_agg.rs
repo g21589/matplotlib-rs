@@ -74,6 +74,129 @@ impl<'a> VertexSource for PathIter<'a> {
     }
 }
 
+/// The paths of a path collection: a list of paths, or the quadrilaterals
+/// of a mesh generated on the fly.
+pub trait PathList: Sync {
+    type Path<'a>: CollectionPath
+    where
+        Self: 'a;
+    fn len(&self) -> usize;
+    fn path(&self, i: usize) -> Self::Path<'_>;
+}
+
+/// A path of a `PathList`.
+pub trait CollectionPath {
+    type Iter<'a>: VertexSource
+    where
+        Self: 'a;
+    fn iter(&self) -> Self::Iter<'_>;
+    fn total_vertices(&self) -> usize;
+}
+
+impl PathList for [MplPath] {
+    type Path<'a> = &'a MplPath;
+    #[inline]
+    fn len(&self) -> usize {
+        <[MplPath]>::len(self)
+    }
+    #[inline]
+    fn path(&self, i: usize) -> &MplPath {
+        &self[i]
+    }
+}
+
+impl CollectionPath for &MplPath {
+    type Iter<'a>
+        = PathIter<'a>
+    where
+        Self: 'a;
+    #[inline]
+    fn iter(&self) -> PathIter<'_> {
+        MplPath::iter(self)
+    }
+    #[inline]
+    fn total_vertices(&self) -> usize {
+        MplPath::total_vertices(self)
+    }
+}
+
+/// The quadrilaterals of a `draw_quad_mesh` call, as matplotlib's
+/// `QuadMeshGenerator` gives them: path i is quad (m, n) = (i % width,
+/// i / width), five vertices (closed, without codes) of the (rows, cols, 2)
+/// coordinate array.
+pub struct QuadMesh<'a> {
+    pub coords: &'a [f64],
+    pub cols: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl PathList for QuadMesh<'_> {
+    type Path<'a>
+        = Quad
+    where
+        Self: 'a;
+    #[inline]
+    fn len(&self) -> usize {
+        self.width * self.height
+    }
+    #[inline]
+    fn path(&self, i: usize) -> Quad {
+        let (m, n) = (i % self.width, i / self.width);
+        let mut v = [[0.0; 2]; 5];
+        for (idx, p) in v.iter_mut().enumerate() {
+            let mm = m + ((idx & 2) >> 1);
+            let nn = n + (((idx + 1) & 2) >> 1);
+            let o = (nn * self.cols + mm) * 2;
+            *p = [self.coords[o], self.coords[o + 1]];
+        }
+        Quad(v)
+    }
+}
+
+/// A quadrilateral of a `QuadMesh` (closed by repeating its first vertex).
+pub struct Quad(pub [[f64; 2]; 5]);
+
+pub struct QuadIter<'a> {
+    v: &'a [[f64; 2]; 5],
+    i: usize,
+}
+
+impl VertexSource for QuadIter<'_> {
+    #[inline]
+    fn rewind(&mut self, path_id: u32) {
+        self.i = path_id as usize;
+    }
+    #[inline]
+    fn vertex(&mut self, x: &mut f64, y: &mut f64) -> u32 {
+        if self.i >= 5 {
+            *x = 0.0;
+            *y = 0.0;
+            return PATH_CMD_STOP;
+        }
+        let idx = self.i;
+        self.i += 1;
+        [*x, *y] = self.v[idx];
+        if idx == 0 {
+            PATH_CMD_MOVE_TO
+        } else {
+            PATH_CMD_LINE_TO
+        }
+    }
+}
+
+impl CollectionPath for Quad {
+    type Iter<'a> = QuadIter<'a>;
+    #[inline]
+    fn iter(&self) -> QuadIter<'_> {
+        QuadIter { v: &self.0, i: 0 }
+    }
+    #[inline]
+    fn total_vertices(&self) -> usize {
+        5
+    }
+}
+
 /// Dash pattern in points: offset and (on, off) pairs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Dashes {
@@ -735,6 +858,31 @@ impl RendererAgg {
         has_codes: bool,
         hatchcolors: &[Rgba],
     ) {
+        self.draw_path_list(
+            gc, master_transform, paths, transforms, offsets, offset_trans, facecolors, edgecolors, linewidths,
+            linestyles, antialiaseds, check_snap, has_codes, hatchcolors,
+        )
+    }
+
+    /// `draw_path_collection` of the paths of a `PathList`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_path_list<L: PathList + ?Sized>(
+        &mut self,
+        gc: &Gc,
+        master_transform: &TransAffine,
+        paths: &L,
+        transforms: &[TransAffine],
+        offsets: &[[f64; 2]],
+        offset_trans: &TransAffine,
+        facecolors: &[Rgba],
+        edgecolors: &[Rgba],
+        linewidths: &[f64],
+        linestyles: &[Dashes],
+        antialiaseds: &[bool],
+        check_snap: bool,
+        has_codes: bool,
+        hatchcolors: &[Rgba],
+    ) {
         let npaths = paths.len();
         let noffsets = offsets.len();
         let n = npaths.max(noffsets);
@@ -786,7 +934,7 @@ impl RendererAgg {
         }
 
         for i in 0..n {
-            let path = &paths[i % npaths];
+            let path = paths.path(i % npaths);
             let mut trans = if ntransforms > 0 {
                 let mut t = transforms[i % ntransforms];
                 t.multiply(master_transform);
@@ -1046,9 +1194,9 @@ fn collection_threads() -> usize {
 }
 
 /// The arguments of a `draw_path_collection` call.
-struct Collection<'a> {
+struct Collection<'a, L: PathList + ?Sized> {
     master_transform: &'a TransAffine,
-    paths: &'a [MplPath],
+    paths: &'a L,
     transforms: &'a [TransAffine],
     offsets: &'a [[f64; 2]],
     offset_trans: &'a TransAffine,
@@ -1192,7 +1340,7 @@ impl RendererAgg {
     /// are rasterized on *threads* threads (each with a rasterizer set up as
     /// the shared one) and their scanlines rendered in order, so the image is
     /// the same as when drawing them one after the other.
-    fn draw_path_collection_parallel(&mut self, gc0: &Gc, c: &Collection<'_>, n: usize, threads: usize) {
+    fn draw_path_collection_parallel<L: PathList + ?Sized>(&mut self, gc0: &Gc, c: &Collection<'_, L>, n: usize, threads: usize) {
         let (w, h) = (self.width, self.height);
         let (dpi, height) = (self.dpi, self.height as f64);
         let cliprect = gc0.cliprect_d();
@@ -1234,7 +1382,7 @@ impl RendererAgg {
 
         let rasterize = |worker: &mut PathWorker, gc: &mut Gc, i: usize, out: &mut RecordedPath| {
             let (face, trans) = gc_for(i, gc);
-            let path = &c.paths[i % npaths];
+            let path = c.paths.path(i % npaths);
             let tpath = ConvTransform::new(path.iter(), trans);
             let nan_removed = PathNanRemover::new(tpath, true, c.has_codes);
             let clipped = PathClipper::new(nan_removed, c.do_clip, w as f64, h as f64);

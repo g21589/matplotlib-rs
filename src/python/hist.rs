@@ -2,7 +2,7 @@
 //!
 //! The counts are integers, so the data can be split among threads.
 
-use numpy::{PyArray1, PyReadonlyArray1};
+use numpy::{PyArray1, PyArray2, PyArrayMethods, PyReadonlyArray1};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -94,7 +94,85 @@ fn histogram_counts<'py>(
     Ok(PyArray1::from_vec(py, counts))
 }
 
+/// The bin numbers of `numpy.histogramdd` along one axis:
+/// `searchsorted(edges, v, side='right')` (values equal to the last edge
+/// moved one bin left), where 0 and `edges.len()` are the outliers.
+#[inline]
+fn histdd_index(edges: &[f64], v: f64) -> usize {
+    // (NaN sorts after every edge)
+    let mut i = if v.is_nan() { edges.len() } else { edges.partition_point(|&e| e <= v) };
+    if v == edges[edges.len() - 1] {
+        i -= 1;
+    }
+    i
+}
+
+fn count_2d(x: &[f64], y: &[f64], ex: &[f64], ey: &[f64], counts: &mut [i64]) {
+    let (nx, ny) = (ex.len() - 1, ey.len() - 1);
+    for (&a, &b) in x.iter().zip(y) {
+        let i = histdd_index(ex, a);
+        let j = histdd_index(ey, b);
+        if (1..=nx).contains(&i) && (1..=ny).contains(&j) {
+            counts[(i - 1) * ny + j - 1] += 1;
+        }
+    }
+}
+
+/// `histogram2d_counts(x, y, xedges, yedges)`: the histogram
+/// `numpy.histogram2d` computes (with `numpy.histogramdd`) from the 1D float64
+/// arrays *x*, *y* and the float64 bin edges (which come from numpy), as a
+/// float64 (nx, ny) array.
+#[pyfunction]
+fn histogram2d_counts<'py>(
+    py: Python<'py>,
+    x: PyReadonlyArray1<'py, f64>,
+    y: PyReadonlyArray1<'py, f64>,
+    xedges: PyReadonlyArray1<'py, f64>,
+    yedges: PyReadonlyArray1<'py, f64>,
+) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (x, y) = (x.as_slice()?, y.as_slice()?);
+    let (ex, ey) = (xedges.as_slice()?.to_vec(), yedges.as_slice()?.to_vec());
+    if x.len() != y.len() || ex.len() < 2 || ey.len() < 2 || ex.iter().chain(&ey).any(|e| e.is_nan()) {
+        return Err(PyValueError::new_err("histogram2d_counts: invalid arguments"));
+    }
+    let (nx, ny) = (ex.len() - 1, ey.len() - 1);
+    let counts = py.detach(|| {
+        let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).min(8);
+        if threads < 2 || x.len() < 1 << 18 {
+            let mut c = vec![0i64; nx * ny];
+            count_2d(x, y, &ex, &ey, &mut c);
+            return c;
+        }
+        let size = x.len().div_ceil(threads);
+        std::thread::scope(|s| {
+            let parts: Vec<_> = x
+                .chunks(size)
+                .zip(y.chunks(size))
+                .map(|(xs, ys)| {
+                    let (ex, ey) = (&ex, &ey);
+                    s.spawn(move || {
+                        let mut c = vec![0i64; nx * ny];
+                        count_2d(xs, ys, ex, ey, &mut c);
+                        c
+                    })
+                })
+                .collect();
+            let mut total = vec![0i64; nx * ny];
+            for p in parts {
+                for (t, c) in total.iter_mut().zip(p.join().expect("histogram2d thread")) {
+                    *t += c;
+                }
+            }
+            total
+        })
+    });
+    // (histogramdd: hist.astype(float, casting='safe'))
+    let h: Vec<f64> = counts.into_iter().map(|c| c as f64).collect();
+    PyArray1::from_vec(py, h).reshape([nx, ny])
+}
+
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(histogram_counts, m)?)?;
+    m.add_function(wrap_pyfunction!(histogram2d_counts, m)?)?;
     Ok(())
 }

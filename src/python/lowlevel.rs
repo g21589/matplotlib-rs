@@ -16,7 +16,7 @@ use std::rc::Rc;
 use pyo3::exceptions::PyRuntimeError;
 
 use crate::backend::path_converters::SnapMode;
-use crate::backend::renderer_agg::{ClipPath, Dashes, Gc, Hatch, MplPath, RendererAgg};
+use crate::backend::renderer_agg::{ClipPath, Dashes, Gc, Hatch, MplPath, QuadMesh, RendererAgg};
 use crate::mpl::artist::GcState;
 use crate::mpl::renderer::{GlyphDraw, Renderer};
 use crate::mpl::transforms::Bbox;
@@ -478,16 +478,9 @@ impl PyRendererAgg {
         if c.shape()[0] < mesh_height + 1 || c.shape()[1] < mesh_width + 1 || c.shape()[2] < 2 {
             return Err(PyValueError::new_err("coordinates do not match the mesh size"));
         }
-        let mut paths = Vec::with_capacity(mesh_width * mesh_height);
-        for i in 0..mesh_width * mesh_height {
-            let (m, n) = (i % mesh_width, i / mesh_width);
-            let v = |idx: usize| {
-                let mm = m + ((idx & 2) >> 1);
-                let nn = n + (((idx + 1) & 2) >> 1);
-                [c[[nn, mm, 0]], c[[nn, mm, 1]]]
-            };
-            paths.push(MplPath::new((0..5).map(v).collect(), None));
-        }
+        // (the quads are generated while drawing, see QuadMesh)
+        let coords = coordinates.as_slice()?;
+        let paths = QuadMesh { coords, cols: c.shape()[1], width: mesh_width, height: mesh_height };
         let o = offsets.as_array();
         let offsets: Vec<[f64; 2]> =
             if o.len() == 0 { Vec::new() } else { (0..o.shape()[0]).map(|i| [o[[i, 0]], o[[i, 1]]]).collect() };
@@ -502,7 +495,7 @@ impl PyRendererAgg {
         let ec = colors(&edgecolors);
         let lw = [gc.linewidth];
         let Some(r) = self.agg()? else { return Ok(()) };
-        r.draw_path_collection(
+        r.draw_path_list(
             &gc,
             &trans_from(&master_transform)?,
             &paths,
