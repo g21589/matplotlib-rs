@@ -273,6 +273,46 @@ class ContourTests(unittest.TestCase):
                         np.testing.assert_array_equal(p, q)
 
 
+    def test_many_levels_match_single_calls(self):
+        # filled_many / lines_many compute the levels on several threads with
+        # copies of the generator; each must equal the level-by-level call.
+        for i, (x, y, z, corner_mask, chunk) in enumerate(contour_fields()):
+            g = port_generator(x, y, z, corner_mask, chunk)
+            zz = np.ma.masked_invalid(np.ma.asarray(z))
+            lo, hi = float(zz.min()), float(zz.max())
+            levels = [*np.linspace(lo, hi, 9), lo - 1, hi + 1, float("nan")]
+            lowers = [lo - 1, *np.linspace(lo, hi, 9)[1:-1], -np.inf]
+            uppers = [*np.linspace(lo, hi, 9)[1:], np.inf]
+            many = g.lines_many(levels) + g.filled_many(lowers, uppers)
+            single = ([g.create_contour(lev) for lev in levels]
+                      + [g.create_filled_contour(a, b) for a, b in zip(lowers, uppers)])
+            self.assertEqual(len(many), len(single))
+            for (va, ca), (vb, cb) in zip(many, single):
+                with self.subTest(field=i):
+                    self.assertEqual(len(va), len(vb))
+                    for p, q in zip(va + ca, vb + cb):
+                        self.assertEqual(p.dtype, q.dtype)
+                        np.testing.assert_array_equal(p, q)
+            # one path per level, as ContourSet concatenates the polygons
+            joined = g.lines_paths(levels) + g.filled_paths(lowers, uppers)
+            for (vs, cs), path in zip(single, joined):
+                with self.subTest(field=i, joined=True):
+                    if not len(vs):
+                        self.assertIsNone(path)
+                        continue
+                    for p, q in zip((np.concatenate(vs), np.concatenate(cs)), path):
+                        self.assertEqual(p.dtype, q.dtype)
+                        self.assertEqual(p.shape, q.shape)
+                        np.testing.assert_array_equal(p, q)
+        g = port_generator(*next(contour_fields())[:3], True, 0)
+        with self.assertRaisesRegex(ValueError, "larger"):
+            g.filled_paths([0, 2], [1, 1])
+        with self.assertRaisesRegex(ValueError, "larger"):
+            g.filled_many([0, 2], [1, 1])
+        with self.assertRaisesRegex(ValueError, "NaN"):
+            g.filled_many([0, float("nan")], [1, 2])
+
+
 class QhullTests(unittest.TestCase):
     def points(self):
         rng = np.random.default_rng(5)

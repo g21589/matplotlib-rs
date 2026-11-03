@@ -1180,9 +1180,10 @@ fn blend_from_rgba<P: PixFmt>(
 /// Below this many paths `draw_path_collection` draws on one thread.
 const PARALLEL_MIN_PATHS: usize = 256;
 
-/// The threads of `draw_path_collection_parallel`: the available
-/// parallelism (at most 8), or `MPLRS_THREADS` (1 draws on one thread).
-fn collection_threads() -> usize {
+/// The threads of `draw_path_collection_parallel` (and of other parallel
+/// loops): the available parallelism (at most 8), or `MPLRS_THREADS` (1: one
+/// thread).
+pub fn collection_threads() -> usize {
     static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
     *THREADS.get_or_init(|| {
         std::env::var("MPLRS_THREADS")
