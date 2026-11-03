@@ -102,6 +102,42 @@ def resample(input_array, output_array, transform, interpolation=NEAREST,
         float(np.float32(alpha)), bool(norm), float(np.float32(radius)))
 
 
+
+def resample_indexed(indices, lut, output_array, transform, interpolation=NEAREST,
+                     resample=False, alpha=1, norm=False, radius=1):
+    """
+    `resample` of the float64 RGBA image ``lut[indices]`` (*indices*: 2D
+    array of rows of the (K, 4) float64 *lut*) into the float64 RGBA
+    *output_array*, without making that image.  (matplotlib_rs)
+    """
+    indices = np.ascontiguousarray(indices, dtype=np.uint32)
+    lut = np.ascontiguousarray(lut, dtype=np.float64)
+    if indices.ndim != 2 or lut.ndim != 2 or lut.shape[1] != 4:
+        raise ValueError("indices must be 2D and lut (K, 4)")
+    if (output_array.ndim != 3 or output_array.shape[2] != 4
+            or output_array.dtype != np.float64):
+        raise ValueError("output must be a float64 RGBA array")
+    if not output_array.flags.c_contiguous:
+        raise ValueError("Output array must be C-contiguous")
+    if not output_array.flags.writeable:
+        raise ValueError("Output array must be writeable")
+    out_h, out_w = output_array.shape[:2]
+    if transform is None:
+        affine, mesh = np.eye(3), None
+    elif transform.is_affine:
+        affine, mesh = np.ascontiguousarray(transform, dtype=np.float64), None
+    else:
+        affine, mesh = None, _transform_mesh(transform, out_h, out_w)
+    in_h, in_w = indices.shape
+    if indices.size == 0 or output_array.size == 0:
+        return
+    _mplrs.image_resample_indexed(
+        indices.reshape(-1), lut, output_array.reshape(-1),
+        in_w, in_h, out_w, out_h,
+        affine, mesh, int(interpolation), bool(resample),
+        float(np.float32(alpha)), bool(norm), float(np.float32(radius)))
+
+
 def calculate_rms_and_diff(expected_image, actual_image):
     """RMS of the difference of two images and a difference image."""
     from .testing.exceptions import ImageComparisonFailure

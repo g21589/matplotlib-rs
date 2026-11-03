@@ -5,6 +5,7 @@ pub mod collections;
 pub mod contour;
 pub mod ext;
 pub mod foreign;
+pub mod colormap;
 pub mod hist;
 pub mod image;
 pub mod kiwi;
@@ -29,6 +30,7 @@ fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     contour::register(m)?;
     foreign::register(m)?;
     hist::register(m)?;
+    colormap::register(m)?;
     mathtext::register(m)?;
     mathtext::register_scale(m)?;
     Ok(())

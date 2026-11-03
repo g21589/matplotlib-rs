@@ -54,7 +54,7 @@ import re
 
 import matplotlib_rs as mpl
 import numpy as np
-from . import _api, _cm, cbook, scale
+from . import _api, _cm, _colormap, cbook, scale
 from ._color_data import BASE_COLORS, TABLEAU_COLORS, CSS4_COLORS, XKCD_COLORS
 
 
@@ -830,6 +830,11 @@ class Colormap:
             Boolean array with True where the input is ``np.nan`` or masked.
         """
         self._ensure_inited()
+
+        # matplotlib_rs: large float arrays looked up in Rust (same results)
+        found = _colormap.get_rgba_and_mask(self, X, alpha, bytes)
+        if found is not None:
+            return found
 
         xa = np.array(X, copy=True)
         if not xa.dtype.isnative:
