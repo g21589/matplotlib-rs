@@ -1,5 +1,6 @@
-//! Ports of matplotlib's C++ Agg backend pieces, and the PNG writer.
+//! Ports of matplotlib's C++ Agg backend pieces, and the image file codecs.
 
+pub mod image_codecs;
 pub mod image_resample;
 pub mod path_converters;
 pub mod path_geom;

@@ -16,7 +16,7 @@
 - `pil_kwargs` 的 PNG 壓縮選項 `compress_level`、`optimize`（等級 9）、`compress_type`（zlib 策略）、
   `dpi`、`format` 由 Rust 處理，語意同 Pillow，**不需要 Pillow**；其他選項（如 `pnginfo`）仍交給 Pillow。
 
-SVG／PDF 內嵌影像不在此次範圍：已安裝 Pillow 時仍由 Pillow 編碼，以維持與 Matplotlib 逐位元組相同的向量檔。
+之後的版本完全不使用 Pillow：SVG／PDF 內嵌影像與其他影像格式也改由 Rust 處理，見 README〈影像檔〉。
 
 ## 測試方法
 

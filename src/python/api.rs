@@ -1517,7 +1517,7 @@ pub fn write_png(path: &str, rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(Str
 
 /// PNG writer options, with the threads of the other parallel loops.
 pub fn png_options(dpi: Option<(f64, f64)>, text: &[(String, String)], level: u8, strategy: u8) -> png_encode::Options<'_> {
-    png_encode::Options { level, strategy, dpi, text, threads: crate::backend::renderer_agg::collection_threads() }
+    png_encode::Options { level, strategy, dpi, text, threads: crate::backend::renderer_agg::collection_threads(), chunks: &[] }
 }
 
 // ---------------------------------------------------------------------------
@@ -2774,10 +2774,11 @@ fn text_metrics(s: &str, prop: &Bound<'_, PyAny>, ismath: bool, dpi: f64) -> PyR
 
 /// The PNG file of an (h, w) or (h, w, channels) uint8 array (gray, gray +
 /// alpha, RGB or RGBA), with a pHYs chunk if `dpi` (x, y) is given, the
-/// text chunks `text`, and the zlib `level` and `strategy`.  The pixels are
-/// read in place, without holding the GIL.
+/// text chunks `text`, the zlib `level` and `strategy`, and other `chunks`
+/// (type, data, position: 0 before the text, 1 after pHYs, 2 after IDAT).
+/// The pixels are read in place, without holding the GIL.
 #[pyfunction]
-#[pyo3(signature = (pixels, dpi=None, text=Vec::new(), level=png_encode::DEFAULT_LEVEL, strategy=0))]
+#[pyo3(signature = (pixels, dpi=None, text=Vec::new(), level=png_encode::DEFAULT_LEVEL, strategy=0, chunks=Vec::new()))]
 fn encode_png<'py>(
     py: Python<'py>,
     pixels: numpy::PyReadonlyArrayDyn<'py, u8>,
@@ -2785,6 +2786,7 @@ fn encode_png<'py>(
     text: Vec<(String, String)>,
     level: u8,
     strategy: u8,
+    chunks: Vec<([u8; 4], Vec<u8>, u8)>,
 ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
     let a = pixels.as_array();
     let (h, w, c) = match *a.shape() {
@@ -2800,7 +2802,7 @@ fn encode_png<'py>(
             &copy
         }
     };
-    let opts = png_options(dpi, &text, level, strategy);
+    let opts = png_encode::Options { chunks: &chunks, ..png_options(dpi, &text, level, strategy) };
     let out = py.detach(|| png_encode::encode(data, w, h, c, &opts)).map_err(PyValueError::new_err)?;
     Ok(pyo3::types::PyBytes::new(py, &out))
 }

@@ -15,6 +15,12 @@ numpy = "0.30"
 harfrust = "0.15"
 png = "0.18"
 zlib-rs = { version = "0.6.8", default-features = false, features = ["std"] }
+jpeg-encoder = { version = "0.7.1", features = ["simd"] }
+zune-jpeg = "0.5.15"
+tiff = "0.11.3"
+gif = { version = "0.14.2", default-features = false, features = ["std"] }
+libwebp-sys = "0.14.4"
+ravif = { version = "0.13.0", default-features = false, features = ["threading"] }
 delaunator = "1"
 
 [build-dependencies]

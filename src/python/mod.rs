@@ -1,6 +1,7 @@
 //! Python bindings (PyO3).
 
 pub mod api;
+pub mod codecs;
 pub mod collections;
 pub mod contour;
 pub mod ext;
@@ -33,5 +34,6 @@ fn _mplrs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     colormap::register(m)?;
     mathtext::register(m)?;
     mathtext::register_scale(m)?;
+    codecs::register(m)?;
     Ok(())
 }

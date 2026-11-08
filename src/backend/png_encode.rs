@@ -42,6 +42,22 @@ pub struct Options<'a> {
     pub text: &'a [(String, String)],
     /// Threads to filter and compress on (1: only the calling thread).
     pub threads: usize,
+    /// Other chunks, written as they are: (type, data, position), position
+    /// being `BEFORE_TEXT`, `AFTER_PHYS` or `AFTER_IDAT`.
+    pub chunks: &'a [([u8; 4], Vec<u8>, u8)],
+}
+
+/// Chunk positions of `Options::chunks`.
+pub const BEFORE_TEXT: u8 = 0;
+pub const AFTER_PHYS: u8 = 1;
+pub const AFTER_IDAT: u8 = 2;
+
+fn write_chunks(out: &mut Vec<u8>, opts: &Options<'_>, position: u8) {
+    for (kind, data, _) in opts.chunks.iter().filter(|c| c.2 == position) {
+        for part in data.chunks(MAX_CHUNK).chain(data.is_empty().then_some(&[][..])) {
+            write_chunk(out, kind, &[part]);
+        }
+    }
 }
 
 /// The PNG file of the `height` rows of `width` pixels of `channels` (1 to 4)
@@ -53,6 +69,82 @@ pub fn encode(
     channels: usize,
     opts: &Options<'_>,
 ) -> Result<Vec<u8>, String> {
+    let (mut out, strategy) = start_file(pixels.len(), width, height, channels, opts)?;
+    write_text_and_dpi(&mut out, opts)?;
+    let image = Image::new(pixels, width * channels, height, channels)?;
+    let stream = deflate_image(&image, opts.level, strategy, opts.threads)?;
+    stream.write_idat(&mut out);
+    write_chunks(&mut out, opts, AFTER_IDAT);
+    write_chunk(&mut out, b"IEND", &[]);
+    Ok(out)
+}
+
+/// The zlib stream of the `height` rows of `stride` bytes in `rows`, each
+/// filtered as a PNG row with `bpp` bytes per pixel and preceded by its
+/// filter type: the data of a PDF image with a PNG predictor.
+pub fn zlib_rows(rows: &[u8], stride: usize, height: usize, bpp: usize, level: u8, threads: usize) -> Result<Vec<u8>, String> {
+    if stride == 0 || height == 0 {
+        return Err("cannot compress an empty image".into());
+    }
+    let image = Image::new(rows, stride, height, bpp.clamp(1, 4))?;
+    let stream = deflate_image(&image, level.min(9), Strategy::Default, threads)?;
+    let mut out = Vec::with_capacity(stream.len());
+    out.extend_from_slice(&stream.header);
+    for s in &stream.strips {
+        out.extend_from_slice(&s.data);
+    }
+    out.extend_from_slice(&stream.trailer);
+    Ok(out)
+}
+
+/// An animated PNG of `frames` (each `height` rows of `width` pixels of
+/// `channels` bytes) shown `delay_ms` milliseconds each and played `loops`
+/// times (0: forever), as Pillow writes them with ``save_all=True``: every
+/// frame replaces the whole canvas (no disposal, source blending).
+pub fn encode_apng(
+    frames: &[&[u8]],
+    width: usize,
+    height: usize,
+    channels: usize,
+    delay_ms: u16,
+    loops: u32,
+    opts: &Options<'_>,
+) -> Result<Vec<u8>, String> {
+    let first = frames.first().ok_or("an animated PNG needs a frame")?;
+    let (mut out, strategy) = start_file(first.len(), width, height, channels, opts)?;
+    let n = u32::try_from(frames.len()).map_err(|_| "too many frames")?;
+    write_chunk(&mut out, b"acTL", &[&n.to_be_bytes(), &loops.to_be_bytes()]);
+    write_text_and_dpi(&mut out, opts)?;
+    let mut sequence = 0u32;
+    for (i, frame) in frames.iter().enumerate() {
+        let mut fctl = [0u8; 26];
+        fctl[..4].copy_from_slice(&sequence.to_be_bytes());
+        fctl[4..8].copy_from_slice(&(width as u32).to_be_bytes());
+        fctl[8..12].copy_from_slice(&(height as u32).to_be_bytes());
+        fctl[20..22].copy_from_slice(&delay_ms.to_be_bytes());
+        fctl[22..24].copy_from_slice(&1000u16.to_be_bytes());
+        write_chunk(&mut out, b"fcTL", &[&fctl]);
+        sequence += 1;
+        let image = Image::new(frame, width * channels, height, channels)?;
+        let stream = deflate_image(&image, opts.level, strategy, opts.threads)?;
+        if i == 0 {
+            stream.write_idat(&mut out);
+            continue;
+        }
+        let data = stream.concat();
+        for part in data.chunks(MAX_CHUNK - 4) {
+            write_chunk(&mut out, b"fdAT", &[&sequence.to_be_bytes(), part]);
+            sequence += 1;
+        }
+    }
+    write_chunks(&mut out, opts, AFTER_IDAT);
+    write_chunk(&mut out, b"IEND", &[]);
+    Ok(out)
+}
+
+/// The signature and IHDR chunk of a file of `len` bytes of pixels, and the
+/// zlib strategy of `opts`.
+fn start_file(len: usize, width: usize, height: usize, channels: usize, opts: &Options<'_>) -> Result<(Vec<u8>, Strategy), String> {
     let color_type = match channels {
         1 => 0u8,
         2 => 4,
@@ -63,15 +155,12 @@ pub fn encode(
     if width == 0 || height == 0 || width > i32::MAX as usize || height > i32::MAX as usize {
         return Err(format!("cannot write a {width}x{height} PNG image"));
     }
-    let stride = width
-        .checked_mul(channels)
-        .filter(|s| s.checked_mul(height) == Some(pixels.len()))
-        .ok_or_else(|| format!("{} bytes are not {height} rows of {width}x{channels}", pixels.len()))?;
-    let level = opts.level.min(9);
+    if width.checked_mul(channels).and_then(|s| s.checked_mul(height)) != Some(len) {
+        return Err(format!("{len} bytes are not {height} rows of {width}x{channels}"));
+    }
     let strategy = Strategy::try_from(i32::from(opts.strategy))
         .map_err(|()| format!("invalid zlib strategy {}", opts.strategy))?;
-
-    let mut out = Vec::with_capacity(pixels.len() / 8 + 1024);
+    let mut out = Vec::with_capacity(len / 8 + 1024);
     out.extend_from_slice(b"\x89PNG\r\n\x1a\n");
     let mut ihdr = [0u8; 13];
     ihdr[..4].copy_from_slice(&(width as u32).to_be_bytes());
@@ -79,12 +168,17 @@ pub fn encode(
     ihdr[8] = 8;
     ihdr[9] = color_type;
     write_chunk(&mut out, b"IHDR", &[&ihdr]);
+    Ok((out, strategy))
+}
+
+fn write_text_and_dpi(out: &mut Vec<u8>, opts: &Options<'_>) -> Result<(), String> {
+    write_chunks(out, opts, BEFORE_TEXT);
     for (key, value) in opts.text {
         let key = latin1(key).ok_or_else(|| format!("PNG text keywords must be Latin-1: {key:?}"))?;
         match latin1(value) {
-            Some(text) => write_chunk(&mut out, b"tEXt", &[&key, b"\0", &text]),
+            Some(text) => write_chunk(out, b"tEXt", &[&key, b"\0", &text]),
             // Uncompressed, no language tag or translated keyword.
-            None => write_chunk(&mut out, b"iTXt", &[&key, b"\0\0\0\0\0", value.as_bytes()]),
+            None => write_chunk(out, b"iTXt", &[&key, b"\0\0\0\0\0", value.as_bytes()]),
         }
     }
     if let Some((x, y)) = opts.dpi {
@@ -93,44 +187,73 @@ pub fn encode(
         let mut phys = [1u8; 9];
         phys[..4].copy_from_slice(&ppm(x).to_be_bytes());
         phys[4..8].copy_from_slice(&ppm(y).to_be_bytes());
-        write_chunk(&mut out, b"pHYs", &[&phys]);
+        write_chunk(out, b"pHYs", &[&phys]);
+    }
+    write_chunks(out, opts, AFTER_PHYS);
+    Ok(())
+}
+
+/// A zlib stream of filtered rows, as independently compressed strips.
+struct ZlibStream {
+    header: [u8; 2],
+    strips: Vec<Strip>,
+    /// The Adler-32 of all the filtered data.
+    trailer: [u8; 4],
+}
+
+impl ZlibStream {
+    fn len(&self) -> usize {
+        6 + self.strips.iter().map(|s| s.data.len()).sum::<usize>()
     }
 
-    let image = Image { pixels, stride, bpp: channels };
+    fn concat(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.len());
+        out.extend_from_slice(&self.header);
+        for s in &self.strips {
+            out.extend_from_slice(&s.data);
+        }
+        out.extend_from_slice(&self.trailer);
+        out
+    }
+
+    /// One IDAT chunk per strip: the zlib header goes in front of the first,
+    /// the Adler-32 after the last.
+    fn write_idat(&self, out: &mut Vec<u8>) {
+        let last = self.strips.len() - 1;
+        for (i, s) in self.strips.iter().enumerate() {
+            let head: &[u8] = if i == 0 { &self.header } else { &[] };
+            let tail: &[u8] = if i == last { &self.trailer } else { &[] };
+            let len = head.len() + s.data.len() + tail.len();
+            if len > MAX_CHUNK {
+                let data = [head, &s.data, tail].concat();
+                for part in data.chunks(MAX_CHUNK) {
+                    write_chunk(out, b"IDAT", &[part]);
+                }
+                continue;
+            }
+            out.reserve(len + 12);
+            out.extend_from_slice(&(len as u32).to_be_bytes());
+            out.extend_from_slice(b"IDAT");
+            out.extend_from_slice(head);
+            out.extend_from_slice(&s.data);
+            out.extend_from_slice(tail);
+            // The strip's worker computed the CRC of "IDAT", the header and its data.
+            let crc = zlib_rs::crc32::crc32(s.crc, tail);
+            out.extend_from_slice(&crc.to_be_bytes());
+        }
+    }
+}
+
+fn deflate_image(image: &Image<'_>, level: u8, strategy: Strategy, threads: usize) -> Result<ZlibStream, String> {
+    let level = level.min(9);
     let header = zlib_header(level, strategy);
     let config = DeflateConfig { window_bits: -15, strategy, ..DeflateConfig::new(i32::from(level)) };
-    let strips = compress_strips(&image, height, config, &header, opts.threads.max(1))?;
-    // One IDAT chunk per strip: the zlib header goes in front of the first,
-    // the Adler-32 of all the filtered data after the last.
+    let strips = compress_strips(image, config, &header, threads.max(1))?;
     let mut adler = 1u32;
     for s in &strips {
         adler = zlib_rs::adler32::adler32_combine(adler, s.adler, s.raw_len as u64);
     }
-    let trailer = adler.to_be_bytes();
-    let last = strips.len() - 1;
-    for (i, s) in strips.iter().enumerate() {
-        let head: &[u8] = if i == 0 { &header } else { &[] };
-        let tail: &[u8] = if i == last { &trailer } else { &[] };
-        let len = head.len() + s.data.len() + tail.len();
-        if len > MAX_CHUNK {
-            let data = [head, &s.data, tail].concat();
-            for part in data.chunks(MAX_CHUNK) {
-                write_chunk(&mut out, b"IDAT", &[part]);
-            }
-            continue;
-        }
-        out.reserve(len + 12);
-        out.extend_from_slice(&(len as u32).to_be_bytes());
-        out.extend_from_slice(b"IDAT");
-        out.extend_from_slice(head);
-        out.extend_from_slice(&s.data);
-        out.extend_from_slice(tail);
-        // The strip's worker computed the CRC of "IDAT", the header and its data.
-        let crc = zlib_rs::crc32::crc32(s.crc, tail);
-        out.extend_from_slice(&crc.to_be_bytes());
-    }
-    write_chunk(&mut out, b"IEND", &[]);
-    Ok(out)
+    Ok(ZlibStream { header, strips, trailer: adler.to_be_bytes() })
 }
 
 /// `s` encoded as Latin-1, if it can be.
@@ -168,10 +291,18 @@ fn zlib_header(level: u8, strategy: Strategy) -> [u8; 2] {
 struct Image<'a> {
     pixels: &'a [u8],
     stride: usize,
+    height: usize,
     bpp: usize,
 }
 
-impl Image<'_> {
+impl<'a> Image<'a> {
+    fn new(pixels: &'a [u8], stride: usize, height: usize, bpp: usize) -> Result<Self, String> {
+        if stride.checked_mul(height) != Some(pixels.len()) {
+            return Err(format!("{} bytes are not {height} rows of {stride}", pixels.len()));
+        }
+        Ok(Image { pixels, stride, height, bpp })
+    }
+
     fn row(&self, y: usize) -> &[u8] {
         &self.pixels[y * self.stride..(y + 1) * self.stride]
     }
@@ -200,11 +331,11 @@ struct Strip {
 
 fn compress_strips(
     image: &Image<'_>,
-    height: usize,
     config: DeflateConfig,
     header: &[u8; 2],
     threads: usize,
 ) -> Result<Vec<Strip>, String> {
+    let height = image.height;
     let rows_per_strip = (STRIP_BYTES / (image.stride + 1)).max(1);
     let n = height.div_ceil(rows_per_strip);
     let next = AtomicUsize::new(0);
@@ -601,7 +732,7 @@ mod tests {
                 let pixels = image(w, h, channels, (w * h + channels) as u32);
                 let mut first = None;
                 for (level, strategy, threads) in [(0, 0, 1), (1, 0, 3), (6, 0, 1), (6, 0, 4), (9, 0, 2), (6, 3, 2), (4, 1, 2)] {
-                    let opts = Options { level, strategy, dpi: Some((100.0, 100.0)), text: &text, threads };
+                    let opts = Options { level, strategy, dpi: Some((100.0, 100.0)), text: &text, threads, chunks: &[] };
                     let png = encode(&pixels, w, h, channels, &opts).unwrap();
                     let (dw, dh, color, decoded, chunks) = decode(&png);
                     assert_eq!((dw, dh, color), (w, h, [0, 4, 2, 6][channels - 1]));
@@ -618,10 +749,97 @@ mod tests {
         }
     }
 
+    /// Inflate a zlib stream and undo the PNG filters of its rows.
+    fn unfilter(zdata: &[u8], stride: usize, h: usize, bpp: usize) -> Vec<u8> {
+        let mut raw = vec![0u8; h * (stride + 1)];
+        let (out, rc) = zlib_rs::decompress_slice(&mut raw, zdata, zlib_rs::InflateConfig::default());
+        assert_eq!(rc, zlib_rs::ReturnCode::Ok);
+        assert_eq!(out.len(), h * (stride + 1));
+        let mut px = vec![0u8; h * stride];
+        for y in 0..h {
+            for i in 0..stride {
+                let a = if i >= bpp { px[y * stride + i - bpp] } else { 0 };
+                let b = if y > 0 { px[(y - 1) * stride + i] } else { 0 };
+                let c = if y > 0 && i >= bpp { px[(y - 1) * stride + i - bpp] } else { 0 };
+                let p = match raw[y * (stride + 1)] {
+                    0 => 0,
+                    1 => a,
+                    2 => b,
+                    3 => average(a, b),
+                    _ => paeth(a, b, c),
+                };
+                px[y * stride + i] = raw[y * (stride + 1) + 1 + i].wrapping_add(p);
+            }
+        }
+        px
+    }
+
+    #[test]
+    fn zlib_rows_round_trip() {
+        for (stride, h, bpp) in [(1, 1, 1), (9, 500, 1), (3000, 300, 3), (77, 4000, 4)] {
+            let rows = image(stride, h, 1, (stride + h) as u32);
+            let z = zlib_rows(&rows, stride, h, bpp, 6, 3).unwrap();
+            assert_eq!(unfilter(&z, stride, h, bpp), rows);
+            assert_eq!(z, zlib_rows(&rows, stride, h, bpp, 6, 1).unwrap());
+        }
+    }
+
+    #[test]
+    fn apng() {
+        let (w, h) = (300, 400);
+        let frames: Vec<Vec<u8>> = (0..3).map(|i| image(w, h, 4, i)).collect();
+        let refs: Vec<&[u8]> = frames.iter().map(|f| &f[..]).collect();
+        let opts = Options { level: 6, strategy: 0, dpi: None, text: &[], threads: 2, chunks: &[] };
+        let png = encode_apng(&refs, w, h, 4, 125, 0, &opts).unwrap();
+        // The default image is the first frame.
+        let (.., first, chunks) = decode(&png);
+        assert_eq!(first, frames[0]);
+        assert_eq!(chunks[0], (b"acTL".to_vec(), vec![0, 0, 0, 3, 0, 0, 0, 0]));
+        let mut seq = 0u32;
+        let mut frame = 1;
+        let mut data = Vec::new();
+        for (kind, body) in &chunks[1..] {
+            assert_eq!(u32::from_be_bytes(body[..4].try_into().unwrap()), seq);
+            seq += 1;
+            if kind == b"fcTL" {
+                assert_eq!(&body[4..12], &[0, 0, 1, 44, 0, 0, 1, 144]);
+                assert_eq!(&body[20..26], &[0, 125, 3, 232, 0, 0]);
+                if !data.is_empty() {
+                    assert_eq!(unfilter(&data, w * 4, h, 4), frames[frame]);
+                    frame += 1;
+                    data.clear();
+                }
+            } else {
+                assert_eq!(kind, b"fdAT");
+                data.extend_from_slice(&body[4..]);
+            }
+        }
+        assert_eq!(unfilter(&data, w * 4, h, 4), frames[frame]);
+        assert_eq!(frame, 2);
+    }
+
+    #[test]
+    fn extra_chunks() {
+        let chunks = [(*b"iCCP", b"x\0\0z".to_vec(), BEFORE_TEXT), (*b"eXIf", vec![1, 2], AFTER_PHYS), (*b"prVt", vec![], AFTER_IDAT)];
+        let text = [("A".to_string(), "b".to_string())];
+        let opts = Options { level: 6, strategy: 0, dpi: Some((72.0, 72.0)), text: &text, threads: 1, chunks: &chunks };
+        let png = encode(&[0; 4], 1, 1, 4, &opts).unwrap();
+        let kinds: Vec<&[u8]> = (0..).scan(8usize, |pos, _| {
+            if *pos >= png.len() {
+                return None;
+            }
+            let len = u32::from_be_bytes(png[*pos..*pos + 4].try_into().unwrap()) as usize;
+            let kind = &png[*pos + 4..*pos + 8];
+            *pos += 12 + len;
+            Some(kind)
+        }).collect();
+        assert_eq!(kinds, [&b"IHDR"[..], b"iCCP", b"tEXt", b"pHYs", b"eXIf", b"IDAT", b"prVt", b"IEND"]);
+    }
+
     #[test]
     fn latin1_text() {
         let text = [("Author".to_string(), "Andr\u{e9}".to_string())];
-        let opts = Options { level: 6, strategy: 0, dpi: None, text: &text, threads: 1 };
+        let opts = Options { level: 6, strategy: 0, dpi: None, text: &text, threads: 1, chunks: &[] };
         let png = encode(&[0; 4], 1, 1, 4, &opts).unwrap();
         let (.., chunks) = decode(&png);
         assert_eq!(chunks, vec![(b"tEXt".to_vec(), b"Author\0Andr\xe9".to_vec())]);

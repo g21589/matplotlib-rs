@@ -1,13 +1,11 @@
 """
-PNG reading and writing in the Rust core.
+PNG reading and writing in the Rust core (Pillow is never used).
 
-PNG files are always written by the Rust core, whether or not Pillow is
-installed: rows are filtered with libpng's (and Pillow's) heuristic and
-deflated at zlib level 6 by default, as Pillow does, in strips compressed on
-several threads (``MPLRS_THREADS``).  The PNG options of ``pil_kwargs``
-(`NATIVE_PIL_KWARGS`) are understood; the others need Pillow.
+Rows are filtered with libpng's (and Pillow's) heuristic and deflated at zlib
+level 6 by default, as Pillow does, in strips compressed on several threads
+(``MPLRS_THREADS``).  `native_options` reads the compression options of
+``pil_kwargs`` with Pillow's meaning; `._imageio` handles the others.
 
-When Pillow is not installed, PNG files are also decoded by the Rust core.
 `read` returns the same arrays as matplotlib's Pillow-based ``imread``
 (``_pil_png_to_float_array``): float32 values in [0, 1]; grayscale images are
 2D, palette and grayscale+alpha images are expanded to RGBA, and 16-bit color
@@ -23,37 +21,18 @@ from . import _mplrs
 #: The zlib level of Pillow's PNG writer (``compress_level=-1``).
 DEFAULT_LEVEL = 6
 
-#: The ``pil_kwargs`` of a PNG save that are handled without Pillow, with
+#: The ``pil_kwargs`` of a PNG save that `native_options` reads, with
 #: Pillow's meaning: ``optimize`` (zlib level 9), ``compress_level`` (0-9,
 #: -1 for the default), ``compress_type`` (the zlib strategy, 0-4, -1 for the
 #: default), ``dpi`` (an (x, y) pair for the pHYs chunk) and ``format``.
 NATIVE_PIL_KWARGS = frozenset({"optimize", "compress_level", "compress_type", "dpi", "format"})
 
 
-def pil_image():
-    """``PIL.Image`` if Pillow is installed, else None."""
-    try:
-        import PIL.Image
-    except ImportError:
-        return None
-    return PIL.Image
-
-
-def require_pil(what):
-    """``PIL.Image``, or an ImportError naming *what* needs Pillow."""
-    image = pil_image()
-    if image is None:
-        raise ImportError(
-            f"{what} requires Pillow (pip install pillow); matplotlib_rs reads and "
-            f"writes PNG files without it")
-    return image
-
-
 def native_options(pil_kwargs):
     """
     The zlib ``(level, strategy)`` and pHYs ``dpi`` (an (x, y) pair, or None
     if not given) of a PNG save with *pil_kwargs* (a dict or None), or None if
-    *pil_kwargs* has options that only Pillow handles.
+    *pil_kwargs* has other options (see `._imageio`).
     """
     pil_kwargs = pil_kwargs or {}
     if not NATIVE_PIL_KWARGS.issuperset(pil_kwargs):
@@ -122,7 +101,7 @@ def encode(rgba, dpi=None, text=(), level=DEFAULT_LEVEL, strategy=0):
 
 
 def write_bytes(fname, data):
-    """Write *data* to the path or binary file *fname* (as Pillow's save)."""
+    """Write *data* to the path or binary file *fname* (as ``PIL.Image.save``)."""
     if isinstance(fname, (str, bytes, os.PathLike)):
         with open(fname, "wb") as fh:
             fh.write(data)

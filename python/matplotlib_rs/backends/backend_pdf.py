@@ -25,7 +25,7 @@ import zlib
 import numpy as np
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, _png, _text_helpers, _type1font, cbook, dviread
+from matplotlib_rs import _api, _mplrs, _text_helpers, _type1font, cbook, dviread
 from matplotlib_rs._pylab_helpers import Gcf
 from matplotlib_rs.backend_bases import (
     _Backend, FigureCanvasBase, FigureManagerBase, GraphicsContextBase,
@@ -618,6 +618,18 @@ def _get_pdf_charprocs(font_path, glyph_indices):
                 [b"m", b"l", b"", b"c", b"h"], True)
             + b"f")
     return procs
+
+
+def _pack_bits(values, bits):
+    """Rows of the (h, w) uint8 *values* packed *bits* (1, 2, 4 or 8) per sample."""
+    if bits == 8:
+        return values
+    height, width = values.shape
+    per = 8 // bits
+    padded = np.zeros((height, -(-width // per) * per), np.uint8)
+    padded[:, :width] = values
+    shifts = (8 - bits * np.arange(1, per + 1)).astype(np.uint8)
+    return np.bitwise_or.reduce(padded.reshape(height, -1, per) << shifts, axis=2)
 
 
 class PdfFile:
@@ -1620,35 +1632,6 @@ end"""
                 alpha = None
             return rgb, alpha
 
-    def _writePng(self, img):
-        """
-        Write the image *img* into the pdf file using png
-        predictors with Flate compression.
-        """
-        buffer = BytesIO()
-        img.save(buffer, format="png")
-        buffer.seek(8)
-        png_data = b''
-        bit_depth = palette = None
-        while True:
-            length, type = struct.unpack(b'!L4s', buffer.read(8))
-            if type in [b'IHDR', b'PLTE', b'IDAT']:
-                data = buffer.read(length)
-                if len(data) != length:
-                    raise RuntimeError("truncated data")
-                if type == b'IHDR':
-                    bit_depth = int(data[8])
-                elif type == b'PLTE':
-                    palette = data
-                elif type == b'IDAT':
-                    png_data += data
-            elif type == b'IEND':
-                break
-            else:
-                buffer.seek(length, 1)
-            buffer.seek(4, 1)   # skip CRC
-        return png_data, bit_depth, palette
-
     def _writeImg(self, data, id, smask=None):
         """
         Write the image *data*, of shape ``(height, width, 1)`` (grayscale) or
@@ -1665,46 +1648,26 @@ end"""
                'BitsPerComponent': 8}
         if smask:
             obj['SMask'] = smask
-        Image = _png.pil_image()
-        if mpl.rcParams['pdf.compression'] and Image is None:
-            # Without Pillow: PNG-predicted rows (filter type None), deflated.
+        if mpl.rcParams['pdf.compression']:
+            # Rows with PNG predictors (the best filter of each row), deflated
+            # by the Rust core; as matplotlib does with Pillow, RGB images of
+            # at most 256 colors are written with an indexed color space.
             png = {'Predictor': 10, 'Colors': color_channels, 'Columns': width}
-            rows = np.ascontiguousarray(data, np.uint8).reshape(height, -1)
-            png_data = zlib.compress(
-                np.hstack([np.zeros((height, 1), np.uint8), rows]).tobytes(), 6)
-        elif mpl.rcParams['pdf.compression']:
-            if data.shape[-1] == 1:
-                data = data.squeeze(axis=-1)
-            png = {'Predictor': 10, 'Colors': color_channels, 'Columns': width}
-            img = Image.fromarray(data)
-            img_colors = img.getcolors(maxcolors=256)
-            if color_channels == 3 and img_colors is not None:
-                # Convert to indexed color if there are 256 colors or fewer. This can
-                # significantly reduce the file size.
-                num_colors = len(img_colors)
-                palette = np.array([comp for _, color in img_colors for comp in color],
-                                   dtype=np.uint8)
-                palette24 = ((palette[0::3].astype(np.uint32) << 16) |
-                             (palette[1::3].astype(np.uint32) << 8) |
-                             palette[2::3])
-                rgb24 = ((data[:, :, 0].astype(np.uint32) << 16) |
-                         (data[:, :, 1].astype(np.uint32) << 8) |
-                         data[:, :, 2])
-                indices = np.argsort(palette24).astype(np.uint8)
-                rgb8 = indices[np.searchsorted(palette24, rgb24, sorter=indices)]
-                img = Image.fromarray(rgb8).convert("P")
-                img.putpalette(palette)
-                png_data, bit_depth, palette = self._writePng(img)
-                if bit_depth is None or palette is None:
-                    raise RuntimeError("invalid PNG header")
-                palette = palette[:num_colors * 3]  # Trim padding; remove for Pillow>=9
+            data = np.ascontiguousarray(data, np.uint8)
+            indexed = _mplrs.indexed_colors(data) if color_channels == 3 else None
+            if indexed is not None:
+                palette, indices = indexed
+                num_colors = len(palette) // 3
+                # Pillow's bit depth for a palette of this many colors.
+                bit_depth = next(b for b in (1, 2, 4, 8) if num_colors <= 1 << b)
+                png_data = _mplrs.zlib_png_rows(_pack_bits(indices, bit_depth), 1)
                 obj['ColorSpace'] = [Name('Indexed'), Name('DeviceRGB'),
                                      num_colors - 1, palette]
                 obj['BitsPerComponent'] = bit_depth
                 png['Colors'] = 1
                 png['BitsPerComponent'] = bit_depth
             else:
-                png_data, _, _ = self._writePng(img)
+                png_data = _mplrs.zlib_png_rows(data.reshape(height, -1), color_channels)
         else:
             png = None
         self.beginStream(

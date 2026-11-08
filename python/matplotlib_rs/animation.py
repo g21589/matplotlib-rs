@@ -484,17 +484,22 @@ class FileMovieWriter(MovieWriter):
 
 @writers.register('pillow')
 class PillowWriter(AbstractMovieWriter):
+    """
+    Write animated GIF, PNG (APNG) and WebP files, chosen by the extension.
+
+    The name is matplotlib's; matplotlib_rs encodes the frames with its Rust
+    core, as Pillow's ``save(save_all=True)`` would (each frame shown
+    ``1000 / fps`` ms, looping forever), without Pillow.
+    """
+
     def _supports_transparency(self):
         return True
 
     @classmethod
     def isAvailable(cls):
-        from matplotlib_rs import _png
-        return _png.pil_image() is not None
+        return True
 
     def setup(self, fig, outfile, dpi=None):
-        from matplotlib_rs import _png
-        _png.require_pil("PillowWriter")
         super().setup(fig, outfile, dpi=dpi)
         self._frames = []
 
@@ -503,21 +508,14 @@ class PillowWriter(AbstractMovieWriter):
         buf = BytesIO()
         self.fig.savefig(
             buf, **{**savefig_kwargs, "format": "rgba", "dpi": self.dpi})
-        from PIL import Image
-        im = Image.frombuffer(
-            "RGBA", self.frame_size, buf.getbuffer(), "raw", "RGBA", 0, 1)
-        if im.getextrema()[3][0] < 255:
-            # This frame has transparency, so we'll just add it as is.
-            self._frames.append(im)
-        else:
-            # Without transparency, we switch to RGB mode, which converts to P mode a
-            # little better if needed (specifically, this helps with GIF output.)
-            self._frames.append(im.convert("RGB"))
+        width, height = self.frame_size
+        self._frames.append(
+            np.frombuffer(buf.getbuffer(), np.uint8).reshape(height, width, 4).copy())
 
     def finish(self):
-        self._frames[0].save(
-            self.outfile, save_all=True, append_images=self._frames[1:],
-            duration=int(1000 / self.fps), loop=0)
+        from matplotlib_rs import _imageio
+        _imageio.save_animation(self.outfile, self._frames,
+                                duration=int(1000 / self.fps), loop=0)
 
 
 # Base class of ffmpeg information. Has the config keys and the common set

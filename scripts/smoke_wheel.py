@@ -37,19 +37,22 @@ def main():
     boxes["medians"][0].set_linewidth(2)
     axes[2].contourf(rng.random((10, 10)).cumsum(0), levels=5)
     axes[2].tricontour(rng.random(30), rng.random(30), rng.random(30), colors="k")
-    for extension in ("png", "svg", "pdf", "eps"):
+    for extension in ("png", "svg", "pdf", "eps", "jpg", "tif", "webp", "gif", "avif"):
         dest = args.output / f"smoke.{extension}"
         fig.savefig(dest)
         assert dest.stat().st_size > 100
     image = plt.imread(args.output / "smoke.png")
     assert image.shape == (300, 1000, 4), image.shape
     assert image[..., :3].min() < 1, "blank image"
+    for extension in ("jpg", "tif", "webp", "gif"):  # (AVIF files are written only)
+        other = plt.imread(args.output / f"smoke.{extension}")
+        assert other.shape[:2] == (300, 1000) and other.dtype == np.uint8, other.shape
     plt.close(fig)
     third = {m.split(".")[0] for m in sys.modules} - set(sys.stdlib_module_names)
     third -= {"numpy", "matplotlib_rs", "matplotlib", "__main__", "cython_runtime"}
     assert not {m for m in third if not m.startswith("_")}, third
     print(f"Installed wheel {args.version} with NumPy only: mutable boxplots, constrained "
-          f"layout, contours and PNG/SVG/PDF/EPS passed")
+          f"layout, contours and PNG/SVG/PDF/EPS/JPEG/TIFF/WebP/GIF/AVIF passed")
 
 
 if __name__ == "__main__":

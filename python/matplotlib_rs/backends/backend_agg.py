@@ -483,15 +483,14 @@ class FigureCanvasAgg(FigureCanvasBase):
             removed by setting it to None.
 
         pil_kwargs : dict, optional
-            Keyword arguments passed to `PIL.Image.Image.save`.  The PNG
-            compression options (``compress_level``, ``optimize``,
-            ``compress_type`` and ``dpi``) are handled by the Rust encoder;
-            other options (e.g. ``pnginfo``) need Pillow.
+            Keyword arguments with the meaning of `PIL.Image.Image.save`'s;
+            see `matplotlib_rs._imageio` for the supported ones (``pnginfo``
+            may be a Pillow ``PngInfo``).
 
         Notes
         -----
         The pixels are encoded by the Rust core in place, on several threads,
-        at zlib level 6 by default (as Pillow).
+        at zlib level 6 by default (as Pillow); Pillow is not used.
         """
         options = _png.native_options(pil_kwargs)
         if options is None:
@@ -533,12 +532,6 @@ class FigureCanvasAgg(FigureCanvasBase):
         self._print_pil(filename_or_obj, "webp", pil_kwargs, metadata)
 
     def print_avif(self, filename_or_obj, *, metadata=None, pil_kwargs=None):
-        from PIL import features
-        if not features.check("avif"):
-            raise RuntimeError(
-                "The installed pillow version does not support avif. Full "
-                "avif support has been added in pillow 11.3."
-            )
         self._print_pil(filename_or_obj, "avif", pil_kwargs, metadata)
 
 
