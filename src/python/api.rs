@@ -10,6 +10,7 @@ use pyo3::types::{PyDict, PyDictMethods, PyList, PyTuple};
 
 use super::model::{base_set, color_from, f64_vec, opt_f64, PyLine2D};
 use crate::agg::stroke::LineCap;
+use crate::backend::png_encode;
 use crate::mpl::artist::{shared, Lock, Shared, SpinePosition, TransCtx};
 use crate::mpl::axes::{anchor_coefs, scale_from_name, Aspect, Axes, Child};
 use crate::mpl::axis::{GridKw, TickKw};
@@ -1207,7 +1208,8 @@ impl PyFigure {
         Ok(arr.reshape([h, w, 4])?)
     }
 
-    /// Render and write a PNG file; `bbox` (inches, x0, y0, x1, y1) crops.
+    /// Render and write a PNG file; `bbox` (inches, x0, y0, x1, y1) crops and
+    /// `compression` is the zlib level (default 6, as Pillow).
     #[pyo3(signature = (path, dpi=None, facecolor=None, edgecolor=None, bbox=None, tight=None, metadata=None, compression=None))]
     #[allow(clippy::too_many_arguments)]
     fn savefig_png(
@@ -1228,8 +1230,7 @@ impl PyFigure {
         let path = path.to_string();
         let buf = self.locked_maybe_detached(py, |f| render_for_save(f, dpi, fc, ec, bbox, tight))?;
         py.detach(|| -> PyResult<()> {
-            write_png(&path, &buf.0, buf.1, buf.2, buf.3, &meta, compression.unwrap_or(1))
-                .map_err(|e| PyValueError::new_err(e.to_string()))
+            write_png(&path, &buf.0, buf.1, buf.2, buf.3, &meta, compression.unwrap_or(png_encode::DEFAULT_LEVEL))
         })
     }
 
@@ -1507,28 +1508,16 @@ fn render_for_save(f: &mut Figure, dpi: Option<f64>, fc: Option<ColorSpec>, ec: 
 }
 
 /// Write an RGBA buffer as PNG with matplotlib's metadata keys.
-pub fn write_png(path: &str, rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, String)], level: u8) -> std::io::Result<()> {
-    let file = std::fs::File::create(path)?;
-    let bw = std::io::BufWriter::new(file);
-    let mut enc = png::Encoder::new(bw, w, h);
-    enc.set_color(png::ColorType::Rgba);
-    enc.set_depth(png::BitDepth::Eight);
-    enc.set_compression(match level {
-        0 => png::Compression::NoCompression,
-        1 => png::Compression::Fastest,
-        2 => png::Compression::Fast,
-        3 => png::Compression::Balanced,
-        _ => png::Compression::High,
-    });
-    let ppm = (dpi / 0.0254).round() as u32;
-    enc.set_pixel_dims(Some(png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
-    for (k, v) in meta {
-        enc.add_text_chunk(k.clone(), v.clone()).map_err(std::io::Error::other)?;
-    }
-    let mut writer = enc.write_header().map_err(std::io::Error::other)?;
-    writer.write_image_data(rgba).map_err(std::io::Error::other)?;
-    writer.finish().map_err(std::io::Error::other)?;
+pub fn write_png(path: &str, rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, String)], level: u8) -> PyResult<()> {
+    let opts = png_options(Some((dpi, dpi)), meta, level, 0);
+    let data = png_encode::encode(rgba, w as usize, h as usize, 4, &opts).map_err(PyValueError::new_err)?;
+    std::fs::write(path, data)?;
     Ok(())
+}
+
+/// PNG writer options, with the threads of the other parallel loops.
+pub fn png_options(dpi: Option<(f64, f64)>, text: &[(String, String)], level: u8, strategy: u8) -> png_encode::Options<'_> {
+    png_encode::Options { level, strategy, dpi, text, threads: crate::backend::renderer_agg::collection_threads() }
 }
 
 // ---------------------------------------------------------------------------
@@ -2783,57 +2772,37 @@ fn text_metrics(s: &str, prop: &Bound<'_, PyAny>, ismath: bool, dpi: f64) -> PyR
     Ok(crate::mpl::renderer::text_metrics(s, &p, ismath, dpi))
 }
 
-/// Encode an (h, w, 4) uint8 RGBA array as PNG bytes with the pixel
-/// density of `dpi` and text chunks `meta`.
+/// The PNG file of an (h, w) or (h, w, channels) uint8 array (gray, gray +
+/// alpha, RGB or RGBA), with a pHYs chunk if `dpi` (x, y) is given, the
+/// text chunks `text`, and the zlib `level` and `strategy`.  The pixels are
+/// read in place, without holding the GIL.
 #[pyfunction]
-#[pyo3(signature = (rgba, dpi, meta, compression=1))]
+#[pyo3(signature = (pixels, dpi=None, text=Vec::new(), level=png_encode::DEFAULT_LEVEL, strategy=0))]
 fn encode_png<'py>(
     py: Python<'py>,
-    rgba: numpy::PyReadonlyArray3<'py, u8>,
-    dpi: f64,
-    meta: Vec<(String, String)>,
-    compression: u8,
+    pixels: numpy::PyReadonlyArrayDyn<'py, u8>,
+    dpi: Option<(f64, f64)>,
+    text: Vec<(String, String)>,
+    level: u8,
+    strategy: u8,
 ) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
-    let a = rgba.as_array();
-    let (h, w, c) = (a.shape()[0], a.shape()[1], a.shape()[2]);
-    if c != 4 {
-        return err("expected an RGBA array");
-    }
-    let data: Vec<u8> = match a.as_slice() {
-        Some(s) => s.to_vec(),
-        None => a.iter().copied().collect(),
+    let a = pixels.as_array();
+    let (h, w, c) = match *a.shape() {
+        [h, w] => (h, w, 1),
+        [h, w, c] => (h, w, c),
+        _ => return err("expected an (h, w) or (h, w, channels) array"),
     };
-    let out = py
-        .detach(|| encode_png_bytes(&data, w as u32, h as u32, dpi, &meta, compression))
-        .map_err(|e| PyValueError::new_err(e.to_string()))?;
+    let copy: Vec<u8>;
+    let data = match a.as_slice() {
+        Some(s) => s,
+        None => {
+            copy = a.iter().copied().collect();
+            &copy
+        }
+    };
+    let opts = png_options(dpi, &text, level, strategy);
+    let out = py.detach(|| png_encode::encode(data, w, h, c, &opts)).map_err(PyValueError::new_err)?;
     Ok(pyo3::types::PyBytes::new(py, &out))
-}
-
-fn encode_png_bytes(rgba: &[u8], w: u32, h: u32, dpi: f64, meta: &[(String, String)], level: u8) -> std::io::Result<Vec<u8>> {
-    let mut out = Vec::new();
-    {
-        let mut enc = png::Encoder::new(&mut out, w, h);
-        enc.set_color(png::ColorType::Rgba);
-        enc.set_depth(png::BitDepth::Eight);
-        enc.set_compression(match level {
-            0 => png::Compression::NoCompression,
-            1 => png::Compression::Fastest,
-            2 => png::Compression::Fast,
-            3 => png::Compression::Balanced,
-            _ => png::Compression::High,
-        });
-        if dpi > 0.0 {
-            let ppm = (dpi / 0.0254).round() as u32;
-            enc.set_pixel_dims(Some(png::PixelDimensions { xppu: ppm, yppu: ppm, unit: png::Unit::Meter }));
-        }
-        for (k, v) in meta {
-            enc.add_text_chunk(k.clone(), v.clone()).map_err(std::io::Error::other)?;
-        }
-        let mut writer = enc.write_header().map_err(std::io::Error::other)?;
-        writer.write_image_data(rgba).map_err(std::io::Error::other)?;
-        writer.finish().map_err(std::io::Error::other)?;
-    }
-    Ok(out)
 }
 
 /// Decode a PNG file: ``(width, height, color_type, bit_depth, samples,

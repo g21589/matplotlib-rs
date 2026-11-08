@@ -150,6 +150,7 @@ dependencies = [
  "numpy",
  "png",
  "pyo3",
+ "zlib-rs",
 ]
 
 [[package]]

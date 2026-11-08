@@ -12,6 +12,8 @@ Linux x86_64／Ubuntu 24.04，Python 3.11、3.12、3.13 分別建置 release ext
 - 全部 `tests/unit/test_*.py`、`tests/lowlevel/diff_*.py` 與原生模型案例。
   `test_native_ports.py` 將內建的 kiwi、mpl2014 等高線、qhull 與 PNG 讀寫，
   逐位元比較 kiwisolver、ContourPy、Matplotlib `_qhull` 與 Pillow 的結果；
+  Rust 寫出的 PNG 由 Pillow 與內建讀取器讀回比對像素，非 IDAT chunk 與 Pillow 逐位元組相同，
+  另以不同 `MPLRS_THREADS` 確認檔案相同；
   `test_numpy_only.py` 以不含 site-packages、只有 NumPy 的子行程繪圖，與完整環境比較。
 - 全部自有繪圖案例；PNG 逐像素一致，SVG／PDF／EPS 內容一致。
 

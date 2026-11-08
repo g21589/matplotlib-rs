@@ -17,9 +17,11 @@ dependencies = [
 license = { text = "PSF-2.0" }
 
 [project.optional-dependencies]
-# Used when installed: Pillow for JPEG/TIFF/WebP/GIF/AVIF files, pil_kwargs and
-# PillowWriter; fontTools for Type 42 fonts in PDF/PS; ContourPy for the
-# non-default contour algorithms (and instead of the built-in mpl2014 port).
+# Used when installed: Pillow for JPEG/TIFF/WebP/GIF/AVIF files, pil_kwargs other
+# than the PNG compression options, PillowWriter and the images embedded in SVG/PDF
+# (PNG files are always written by the Rust core); fontTools for Type 42 fonts in
+# PDF/PS; ContourPy for the non-default contour algorithms (and instead of the
+# built-in mpl2014 port).
 full = [
     "pillow>=9",
     "fonttools>=4.28.2",

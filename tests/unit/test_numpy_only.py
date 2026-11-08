@@ -105,8 +105,12 @@ class NumpyOnlyTests(unittest.TestCase):
                     assert needs in str(e), e
                 else:
                     raise AssertionError(fmt)
+            # The PNG compression options are handled by the Rust writer.
+            for kw in [{"optimize": True}, {"compress_level": 1, "dpi": (50, 50)}]:
+                fig.savefig(io.BytesIO(), format="png", pil_kwargs=kw)
+                plt.imsave(io.BytesIO(), [[0, 1]], format="png", pil_kwargs=kw)
             try:
-                fig.savefig(io.BytesIO(), format="png", pil_kwargs={"optimize": True})
+                fig.savefig(io.BytesIO(), format="png", pil_kwargs={"icc_profile": b""})
             except ImportError as e:
                 assert "Pillow" in str(e)
             else:

@@ -548,6 +548,26 @@ impl PyRendererAgg {
         Ok(arr.reshape([h, w, 4])?)
     }
 
+    /// The PNG file of the buffer (as `_mplrs.encode_png`), encoded in place.
+    #[pyo3(signature = (dpi=None, text=Vec::new(), level=crate::backend::png_encode::DEFAULT_LEVEL, strategy=0))]
+    fn encode_png<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: Option<(f64, f64)>,
+        text: Vec<(String, String)>,
+        level: u8,
+        strategy: u8,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let r = self.rr()?;
+        let (w, h) = (r.agg.width as usize, r.agg.height as usize);
+        let pixels = r.agg.buffer();
+        let opts = super::api::png_options(dpi, &text, level, strategy);
+        let out = py
+            .detach(|| crate::backend::png_encode::encode(pixels, w, h, 4, &opts))
+            .map_err(PyValueError::new_err)?;
+        Ok(PyBytes::new(py, &out))
+    }
+
     #[getter]
     fn width(&self) -> PyResult<f64> {
         Ok(self.rr()?.width)

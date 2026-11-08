@@ -43,12 +43,13 @@ Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
 | kiwisolver（constrained layout） | Rust 移植 kiwi 1.5 求解器，運算順序與 kiwi 相同 |
 | ContourPy（等高線） | Rust 移植預設的 `mpl2014` 演算法，頂點逐位元相同 |
 | qhull（Delaunay 三角網格） | 內建並編譯 Matplotlib 使用的 qhull 8.0.2，三角形順序相同 |
-| Pillow（PNG 讀寫、PDF／SVG 內嵌影像） | Rust 讀寫 PNG；`imread` 的數值與 Matplotlib／Pillow 相同 |
+| Pillow（PNG 讀寫、PDF／SVG 內嵌影像） | PNG 檔一律由 Rust 寫出（多執行緒，zlib 等級 6 同 Pillow）；Rust 讀取 PNG，`imread` 的數值與 Matplotlib／Pillow 相同 |
 | fontTools、packaging | 只有 Type 42 字型嵌入需要 fontTools；packaging 改為內建版本解析 |
 
-已安裝 Pillow 時仍由 Pillow 編碼內嵌影像，與 Matplotlib 的檔案逐位元組相同。
+`savefig`、`imsave` 等寫出的 PNG 檔即使已安裝 Pillow 也由 Rust 編碼，見下方〈PNG 存檔〉；
+SVG／PDF 的內嵌影像在已安裝 Pillow 時仍由 Pillow 編碼，與 Matplotlib 的檔案逐位元組相同。
 下列功能仍需選用套件（`pip install "matplotlib-rs[full]"`），缺少時會丟出說明用途的 `ImportError`：
-JPEG／TIFF／WebP／GIF／AVIF 讀寫、`pil_kwargs`、`PillowWriter` 需要 Pillow；
+JPEG／TIFF／WebP／GIF／AVIF 讀寫、PNG 壓縮選項以外的 `pil_kwargs`（如 `pnginfo`）、`PillowWriter` 需要 Pillow；
 `pdf.fonttype`／`ps.fonttype` 設為 42 需要 fontTools；`contour.algorithm` 為
 `serial`／`threaded`／`mpl2005` 需要 ContourPy。usetex、GUI 後端與影片輸出需要的外部程式不變。
 
@@ -209,7 +210,32 @@ pie 每片的 Python 物件流程仍比官方慢。0.5 秒以下的案例各輪�
 python tests/bench/basic_charts.py --rounds 3 --output tests/output/basic-charts
 ```
 
-`MPLRS_THREADS` 可指定平行處理（path collection 點陣化、影像重採樣、色彩對應、直方圖、等高線）的執行緒數，`1` 為單執行緒。
+`MPLRS_THREADS` 可指定平行處理（path collection 點陣化、影像重採樣、色彩對應、直方圖、等高線、PNG 壓縮）的執行緒數，`1` 為單執行緒。
+
+### PNG 存檔
+
+所有 PNG 檔（`savefig`、`imsave`、`AxesImage.write_png`、色彩對應表預覽）都由 Rust 編碼，
+不論是否安裝 Pillow。每列以 libpng／Pillow 的準則選擇濾波（AVX2／SSE2 向量化），
+以 zlib-rs 壓縮，預設與 Pillow 相同的 zlib 等級 6；資料切成 256 KiB 區段在多個執行緒上壓縮，
+接成單一 zlib 串流，檔案與執行緒數無關。`savefig` 直接從 renderer 緩衝區編碼，不再複製畫布。
+`pil_kwargs` 的 `compress_level`、`optimize`、`compress_type`、`dpi` 由 Rust 處理，不需要 Pillow。
+
+9 張常見圖（640 × 480～2400 × 1800）只量編碼、4 vCPU：
+
+| 編碼器 | 合計時間 | 合計大小 |
+| --- | ---: | ---: |
+| Pillow（Matplotlib，zlib 等級 6） | 724.7 ms | 3,150 kB |
+| 0.0.4 的 `savefig`（`png` crate 最快模式） | 25.8 ms | 6,301 kB |
+| **本版預設（等級 6）** | **75.2 ms（9.6×）** | **3,061 kB** |
+| 本版，`pil_kwargs={"compress_level": 1}` | 23.1 ms（31×） | 4,931 kB |
+
+`savefig` 全程：2400 × 1800 的圖 69.3 → 47.2 ms、檔案 1,020 → 602 kB；
+800 × 600 的圖 13.2 → 14.7 ms、檔案小 20%。逐張數據、方法與驗證見
+[PNG 存檔效能報告](docs/benchmarks/png-save.md)。
+
+```bash
+python tests/bench/png_save.py --output tests/output/png-save
+```
 
 ### 5,400 個箱形圖壓測
 

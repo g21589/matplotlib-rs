@@ -715,10 +715,7 @@ class _ImageBase(mcolorizer.ColorizingArtist):
         """Write the image to png file *fname*."""
         im = self.to_rgba(self._A[::-1] if self.origin == 'lower' else self._A,
                           bytes=True, norm=True)
-        if PIL is None:
-            _png.write(fname, im)
-        else:
-            PIL.Image.fromarray(im).save(fname, format="png")
+        _png.write(fname, im)
 
     @staticmethod
     def _normalize_image_array(A):
@@ -1708,6 +1705,11 @@ def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
         Keyword arguments passed to `PIL.Image.Image.save`.  If the 'pnginfo'
         key is present, it completely overrides *metadata*, including the
         default 'Software' key.
+
+        PNG files are written by the Rust core (zlib level 6 by default, as
+        Pillow); the PNG compression options ``compress_level``,
+        ``optimize``, ``compress_type`` and ``dpi`` are handled there, other
+        options need Pillow.
     """
     from matplotlib_rs.figure import Figure
 
@@ -1754,18 +1756,21 @@ def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
             pil_kwargs = pil_kwargs.copy()
         pil_shape = (rgba.shape[1], rgba.shape[0])
         rgba = np.require(rgba, requirements='C')
-        if PIL is None:
-            if format != "png" or pil_kwargs:
-                _png.require_pil(f"Saving {format!r} images" if format != "png"
-                                 else "pil_kwargs")
+        options = _png.native_options(pil_kwargs) if format.lower() == "png" else None
+        if options is not None:
+            # Written by the Rust core, with or without Pillow.
+            level, strategy, png_dpi = options
             metadata = {
                 "Software": (f"Matplotlib version{mpl.__version__}, "
                              f"https://matplotlib.org/"),
                 **(metadata if metadata is not None else {}),
             }
-            _png.write(fname, np.asarray(rgba), dpi,
-                       [(k, v) for k, v in metadata.items() if v is not None])
+            _png.write(fname, rgba, png_dpi or (dpi, dpi), _png.text_chunks(metadata),
+                       level, strategy)
             return
+        if PIL is None:
+            _png.require_pil(f"Saving {format!r} images" if format != "png"
+                             else f"pil_kwargs {sorted(pil_kwargs)}")
         image = PIL.Image.frombuffer(
             "RGBA", pil_shape, rgba, "raw", "RGBA", 0, 1)
         if format == "png":

@@ -2,15 +2,21 @@
 
 matplotlib_rs needs only NumPy: constrained layout uses a port of kiwi's
 solver, contour the mpl2014 algorithm of ContourPy, Delaunay triangulation the
-qhull library matplotlib builds, and PNG files are read and written natively.
+qhull library matplotlib builds, and PNG files are read and written natively
+(PNG files are always written by the Rust core, even with Pillow installed).
 Each is compared with the package it replaces when that package is installed
 (as in CI); otherwise those comparisons are skipped and only self-checks run.
 """
 import io
+import os
 from pathlib import Path
 import random
+import struct
+import subprocess
 import sys
 import unittest
+import warnings
+import zlib
 
 import numpy as np
 
@@ -419,6 +425,195 @@ class PngTests(unittest.TestCase):
         self.assertEqual(im.info["Software"], "matplotlib_rs")
         self.assertAlmostEqual(im.info["dpi"][0], 72, places=1)
         self.assertNotIn("dpi", PIL.Image.open(io.BytesIO(_png.encode(rgba))).info)
+
+    def test_pillow_reads_written_files(self):
+        rng = np.random.default_rng(10)
+        rgba = png_test_image(rng, 700, 450)  # several strips
+        for mode, pixels in [("RGBA", rgba), ("RGB", rgba[..., :3]), ("L", rgba[..., 0]),
+                             ("LA", rgba[..., :2])]:
+            for level in (0, 1, 6, 9):
+                with self.subTest(mode=mode, level=level):
+                    im = PIL.Image.open(io.BytesIO(_png.encode(pixels, level=level)))
+                    self.assertEqual(im.mode, mode)
+                    np.testing.assert_array_equal(np.asarray(im), pixels)
+
+    def test_chunks_match_pillow(self):
+        # The chunks other than IDAT are the ones matplotlib has Pillow write.
+        rgba = png_test_image(np.random.default_rng(11), 31, 23)
+        metadata = {"Software": "Matplotlib", "Title": "\N{GREEK SMALL LETTER ALPHA} plot",
+                    "Author": b"Andr\xe9", "Description": "caf\xe9", "Comment": None}
+        info = PIL.PngImagePlugin.PngInfo()
+        for k, v in metadata.items():
+            if v is not None:
+                info.add_text(k, v)
+        for dpi in [(100, 100), (72.5, 300)]:
+            buf = io.BytesIO()
+            PIL.Image.fromarray(rgba).save(buf, format="png", pnginfo=info, dpi=dpi)
+            ours = _png.encode(rgba, dpi, _png.text_chunks(metadata))
+            self.assertEqual(non_idat_chunks(ours), non_idat_chunks(buf.getvalue()))
+        with self.assertRaises(UnicodeEncodeError):
+            _png.text_chunks({"\N{GREEK SMALL LETTER ALPHA}": "x"})
+
+    def test_savefig_without_pillow_options(self):
+        fig, ax = rplt.subplots()
+        ax.plot([1, 3, 2])
+        fig.canvas.draw()
+        rgba = np.asarray(fig.canvas.buffer_rgba())
+        default = io.BytesIO()
+        fig.savefig(default, format="png", metadata={"Title": "t"})
+        im = PIL.Image.open(io.BytesIO(default.getvalue()))
+        np.testing.assert_array_equal(np.asarray(im), rgba)
+        self.assertEqual(im.info["Title"], "t")
+        for kw in [{"compress_level": 0}, {"compress_level": 1}, {"optimize": True},
+                   {"compress_type": 3}, {"dpi": (50, 60)}]:
+            with self.subTest(pil_kwargs=kw):
+                buf = io.BytesIO()
+                fig.savefig(buf, format="png", pil_kwargs=kw)
+                im = PIL.Image.open(io.BytesIO(buf.getvalue()))
+                np.testing.assert_array_equal(np.asarray(im), rgba)
+                np.testing.assert_allclose(im.info["dpi"], kw.get("dpi", (100, 100)), atol=0.02)
+                if "compress_level" in kw:
+                    self.assertGreater(len(buf.getvalue()), len(default.getvalue()))
+        rplt.close(fig)
+
+    def test_other_pil_kwargs_use_pillow(self):
+        fig = rplt.figure(figsize=(1, 1))
+        info = PIL.PngImagePlugin.PngInfo()
+        info.add_text("Comment", "via Pillow")
+        buf = io.BytesIO()
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            fig.savefig(buf, format="png", pil_kwargs={"pnginfo": info}, metadata={"Title": "x"})
+        self.assertTrue(any("pnginfo" in str(x.message) for x in w))
+        info = PIL.Image.open(io.BytesIO(buf.getvalue())).info
+        self.assertEqual(info["Comment"], "via Pillow")
+        self.assertNotIn("Title", info)
+        rplt.close(fig)
+
+
+def png_test_image(rng, w, h):
+    """RGBA rows of flat areas, edges, gradients, repeats and noise."""
+    a = np.zeros((h, w, 4), np.uint8)
+    y, x = np.mgrid[:h, :w]
+    a[..., 0] = x // 3
+    a[..., 1] = np.where((x + y) % 11 < 5, 255, 0)
+    a[..., 2] = (x * y) >> 4
+    a[..., 3] = 255
+    band = (y // 9) % 4
+    a[band == 1] = a[0, 0]
+    a[band == 3] = rng.integers(0, 256, (int((band == 3).sum()), 4), dtype=np.uint8)
+    return a
+
+
+def png_chunks(data):
+    """The (type, data) chunks of a PNG file, checking its signature and CRCs."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n"
+    pos, chunks = 8, []
+    while pos < len(data):
+        n, = struct.unpack(">I", data[pos:pos + 4])
+        kind, body = data[pos + 4:pos + 8], data[pos + 8:pos + 8 + n]
+        crc, = struct.unpack(">I", data[pos + 8 + n:pos + 12 + n])
+        assert crc == zlib.crc32(kind + body), kind
+        chunks.append((kind, body))
+        pos += 12 + n
+    assert chunks[-1] == (b"IEND", b"") and pos == len(data)
+    return chunks
+
+
+def non_idat_chunks(data):
+    return [c for c in png_chunks(data) if c[0] != b"IDAT"]
+
+
+class PngWriterTests(unittest.TestCase):
+    """The Rust PNG writer, checked without Pillow."""
+
+    def check(self, pixels, data):
+        chunks = png_chunks(data)
+        h, w = pixels.shape[:2]
+        c = 1 if pixels.ndim == 2 else pixels.shape[2]
+        self.assertEqual(chunks[0], (b"IHDR", struct.pack(
+            ">IIBBBBB", w, h, 8, {1: 0, 2: 4, 3: 2, 4: 6}[c], 0, 0, 0)))
+        # zlib checks the Adler-32 of the joined strips.
+        raw = zlib.decompress(b"".join(body for kind, body in chunks if kind == b"IDAT"))
+        self.assertEqual(len(raw), h * (w * c + 1))
+        got = np.round(_png.read(io.BytesIO(data)) * 255).astype(np.uint8)
+        if c == 2:  # read as RGBA
+            pixels = pixels[..., [0, 0, 0, 1]]
+        np.testing.assert_array_equal(got, pixels)
+
+    def test_round_trip(self):
+        rng = np.random.default_rng(12)
+        for w, h in [(1, 1), (3, 2), (37, 19), (700, 450), (5000, 60)]:
+            rgba = png_test_image(rng, w, h)
+            for pixels in [rgba, rgba[..., :3], rgba[..., 0], rgba[..., :2]]:
+                for level, strategy in [(0, 0), (1, 0), (6, 0), (9, 0), (6, 1), (6, 3), (6, 4)]:
+                    with self.subTest(shape=pixels.shape, level=level, strategy=strategy):
+                        self.check(pixels, _png.encode(pixels, level=level, strategy=strategy))
+        # Non-contiguous arrays are encoded as their values.
+        self.check(rgba[::-1, ::2], _png.encode(rgba[::-1, ::2]))
+
+    def test_levels(self):
+        rgba = png_test_image(np.random.default_rng(13), 640, 480)
+        sizes = [len(_png.encode(rgba, level=level)) for level in range(10)]
+        self.assertGreater(sizes[0], rgba.nbytes)
+        self.assertLess(sizes[6], sizes[1])
+        self.assertEqual(png_chunks(_png.encode(rgba))[1][1][:2], b"\x78\x9c")
+        with self.assertRaises(ValueError):
+            _png.encode(np.zeros((2, 2, 5), np.uint8))
+        with self.assertRaises(ValueError):
+            _png.encode(np.zeros((0, 2, 4), np.uint8))
+        for bad in [{"compress_level": 10}, {"compress_type": 5}, {"compress_level": "1"}]:
+            with self.assertRaises(ValueError):
+                _png.native_options(bad)
+        self.assertEqual(_png.native_options(None), (6, 0, None))
+        self.assertEqual(_png.native_options({"optimize": True, "compress_level": 2}), (9, 0, None))
+        self.assertEqual(_png.native_options({"dpi": (1, 2), "format": "PNG"}), (6, 0, (1.0, 2.0)))
+        self.assertIsNone(_png.native_options({"pnginfo": None}))
+        self.assertIsNone(_png.native_options({"format": "jpeg"}))
+
+    def test_text_and_dpi(self):
+        rgba = np.zeros((2, 3, 4), np.uint8)
+        text = _png.text_chunks({"A": "caf\xe9", "B": b"\xff\x00", "C": "\N{SNOWMAN}", "D": None})
+        chunks = non_idat_chunks(_png.encode(rgba, (72, 96), text))
+        self.assertEqual(chunks[1:], [
+            (b"tEXt", b"A\0caf\xe9"), (b"tEXt", b"B\0\xff\x00"),
+            (b"iTXt", b"C\0\0\0\0\0\xe2\x98\x83"),
+            (b"pHYs", struct.pack(">IIB", 2835, 3780, 1)), (b"IEND", b"")])
+        self.assertEqual(non_idat_chunks(_png.encode(rgba))[1:], [(b"IEND", b"")])
+
+    def test_savefig(self):
+        fig, ax = rplt.subplots(figsize=(4, 3), dpi=150)
+        ax.imshow(np.random.default_rng(14).random((40, 50)))
+        ax.set_title("title")
+        fig.canvas.draw()
+        rgba = np.asarray(fig.canvas.buffer_rgba()).copy()
+        for kw in [{}, {"pil_kwargs": {"compress_level": 1}}]:
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", **kw)
+            self.check(rgba, buf.getvalue())
+            self.assertEqual(non_idat_chunks(buf.getvalue())[1:], [
+                (b"tEXt", b"Software\0Matplotlib version" + rs.__version__.encode()
+                 + b", https://matplotlib.org/"),
+                (b"pHYs", struct.pack(">IIB", 5906, 5906, 1)), (b"IEND", b"")])
+        rplt.close(fig)
+        buf = io.BytesIO()
+        rplt.imsave(buf, rgba, format="png", origin="lower", metadata={"Software": None})
+        self.check(rgba[::-1], buf.getvalue())
+        self.assertEqual(non_idat_chunks(buf.getvalue())[1][0], b"pHYs")
+
+    def test_threads_do_not_change_files(self):
+        code = (
+            "import sys, hashlib, numpy as np; sys.path.insert(0, sys.argv[1]);"
+            "from matplotlib_rs import _png;"
+            "a = np.random.default_rng(15).integers(0, 256, (900, 1300, 4), dtype=np.uint8);"
+            "a[::3] = 255; a[1::5] = a[0];"
+            "print(hashlib.sha256(_png.encode(a)).hexdigest())")
+        root = str(Path(__file__).resolve().parents[2] / "python")
+        digests = {
+            subprocess.run([sys.executable, "-c", code, root], capture_output=True, text=True,
+                           check=True, env={**os.environ, "MPLRS_THREADS": t}).stdout
+            for t in ("1", "3", "8")}
+        self.assertEqual(len(digests), 1, digests)
 
 
 if __name__ == "__main__":
