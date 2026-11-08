@@ -34,7 +34,7 @@ if PIL is not None and not hasattr(PIL, "__getattr__"):
     PIL.__getattr__ = _pil_getattr
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, _png, cbook
+from matplotlib_rs import _api, _colormap, _png, cbook
 # For clarity, names from _image are given explicitly in this module
 from matplotlib_rs import _image
 # For user convenience, the names from _image are also imported into
@@ -181,12 +181,16 @@ def _draw_list_compositing_images(
 
 
 def _resample(
-        image_obj, data, out_shape, transform, *, resample=None, alpha=1):
+        image_obj, data, out_shape, transform, *, resample=None, alpha=1,
+        lut=None):
     """
     Convenience wrapper around `._image.resample` to resample *data* to
     *out_shape* (with a third dimension if *data* is RGBA) that takes care of
     allocating the output array and fetching the relevant properties from the
     Image object *image_obj*.
+
+    matplotlib_rs: with a (K, 4) float64 *lut*, *data* holds the lut rows of
+    the pixels of the RGBA image ``lut[data]`` resampled.
     """
     # AGG can only handle coordinates smaller than 24-bit signed integers,
     # so raise errors if the input data is larger than _image.resample can
@@ -224,7 +228,10 @@ def _resample(
             interpolation = 'nearest'
         else:
             interpolation = 'hanning'
-    out = np.zeros(out_shape + data.shape[2:], data.dtype)  # 2D->2D, 3D->3D.
+    if lut is not None:
+        out = np.zeros(out_shape + (4,), lut.dtype)
+    else:
+        out = np.zeros(out_shape + data.shape[2:], data.dtype)  # 2D->2D, 3D->3D.
     if resample is None:
         resample = image_obj.get_resample()
 
@@ -240,6 +247,14 @@ def _resample(
             transform = Affine2D().translate(0, -data.shape[0]).scale(1, -1) + transform
             data = np.flip(data, axis=0)
 
+    if lut is not None:
+        _image.resample_indexed(data, lut, out, transform,
+                                _interpd_[interpolation],
+                                resample,
+                                alpha,
+                                image_obj.get_filternorm(),
+                                image_obj.get_filterrad())
+        return out
     _image.resample(data, out, transform,
                     _interpd_[interpolation],
                     resample,
@@ -532,36 +547,47 @@ class _ImageBase(mcolorizer.ColorizingArtist):
             else:
                 if A.ndim == 2:  # interpolation_stage = 'rgba'
                     self.norm.autoscale_None(A)
-                    A = self.to_rgba(A)
-                if A.dtype == np.uint8:
-                    # uint8 is too imprecise for premultiplied alpha roundtrips.
-                    A = np.divide(A, 0xff, dtype=np.float32)
-                alpha = self.get_alpha()
-                post_apply_alpha = False
-                if alpha is None:  # alpha parameter not specified
-                    if A.shape[2] == 3:  # image has no alpha channel
-                        A = np.dstack([A, np.ones(A.shape[:2])])
-                elif np.ndim(alpha) > 0:  # Array alpha
-                    if A.shape[2] == 3:  # RGB: use array alpha directly
-                        A = np.dstack([A, alpha])
-                    else:  # RGBA: multiply existing alpha by array alpha
-                        A = np.dstack([A[..., :3], A[..., 3] * alpha])
-                else:  # Scalar alpha
-                    if A.shape[2] == 3:  # broadcast scalar alpha
-                        A = np.dstack([A, np.full(A.shape[:2], alpha, np.float32)])
-                    else:  # or apply scalar alpha to existing alpha channel
-                        post_apply_alpha = True
-                # Resample in premultiplied alpha space.  (TODO: Consider
-                # implementing premultiplied-space resampling in
-                # span_image_resample_rgba_affine::generate?)
-                # Multiplying the whole array and then restoring the alpha channel
-                # is faster than an in-place multiply of the strided A[..., :3]
-                # view.  If alpha is uniformly 1, premultiplication can be skipped.
-                alpha_in = A[..., 3]
-                if (alpha_in != 1).any():
-                    A = A * alpha_in[..., None]
-                    A[..., 3] = alpha_in
-                res = _resample(self, A, out_shape, t)
+                    # matplotlib_rs: large float data as colormap lut rows
+                    A = _colormap.image_rgba(self, A)
+                if isinstance(A, _colormap.Indexed):
+                    # The premultiplied RGBA array below is lut[A.idx] for
+                    # the premultiplied lut (rows of alpha 1 are unchanged,
+                    # as when no premultiplication is needed).
+                    alpha = self.get_alpha()
+                    post_apply_alpha = alpha is not None
+                    lut = A.lut * A.lut[:, 3:4]
+                    lut[:, 3] = A.lut[:, 3]
+                    res = _resample(self, A.idx, out_shape, t, lut=lut)
+                else:
+                    if A.dtype == np.uint8:
+                        # uint8 is too imprecise for premultiplied alpha roundtrips.
+                        A = np.divide(A, 0xff, dtype=np.float32)
+                    alpha = self.get_alpha()
+                    post_apply_alpha = False
+                    if alpha is None:  # alpha parameter not specified
+                        if A.shape[2] == 3:  # image has no alpha channel
+                            A = np.dstack([A, np.ones(A.shape[:2])])
+                    elif np.ndim(alpha) > 0:  # Array alpha
+                        if A.shape[2] == 3:  # RGB: use array alpha directly
+                            A = np.dstack([A, alpha])
+                        else:  # RGBA: multiply existing alpha by array alpha
+                            A = np.dstack([A[..., :3], A[..., 3] * alpha])
+                    else:  # Scalar alpha
+                        if A.shape[2] == 3:  # broadcast scalar alpha
+                            A = np.dstack([A, np.full(A.shape[:2], alpha, np.float32)])
+                        else:  # or apply scalar alpha to existing alpha channel
+                            post_apply_alpha = True
+                    # Resample in premultiplied alpha space.  (TODO: Consider
+                    # implementing premultiplied-space resampling in
+                    # span_image_resample_rgba_affine::generate?)
+                    # Multiplying the whole array and then restoring the alpha channel
+                    # is faster than an in-place multiply of the strided A[..., :3]
+                    # view.  If alpha is uniformly 1, premultiplication can be skipped.
+                    alpha_in = A[..., 3]
+                    if (alpha_in != 1).any():
+                        A = A * alpha_in[..., None]
+                        A[..., 3] = alpha_in
+                    res = _resample(self, A, out_shape, t)
                 # Demultiply.  Zeroes in the divisor are replaced by ones,
                 # which leaves the corresponding (premultiplied) RGB values
                 # untouched.  Dividing the whole contiguous array is several
@@ -579,7 +605,9 @@ class _ImageBase(mcolorizer.ColorizingArtist):
             # output is now a correctly sized RGBA array of uint8
 
             # Apply alpha *after* if the input was greyscale without a mask
-            if A.ndim == 2:
+            # (matplotlib_rs: A.ndim == 2 here only in the 'data' stage; A
+            # may be an _colormap.Indexed image in the 'rgba' stage)
+            if interpolation_stage == 'data' and A.ndim == 2:
                 alpha = self._get_scalar_alpha()
                 alpha_channel = output[:, :, 3]
                 alpha_channel[:] = (  # Assignment will cast to uint8.

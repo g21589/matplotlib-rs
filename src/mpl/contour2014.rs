@@ -59,6 +59,7 @@ const MASK_VISITED_CORNER: u32 = 0x40000;
 
 /// A line of a contour; holes refer to their parent, non-holes list their
 /// holes (indices into `Lines`).
+#[derive(Clone)]
 struct Line {
     points: Vec<(f64, f64)>,
     is_hole: bool,
@@ -74,6 +75,7 @@ pub struct Output {
     pub codes: Vec<Vec<u8>>,
 }
 
+#[derive(Clone)]
 struct ParentCache {
     nx: isize,
     x_chunk_points: isize,
@@ -108,10 +110,13 @@ impl ParentCache {
     }
 }
 
+/// (Copies share the grid; each call depends only on the grid flags of
+/// `cache`, so copies give the same results for any level.)
+#[derive(Clone)]
 pub struct Mpl2014 {
-    x: Vec<f64>,
-    y: Vec<f64>,
-    z: Vec<f64>,
+    x: std::sync::Arc<Vec<f64>>,
+    y: std::sync::Arc<Vec<f64>>,
+    z: std::sync::Arc<Vec<f64>>,
     nx: isize,
     ny: isize,
     n: isize,
@@ -167,9 +172,9 @@ impl Mpl2014 {
         let nxchunk = calc_chunk_count(nx, x_chunk_size);
         let nychunk = calc_chunk_count(ny, y_chunk_size);
         let mut g = Mpl2014 {
-            x,
-            y,
-            z,
+            x: x.into(),
+            y: y.into(),
+            z: z.into(),
             nx,
             ny,
             n: nx * ny,
@@ -418,7 +423,7 @@ impl Mpl2014 {
         } else {
             MASK_EXISTS_QUAD | MASK_BOUNDARY_S | MASK_BOUNDARY_W
         };
-        for (c, &z) in self.cache.iter_mut().zip(&self.z) {
+        for (c, &z) in self.cache.iter_mut().zip(self.z.iter()) {
             *c &= keep_mask;
             if two_levels {
                 if z > upper_level {

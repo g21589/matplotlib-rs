@@ -85,4 +85,43 @@ for dtype, ndim in itertools.product(DTYPES, (2, 3)):
                               interp, resample, alpha, norm, radius, len(d), d[:2].tolist(),
                               a[tuple(d[0])], b[tuple(d[0])])
 print(f"{count - fails}/{count} identical")
-sys.exit(1 if fails else 0)
+
+# Large outputs (spans generated on several threads), and matplotlib_rs's
+# resample_indexed: resampling lut[idx] without making it.
+big_fails = 0
+big_count = 0
+LUT = rng.random((259, 4))
+LUT[:5, 3] = [0, 0.25, 0.5, 1, 1]
+LUT_PM = LUT * LUT[:, 3:4]
+LUT_PM[:, 3] = LUT[:, 3]
+for in_shape, out_shape in [((300, 200), (170, 130)), ((900, 1100), (150, 140)),
+                            ((40, 50), (160, 210)), ((1, 700), (130, 140))]:
+    idx = rng.integers(0, len(LUT), in_shape).astype(np.uint32)
+    rgba = LUT_PM[idx]
+    sy, sx = out_shape[0] / in_shape[0], out_shape[1] / in_shape[1]
+    for t in [None, mtrans.Affine2D().scale(sx, sy),
+              mtrans.Affine2D().scale(-sx * 0.9, sy * 1.1).translate(out_shape[1] * 0.95, -2.5),
+              mtrans.Affine2D().rotate_deg(11).scale(sx * 0.8, sy * 0.8).translate(9, 3), Polar()]:
+        for interp in [0, 1, 5, 9, 14, 16]:
+            for resample, alpha, norm, radius in [(True, 1.0, False, 1.0), (False, 1.0, True, 1.0),
+                                                  (True, 0.6, True, 3.0)]:
+                out = np.zeros(out_shape + (4,))
+                out[5:9, 7:30] = 0.125
+                a = run(mimage, rgba, out, t, interp, resample, alpha, norm, radius)
+                b = run(rimage, rgba, out, t, interp, resample, alpha, norm, radius)
+                c = out.copy()
+                rimage.resample_indexed(idx, LUT_PM, c, t, interp, resample, alpha, norm, radius)
+                gray_in = rgba[..., 0].copy()
+                g = np.zeros(out_shape)
+                ga = run(mimage, gray_in, g, t, interp, resample, alpha, norm, radius)
+                gb = run(rimage, gray_in, g, t, interp, resample, alpha, norm, radius)
+                for name, x, y in [("rgba", a, b), ("indexed", a, c), ("gray", ga, gb)]:
+                    big_count += 1
+                    if not np.array_equal(x, y, equal_nan=True):
+                        big_fails += 1
+                        if big_fails <= 15:
+                            print("MISMATCH (large)", name, in_shape, out_shape, type(t).__name__,
+                                  interp, resample, alpha, norm, radius,
+                                  int((x != y).sum()))
+print(f"{big_count - big_fails}/{big_count} large identical")
+sys.exit(1 if fails or big_fails else 0)

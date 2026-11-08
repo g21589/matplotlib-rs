@@ -333,8 +333,9 @@ pub enum PatchKind {
     FancyBbox { x: f64, y: f64, width: f64, height: f64, boxstyle: BoxStyle },
     /// Shadow of another patch, offset by (ox, oy) points.
     Shadow { patch: Box<Patch>, ox: f64, oy: f64 },
-    /// A path plus a precomputed patch transform (from the Python side).
-    Generic { path: Path, patch_transform: Option<super::transforms::Mat> },
+    /// A path plus a precomputed patch transform (from the Python side); the
+    /// path is shared by copies (e.g. the unit rectangle of bar's bars).
+    Generic { path: std::sync::Arc<Path>, patch_transform: Option<super::transforms::Mat> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -560,7 +561,7 @@ impl Patch {
                 new_path(verts, p.codes, SimplifyParams::default())
             }
             PatchKind::Shadow { patch, .. } => patch.get_path(),
-            PatchKind::Generic { path, .. } => path.clone(),
+            PatchKind::Generic { path, .. } => (**path).clone(),
         }
     }
 
@@ -627,24 +628,37 @@ impl Patch {
         mpath::get_extents(&self.get_path(), Some(&self.get_transform(ctx)))
     }
 
+    /// `get_path`, borrowing the stored path of path-based patches.
+    fn get_path_ref(&self) -> std::borrow::Cow<'_, Path> {
+        match &self.kind {
+            PatchKind::Path { path } => std::borrow::Cow::Borrowed(path),
+            PatchKind::Generic { path, .. } => std::borrow::Cow::Borrowed(&**path),
+            _ => std::borrow::Cow::Owned(self.get_path()),
+        }
+    }
+
     pub fn draw(&self, renderer: &mut Renderer, ctx: &TransCtx, clip: &ClipCtx) {
         renderer.artist_start();
         if !self.base.visible {
             return;
         }
-        let path = self.get_path();
+        let path = self.get_path_ref();
         let transform = self.get_transform(ctx);
-        let tpath = if transform.is_affine() { path } else { mpath::transform_path_non_affine(&path, &transform) };
+        let tpath = if transform.is_affine() {
+            path
+        } else {
+            std::borrow::Cow::Owned(mpath::transform_path_non_affine(&path, &transform))
+        };
         let affine = transform.get_affine();
         let face = if self.facecolor.a != 0.0 { Some(self.facecolor) } else { None };
-        self.draw_paths_with_artist_properties(renderer, clip, &[(tpath, affine, face)]);
+        self.draw_paths_with_artist_properties(renderer, clip, &[(&tpath, affine, face)]);
     }
 
     pub fn draw_paths_with_artist_properties(
         &self,
         renderer: &mut Renderer,
         clip: &ClipCtx,
-        args: &[(Path, super::transforms::Mat, Option<Rgba>)],
+        args: &[(&Path, super::transforms::Mat, Option<Rgba>)],
     ) {
         renderer.open_group("patch", self.base.gid.as_deref());
         let mut gc = GcState::default();

@@ -24,6 +24,7 @@ from matplotlib_rs.gridspec import SubplotSpec
 import matplotlib_rs.image as mimage
 import matplotlib_rs.lines as mlines
 import matplotlib_rs.patches as mpatches
+import matplotlib_rs.path as mpath
 from matplotlib_rs.rcsetup import cycler, validate_axisbelow
 import matplotlib_rs.spines as mspines
 import matplotlib_rs.table as mtable
@@ -32,6 +33,39 @@ import matplotlib_rs.ticker as mticker
 import matplotlib_rs.transforms as mtransforms
 
 _log = logging.getLogger(__name__)
+
+
+def _straight_path_points(path):
+    """
+    The points `_AxesBase._update_patch_limits` evaluates on *path* if it has
+    only straight segments, or None.
+
+    For MOVETO, LINETO and CLOSEPOLY, ``path.iter_bezier`` yields segments
+    whose start and end points are the path's vertices (CLOSEPOLY goes back
+    to the subpath's first vertex, its own vertex being ignored); without
+    extrema, the points of every segment are thus the vertices but those of
+    CLOSEPOLY.  Paths with curves, non-finite vertices (removed by
+    iter_bezier), a malformed start or a segment continuing after CLOSEPOLY
+    use the general loop.
+    """
+    v = path.vertices
+    if (type(v) is not np.ndarray or v.ndim != 2 or v.shape[1] != 2
+            or len(v) == 0 or v.dtype != np.float64):
+        return None
+    c = path.codes
+    if c is not None:
+        c = np.asarray(c)
+        if len(c) != len(v) or c[0] != mpath.Path.MOVETO:
+            return None
+        closes = c == mpath.Path.CLOSEPOLY
+        if not ((c == mpath.Path.MOVETO) | (c == mpath.Path.LINETO) | closes).all():
+            return None
+        if (c[1:][closes[:-1]] != mpath.Path.MOVETO).any():
+            return None
+        v = v[~closes]
+    if not np.isfinite(v).all():
+        return None
+    return v
 
 
 class _axis_method_wrapper:
@@ -2584,17 +2618,20 @@ class _AxesBase(martist.Artist):
                 ((not patch.get_width()) and (not patch.get_height()))):
             return
         p = patch.get_path()
-        # Get all vertices on the path
-        # Loop through each segment to get extrema for Bezier curve sections
-        vertices = []
-        for curve, code in p.iter_bezier(simplify=False):
-            # Get distance along the curve of any extrema
-            _, dzeros = curve.axis_aligned_extrema()
-            # Calculate vertices of start, end and any extrema in between
-            vertices.append(curve([0, *dzeros, 1]))
+        # matplotlib_rs: the points below for paths of straight segments.
+        vertices = _straight_path_points(p)
+        if vertices is None:
+            # Get all vertices on the path
+            # Loop through each segment to get extrema for Bezier curve sections
+            vertices = []
+            for curve, code in p.iter_bezier(simplify=False):
+                # Get distance along the curve of any extrema
+                _, dzeros = curve.axis_aligned_extrema()
+                # Calculate vertices of start, end and any extrema in between
+                vertices.append(curve([0, *dzeros, 1]))
 
-        if len(vertices):
-            vertices = np.vstack(vertices)
+            if len(vertices):
+                vertices = np.vstack(vertices)
 
         patch_trf = patch.get_transform()
         updatex, updatey = patch_trf.contains_branch_separately(self.transData)

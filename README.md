@@ -1,7 +1,8 @@
 # matplotlib-rs
 
 以 Rust 實作繪圖與字型核心，提供與 Matplotlib 相容的 Python／`pyplot` 介面。
-目前發行版本為 `0.0.3`：支援 **Python 3.10**，執行期**只依賴 NumPy**，並進一步加快大量箱形圖。
+目前發行版本為 `0.0.4`：大量資料的基本圖表（長條、直方圖、影像、hist2d、等高線、pcolormesh 等）大幅加速，
+畫布仍與 Matplotlib 逐像素相同；支援 **Python 3.10** 以上，執行期**只依賴 NumPy**。
 Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 NumPy 連接，
 處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
 
@@ -11,18 +12,18 @@ Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 N
 Linux x86_64、glibc 2.28 以上、CPython 3.10～3.13 可直接安裝預編譯 wheel：
 
 ```bash
-python -m pip install matplotlib-rs==0.0.3
+python -m pip install matplotlib-rs==0.0.4
 python -m pip list   # 只會多出 matplotlib-rs 與 numpy
 ```
 
-PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.3) 使用完全相同的已測試套件；
+PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.4) 使用完全相同的已測試套件；
 Release 另附 source distribution、效能原始紀錄與 `SHA256SUMS`。
 發布流程在只有 NumPy 的乾淨環境測試每個 wheel；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
 
 從 release 原始碼安裝：
 
 ```bash
-git clone --branch v0.0.3 https://github.com/g21589/matplotlib-rs.git
+git clone --branch v0.0.4 https://github.com/g21589/matplotlib-rs.git
 cd matplotlib-rs
 python -m venv .venv
 source .venv/bin/activate
@@ -36,7 +37,7 @@ pip 會透過 maturin 編譯 Rust extension 與內建的 qhull。
 
 Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
 
-| Matplotlib 依賴 | matplotlib-rs 0.0.3 的作法 |
+| Matplotlib 依賴 | matplotlib-rs 0.0.4 的作法 |
 | --- | --- |
 | cycler、pyparsing、python-dateutil（含 six） | 純 Python，原樣內建於 `matplotlib_rs._vendor`（`tools/vendor_deps.py` 可重現）；已安裝的 cycler 會優先使用 |
 | kiwisolver（constrained layout） | Rust 移植 kiwi 1.5 求解器，運算順序與 kiwi 相同 |
@@ -94,7 +95,7 @@ plt.close(fig)
 本次以 Agg 離線繪圖為驗證範圍；GUI 互動、外部 TeX／影片工具及跨平台行為未完成驗證。
 逐像素與向量格式比對結果、官方 gallery 的差異及略過項目會列於
 [0.0.1 完整驗證報告](docs/releases/0.0.1.md)；之後新增的測試見
-[0.0.2](docs/releases/0.0.2.md) 與 [0.0.3](docs/releases/0.0.3.md) 發行紀錄。
+[0.0.2](docs/releases/0.0.2.md)、[0.0.3](docs/releases/0.0.3.md) 與 [0.0.4](docs/releases/0.0.4.md) 發行紀錄。
 
 ## 測試與功能覆蓋率
 
@@ -172,6 +173,43 @@ sh tests/bench/best_of.sh rs 5
 `best_of.sh` 報告五個全新 Python 行程中各階段的最小值；
 import 包含 NumPy／pyplot，第一次存檔包含首次繪製成本，後續存檔仍包含 PNG 壓縮與磁碟寫入。
 效能會隨工作負載、字型、CPU、NumPy／BLAS 與快取狀態改變。
+
+### 大量資料的基本圖表
+
+[`tests/bench/basic_charts.py`](tests/bench/basic_charts.py) 對 24 種常見圖表各放入大量資料
+（百萬點折線、20 萬點散佈圖、2 萬根長條、千萬筆直方圖、4000 × 4000 影像等），
+在全新行程中量測建立與繪製，並逐像素比對 Matplotlib 3.11.2 的畫布。
+找到並修正的效能問題以長條／直方圖最嚴重：每根長條約 0.8 毫秒的 Python 物件流程。
+建立＋首次繪製的三輪中位數（秒）：
+
+| 圖表與資料量 | Matplotlib | 0.0.3 | 0.0.4 | 對 Matplotlib | 對 0.0.3 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bar，20,000 根 | 11.228 | 14.550 | 0.165 | 68× | 88× |
+| barh，20,000 根（黑色邊框） | 11.805 | 14.248 | 0.143 | 83× | 100× |
+| hist，2,000,000 筆、10,000 bins | 5.279 | 6.667 | 0.076 | 69× | 87× |
+| hist，10,000,000 筆、200 bins | 0.271 | 0.307 | 0.060 | 4.6× | 5.2× |
+| imshow，4000 × 4000 | 1.929 | 1.792 | 0.252 | 7.7× | 7.1× |
+| hist2d，2,000,000 點、500 × 500 | 0.654 | 0.509 | 0.138 | 4.7× | 3.7× |
+| contourf，1000 × 1000、20 levels | 1.060 | 1.255 | 0.546 | 1.9× | 2.3× |
+| pcolormesh，1000 × 1000 | 0.524 | 0.684 | 0.414 | 1.3× | 1.7× |
+| hist step，3 組 × 2,000,000 筆、2,000 bins | 0.274 | 0.250 | 0.084 | 3.3× | 3.0× |
+| scatter，200,000 點（大小、顏色各異，alpha） | 2.854 | 2.408 | 1.628 | 1.8× | 1.5× |
+| errorbar，20,000 點 | 0.318 | 0.957 | 0.268 | 1.2× | 3.6× |
+| stem，20,000 點 | 0.369 | 0.932 | 0.344 | 1.1× | 2.7× |
+| boxplot，1,000 箱 × 200 筆 | 4.458 | 0.149 | 0.135 | 33× | 1.1× |
+| pie，500 片 | 0.338 | 0.415 | 0.431 | 0.8× | 1.0× |
+
+24 個案例全部與 Matplotlib 逐像素一致。只看建圖階段，bar、barh、hist（1 萬 bins）比 0.0.3 快
+117、162、109 倍；`imshow` 的繪製比官方快 11.5 倍（色彩對應改為 lut 列號，重採樣直接讀 lut、多執行緒）。
+官方以 C++ Agg 處理的工作（折線簡化、逐點點陣化的散佈圖）兩者成本相近，倍率約 1～2 倍；
+pie 每片的 Python 物件流程仍比官方慢。0.5 秒以下的案例各輪波動大（同一實作可相差 50% 以上），
+只能看出量級。全部結果、修正內容、驗證與限制見 [基本圖表效能報告](docs/benchmarks/basic-charts.md)。
+
+```bash
+python tests/bench/basic_charts.py --rounds 3 --output tests/output/basic-charts
+```
+
+`MPLRS_THREADS` 可指定平行處理（path collection 點陣化、影像重採樣、色彩對應、直方圖、等高線）的執行緒數，`1` 為單執行緒。
 
 ### 5,400 個箱形圖壓測
 

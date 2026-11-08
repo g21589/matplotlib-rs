@@ -74,6 +74,129 @@ impl<'a> VertexSource for PathIter<'a> {
     }
 }
 
+/// The paths of a path collection: a list of paths, or the quadrilaterals
+/// of a mesh generated on the fly.
+pub trait PathList: Sync {
+    type Path<'a>: CollectionPath
+    where
+        Self: 'a;
+    fn len(&self) -> usize;
+    fn path(&self, i: usize) -> Self::Path<'_>;
+}
+
+/// A path of a `PathList`.
+pub trait CollectionPath {
+    type Iter<'a>: VertexSource
+    where
+        Self: 'a;
+    fn iter(&self) -> Self::Iter<'_>;
+    fn total_vertices(&self) -> usize;
+}
+
+impl PathList for [MplPath] {
+    type Path<'a> = &'a MplPath;
+    #[inline]
+    fn len(&self) -> usize {
+        <[MplPath]>::len(self)
+    }
+    #[inline]
+    fn path(&self, i: usize) -> &MplPath {
+        &self[i]
+    }
+}
+
+impl CollectionPath for &MplPath {
+    type Iter<'a>
+        = PathIter<'a>
+    where
+        Self: 'a;
+    #[inline]
+    fn iter(&self) -> PathIter<'_> {
+        MplPath::iter(self)
+    }
+    #[inline]
+    fn total_vertices(&self) -> usize {
+        MplPath::total_vertices(self)
+    }
+}
+
+/// The quadrilaterals of a `draw_quad_mesh` call, as matplotlib's
+/// `QuadMeshGenerator` gives them: path i is quad (m, n) = (i % width,
+/// i / width), five vertices (closed, without codes) of the (rows, cols, 2)
+/// coordinate array.
+pub struct QuadMesh<'a> {
+    pub coords: &'a [f64],
+    pub cols: usize,
+    pub width: usize,
+    pub height: usize,
+}
+
+impl PathList for QuadMesh<'_> {
+    type Path<'a>
+        = Quad
+    where
+        Self: 'a;
+    #[inline]
+    fn len(&self) -> usize {
+        self.width * self.height
+    }
+    #[inline]
+    fn path(&self, i: usize) -> Quad {
+        let (m, n) = (i % self.width, i / self.width);
+        let mut v = [[0.0; 2]; 5];
+        for (idx, p) in v.iter_mut().enumerate() {
+            let mm = m + ((idx & 2) >> 1);
+            let nn = n + (((idx + 1) & 2) >> 1);
+            let o = (nn * self.cols + mm) * 2;
+            *p = [self.coords[o], self.coords[o + 1]];
+        }
+        Quad(v)
+    }
+}
+
+/// A quadrilateral of a `QuadMesh` (closed by repeating its first vertex).
+pub struct Quad(pub [[f64; 2]; 5]);
+
+pub struct QuadIter<'a> {
+    v: &'a [[f64; 2]; 5],
+    i: usize,
+}
+
+impl VertexSource for QuadIter<'_> {
+    #[inline]
+    fn rewind(&mut self, path_id: u32) {
+        self.i = path_id as usize;
+    }
+    #[inline]
+    fn vertex(&mut self, x: &mut f64, y: &mut f64) -> u32 {
+        if self.i >= 5 {
+            *x = 0.0;
+            *y = 0.0;
+            return PATH_CMD_STOP;
+        }
+        let idx = self.i;
+        self.i += 1;
+        [*x, *y] = self.v[idx];
+        if idx == 0 {
+            PATH_CMD_MOVE_TO
+        } else {
+            PATH_CMD_LINE_TO
+        }
+    }
+}
+
+impl CollectionPath for Quad {
+    type Iter<'a> = QuadIter<'a>;
+    #[inline]
+    fn iter(&self) -> QuadIter<'_> {
+        QuadIter { v: &self.0, i: 0 }
+    }
+    #[inline]
+    fn total_vertices(&self) -> usize {
+        5
+    }
+}
+
 /// Dash pattern in points: offset and (on, off) pairs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Dashes {
@@ -215,6 +338,9 @@ pub struct RendererAgg {
     last_clip: Option<ClipKey>,
     hatch_size: u32,
     fill_color: Rgba,
+    /// scanline buffers reused by `render_current` (each use resets them)
+    sl_p8: ScanlineP8,
+    sl_bin: ScanlineBin,
 }
 
 #[derive(Clone, Copy)]
@@ -235,6 +361,8 @@ impl RendererAgg {
             last_clip: None,
             hatch_size: dpi as u32,
             fill_color: Rgba::new(1.0, 1.0, 1.0, 0.0),
+            sl_p8: ScanlineP8::new(),
+            sl_bin: ScanlineBin::new(),
         };
         r.clear();
         r
@@ -375,8 +503,7 @@ impl RendererAgg {
                 render_scanlines_aa_solid(&mut self.ras, &mut sl, &mut rb, c);
             } else {
                 let mut rb = RendererBase::new(&mut self.pixf);
-                let mut sl = ScanlineP8::new();
-                render_scanlines_aa_solid(&mut self.ras, &mut sl, &mut rb, c);
+                render_scanlines_aa_solid(&mut self.ras, &mut self.sl_p8, &mut rb, c);
             }
         } else if has_clippath {
             let mask = self.alpha_mask.as_ref().unwrap();
@@ -387,11 +514,9 @@ impl RendererAgg {
         } else {
             let mut rb = RendererBase::new(&mut self.pixf);
             if is_stroke {
-                let mut sl = ScanlineBin::new();
-                render_scanlines_bin_solid(&mut self.ras, &mut sl, &mut rb, c);
+                render_scanlines_bin_solid(&mut self.ras, &mut self.sl_bin, &mut rb, c);
             } else {
-                let mut sl = ScanlineP8::new();
-                render_scanlines_bin_solid(&mut self.ras, &mut sl, &mut rb, c);
+                render_scanlines_bin_solid(&mut self.ras, &mut self.sl_p8, &mut rb, c);
             }
         }
     }
@@ -733,6 +858,31 @@ impl RendererAgg {
         has_codes: bool,
         hatchcolors: &[Rgba],
     ) {
+        self.draw_path_list(
+            gc, master_transform, paths, transforms, offsets, offset_trans, facecolors, edgecolors, linewidths,
+            linestyles, antialiaseds, check_snap, has_codes, hatchcolors,
+        )
+    }
+
+    /// `draw_path_collection` of the paths of a `PathList`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_path_list<L: PathList + ?Sized>(
+        &mut self,
+        gc: &Gc,
+        master_transform: &TransAffine,
+        paths: &L,
+        transforms: &[TransAffine],
+        offsets: &[[f64; 2]],
+        offset_trans: &TransAffine,
+        facecolors: &[Rgba],
+        edgecolors: &[Rgba],
+        linewidths: &[f64],
+        linestyles: &[Dashes],
+        antialiaseds: &[bool],
+        check_snap: bool,
+        has_codes: bool,
+        hatchcolors: &[Rgba],
+    ) {
         let npaths = paths.len();
         let noffsets = offsets.len();
         let n = npaths.max(noffsets);
@@ -760,8 +910,31 @@ impl RendererAgg {
         let has_hatch = gc.hatch.as_ref().map(|h| h.path.total_vertices() != 0).unwrap_or(false);
         let do_clip = nfacecolors == 0 && !has_hatch;
 
+        if !has_clippath && !has_hatch && gc.sketch.is_none() && n >= PARALLEL_MIN_PATHS {
+            let threads = collection_threads();
+            if threads > 1 {
+                let c = Collection {
+                    master_transform,
+                    paths,
+                    transforms,
+                    offsets,
+                    offset_trans,
+                    facecolors,
+                    edgecolors,
+                    linewidths,
+                    linestyles,
+                    antialiaseds,
+                    check_snap,
+                    has_codes,
+                    do_clip,
+                };
+                self.draw_path_collection_parallel(&gc, &c, n, threads);
+                return;
+            }
+        }
+
         for i in 0..n {
-            let path = &paths[i % npaths];
+            let path = paths.path(i % npaths);
             let mut trans = if ntransforms > 0 {
                 let mut t = transforms[i % ntransforms];
                 t.multiply(master_transform);
@@ -1001,5 +1174,311 @@ fn blend_from_rgba<P: PixFmt>(
             *c = Rgba8::new(src[o], src[o + 1], src[o + 2], src[o + 3]);
         }
         rb.ren.blend_color_hspan(rdst.x1, ty, width as u32, &colors, None, cover);
+    }
+}
+
+/// Below this many paths `draw_path_collection` draws on one thread.
+const PARALLEL_MIN_PATHS: usize = 256;
+
+/// The threads of `draw_path_collection_parallel` (and of other parallel
+/// loops): the available parallelism (at most 8), or `MPLRS_THREADS` (1: one
+/// thread).
+pub fn collection_threads() -> usize {
+    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *THREADS.get_or_init(|| {
+        std::env::var("MPLRS_THREADS")
+            .ok()
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .filter(|&t| t >= 1)
+            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |t| t.get()).min(8))
+    })
+}
+
+/// The arguments of a `draw_path_collection` call.
+struct Collection<'a, L: PathList + ?Sized> {
+    master_transform: &'a TransAffine,
+    paths: &'a L,
+    transforms: &'a [TransAffine],
+    offsets: &'a [[f64; 2]],
+    offset_trans: &'a TransAffine,
+    facecolors: &'a [Rgba],
+    edgecolors: &'a [Rgba],
+    linewidths: &'a [f64],
+    linestyles: &'a [Dashes],
+    antialiaseds: &'a [bool],
+    check_snap: bool,
+    has_codes: bool,
+    do_clip: bool,
+}
+
+/// The scanlines a rasterization produced, as the renderer received them.
+#[derive(Default)]
+struct Recorded {
+    /// (y, first span, number of spans)
+    rows: Vec<(i32, u32, u32)>,
+    spans: Vec<Span>,
+    covers: Vec<u8>,
+}
+
+impl Recorded {
+    fn clear(&mut self) {
+        self.rows.clear();
+        self.spans.clear();
+        self.covers.clear();
+    }
+
+    /// `render_scanlines` of *ras* with *sl*, keeping the scanlines.
+    fn record<S: Scanline + ScanlineSpans>(&mut self, ras: &mut RasterizerScanlineAa, sl: &mut S) {
+        self.clear();
+        if ras.rewind_scanlines() {
+            sl.reset(ras.min_x(), ras.max_x());
+            while ras.sweep_scanline(sl) {
+                let base = self.covers.len() as u32;
+                self.covers.extend_from_slice(sl.covers());
+                let first = self.spans.len() as u32;
+                self.spans.extend(sl.spans().iter().map(|sp| Span { cover_idx: sp.cover_idx + base, ..*sp }));
+                self.rows.push((sl.y(), first, self.spans.len() as u32 - first));
+            }
+        }
+    }
+
+    /// The recorded scanlines through `render_scanline_aa_solid` (*aa*) or
+    /// `render_scanline_bin_solid`.
+    fn replay<P: PixFmt>(&self, rb: &mut RendererBase<P>, c: &Rgba8, aa: bool) {
+        for &(y, first, n) in &self.rows {
+            let row = RowView { y, spans: &self.spans[first as usize..(first + n) as usize], covers: &self.covers };
+            if aa {
+                render_scanline_aa_solid(&row, rb, c);
+            } else {
+                render_scanline_bin_solid(&row, rb, c);
+            }
+        }
+    }
+}
+
+struct RowView<'a> {
+    y: i32,
+    spans: &'a [Span],
+    covers: &'a [u8],
+}
+
+impl ScanlineSpans for RowView<'_> {
+    fn y(&self) -> i32 {
+        self.y
+    }
+    fn spans(&self) -> &[Span] {
+        self.spans
+    }
+    fn covers(&self) -> &[u8] {
+        self.covers
+    }
+}
+
+/// One path of a collection, rasterized: its face and its stroke.
+#[derive(Default)]
+struct RecordedPath {
+    face: Option<Rgba8>,
+    face_rows: Recorded,
+    stroke: Option<Rgba8>,
+    stroke_rows: Recorded,
+    isaa: bool,
+}
+
+/// The rasterizer and scanlines of a thread of `draw_path_collection_parallel`.
+struct PathWorker {
+    ras: RasterizerScanlineAa,
+    sl_p8: ScanlineP8,
+    sl_bin: ScanlineBin,
+}
+
+impl PathWorker {
+    /// `draw_path_inner` without clip path, hatch or sketch, recording what
+    /// `render_current` would render.
+    fn record<V: VertexSource>(&mut self, path: &mut V, face: Face, gc: &Gc, dpi: f64, out: &mut RecordedPath) {
+        let ptp = |points: f64| points * dpi / 72.0;
+        out.isaa = gc.isaa;
+        out.face = None;
+        out.stroke = None;
+        if let Face::Some(fc) = face {
+            self.ras.add_path(path);
+            out.face_rows.record(&mut self.ras, &mut self.sl_p8);
+            out.face = Some(fc);
+        }
+        if gc.linewidth != 0.0 {
+            let mut linewidth = ptp(gc.linewidth);
+            if !gc.isaa {
+                linewidth = if linewidth < 0.5 { 0.5 } else { mpl_round(linewidth) };
+            }
+            if gc.dashes.dashes.is_empty() {
+                let mut stroke = conv_stroke(&mut *path);
+                stroke.generator.width(ptp(gc.linewidth));
+                stroke.generator.line_cap(gc.cap);
+                stroke.generator.line_join(gc.join);
+                stroke.generator.miter_limit(ptp(gc.linewidth));
+                self.ras.add_path(&mut stroke);
+            } else {
+                let mut dash = conv_dash(&mut *path);
+                gc.dashes.dash_to_stroke(&mut dash.generator, dpi, gc.isaa);
+                let mut stroke = conv_stroke(dash);
+                stroke.generator.line_cap(gc.cap);
+                stroke.generator.line_join(gc.join);
+                stroke.generator.width(linewidth);
+                stroke.generator.miter_limit(ptp(gc.linewidth));
+                self.ras.add_path(&mut stroke);
+            }
+            if gc.isaa {
+                out.stroke_rows.record(&mut self.ras, &mut self.sl_p8);
+            } else {
+                out.stroke_rows.record(&mut self.ras, &mut self.sl_bin);
+            }
+            out.stroke = Some(gc.color.to_rgba8());
+        }
+    }
+}
+
+impl RendererAgg {
+    /// `draw_path_collection` without clip path, hatch or sketch: the paths
+    /// are rasterized on *threads* threads (each with a rasterizer set up as
+    /// the shared one) and their scanlines rendered in order, so the image is
+    /// the same as when drawing them one after the other.
+    fn draw_path_collection_parallel<L: PathList + ?Sized>(&mut self, gc0: &Gc, c: &Collection<'_, L>, n: usize, threads: usize) {
+        let (w, h) = (self.width, self.height);
+        let (dpi, height) = (self.dpi, self.height as f64);
+        let cliprect = gc0.cliprect_d();
+        let npaths = c.paths.len();
+        let (ntransforms, noffsets) = (c.transforms.len(), c.offsets.len());
+        let (nfacecolors, nedgecolors, nlinewidths) = (c.facecolors.len(), c.edgecolors.len(), c.linewidths.len());
+        let nlinestyles = c.linestyles.len().min(n);
+        let naa = c.antialiaseds.len();
+
+        // The state of the sequential loop's graphics context for path i (the
+        // edge properties keep their previous values when not given).
+        let gc_for = |i: usize, gc: &mut Gc| -> (Face, TransAffine) {
+            let mut trans = if ntransforms > 0 {
+                let mut t = c.transforms[i % ntransforms];
+                t.multiply(c.master_transform);
+                t
+            } else {
+                *c.master_transform
+            };
+            if noffsets > 0 {
+                let mut xo = c.offsets[i % noffsets][0];
+                let mut yo = c.offsets[i % noffsets][1];
+                c.offset_trans.transform(&mut xo, &mut yo);
+                trans.multiply(&TransAffine::translation(xo, yo));
+            }
+            trans.multiply(&TransAffine::scaling(1.0, -1.0));
+            trans.multiply(&TransAffine::translation(0.0, height));
+            let face = if nfacecolors > 0 { Face::Some(c.facecolors[i % nfacecolors].to_rgba8()) } else { Face::None };
+            if nedgecolors > 0 {
+                gc.color = c.edgecolors[i % nedgecolors];
+                gc.linewidth = if nlinewidths > 0 { c.linewidths[i % nlinewidths] } else { 1.0 };
+                if nlinestyles > 0 {
+                    gc.dashes = c.linestyles[i % nlinestyles].clone();
+                }
+            }
+            gc.isaa = c.antialiaseds[i % naa];
+            (face, trans)
+        };
+
+        let rasterize = |worker: &mut PathWorker, gc: &mut Gc, i: usize, out: &mut RecordedPath| {
+            let (face, trans) = gc_for(i, gc);
+            let path = c.paths.path(i % npaths);
+            let tpath = ConvTransform::new(path.iter(), trans);
+            let nan_removed = PathNanRemover::new(tpath, true, c.has_codes);
+            let clipped = PathClipper::new(nan_removed, c.do_clip, w as f64, h as f64);
+            if c.check_snap {
+                let snapped = PathSnapper::new(clipped, gc.snap_mode, path.total_vertices(), gc.linewidth * dpi / 72.0);
+                if c.has_codes {
+                    worker.record(&mut ConvCurve::new(snapped), face, gc, dpi, out);
+                } else {
+                    let mut s = snapped;
+                    worker.record(&mut s, face, gc, dpi, out);
+                }
+            } else if c.has_codes {
+                worker.record(&mut ConvCurve::new(clipped), face, gc, dpi, out);
+            } else {
+                let mut cl = clipped;
+                worker.record(&mut cl, face, gc, dpi, out);
+            }
+        };
+
+        let new_worker = || {
+            let mut ras = RasterizerScanlineAa::new();
+            ras.reset_clipping();
+            Self::set_clipbox_ras(&mut ras, cliprect, w, h);
+            PathWorker { ras, sl_p8: ScanlineP8::new(), sl_bin: ScanlineBin::new() }
+        };
+
+        // Batches: the threads (started once) rasterize their share of a
+        // batch into their own buffers, then this thread renders the batch
+        // in order.  Small batches keep the recorded scanlines in cache.
+        const PER_THREAD: usize = 512;
+        let batch = PER_THREAD * threads;
+        let share = |start: usize, t: usize| {
+            let end = (start + batch).min(n);
+            let per = (end - start).div_ceil(threads);
+            let a = (start + t * per).min(end);
+            (a, (a + per).min(end))
+        };
+        let slots: Vec<std::sync::Mutex<(PathWorker, Gc, Vec<RecordedPath>)>> = (0..threads)
+            .map(|_| {
+                let mut gc = gc0.clone();
+                gc.linewidth = 0.0;
+                std::sync::Mutex::new((new_worker(), gc, Vec::new()))
+            })
+            .collect();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let finished = std::sync::atomic::AtomicBool::new(false);
+        let go = std::sync::Barrier::new(threads + 1);
+        let done = std::sync::Barrier::new(threads + 1);
+        let pixf = &mut self.pixf;
+        std::thread::scope(|s| {
+            for (t, slot) in slots.iter().enumerate() {
+                let (rasterize, share, next, finished, go, done) = (&rasterize, &share, &next, &finished, &go, &done);
+                s.spawn(move || loop {
+                    go.wait();
+                    if finished.load(std::sync::atomic::Ordering::Acquire) {
+                        break;
+                    }
+                    let (a, b) = share(next.load(std::sync::atomic::Ordering::Acquire), t);
+                    {
+                        let mut g = slot.lock().unwrap();
+                        let (worker, gc, out) = &mut *g;
+                        if out.len() < b - a {
+                            out.resize_with(b - a, RecordedPath::default);
+                        }
+                        // (the state gc_for gives path i depends on i only)
+                        for (j, i) in (a..b).enumerate() {
+                            rasterize(worker, gc, i, &mut out[j]);
+                        }
+                    }
+                    done.wait();
+                });
+            }
+            let mut start = 0;
+            while start < n {
+                next.store(start, std::sync::atomic::Ordering::Release);
+                go.wait();
+                done.wait();
+                // (as render_current: clipped by the rasterizer, not here)
+                let mut rb = RendererBase::new(&mut *pixf);
+                for (t, slot) in slots.iter().enumerate() {
+                    let (a, b) = share(start, t);
+                    let g = slot.lock().unwrap();
+                    for r in &g.2[..b - a] {
+                        if let Some(fc) = &r.face {
+                            r.face_rows.replay(&mut rb, fc, r.isaa);
+                        }
+                        if let Some(ec) = &r.stroke {
+                            r.stroke_rows.replay(&mut rb, ec, r.isaa);
+                        }
+                    }
+                }
+                start = (start + batch).min(n);
+            }
+            finished.store(true, std::sync::atomic::Ordering::Release);
+            go.wait();
+        });
     }
 }

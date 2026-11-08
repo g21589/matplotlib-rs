@@ -942,6 +942,15 @@ class ContourSet(ContourLabeler, mcoll.Collection):
             return self._paths
         cg = self._contour_generator
         empty_path = Path(np.empty((0, 2)))
+        if hasattr(cg, "filled_paths"):
+            # matplotlib_rs: all levels at once (on several threads), each
+            # level's polygons already concatenated
+            lowers, uppers = self._get_lowers_and_uppers()
+            paths = (
+                cg.filled_paths(list(map(float, lowers)), list(map(float, uppers)))
+                if self.filled else
+                cg.lines_paths(list(map(float, self.levels))))
+            return [empty_path if p is None else Path(*p) for p in paths]
         vertices_and_codes = (
             map(cg.create_filled_contour, *self._get_lowers_and_uppers())
             if self.filled else

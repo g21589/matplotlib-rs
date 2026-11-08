@@ -11,7 +11,7 @@
 use crate::agg::basics::{PATH_CMD_LINE_TO, PATH_CMD_MOVE_TO};
 use crate::agg::basics::CLOSEPOLY;
 use crate::agg::rasterizer::RasterizerScanlineAa;
-use crate::agg::scanline::{Scanline, ScanlineSpans, ScanlineU8};
+use crate::agg::scanline::{Scanline, ScanlineStorage, ScanlineU8, StoredScanline};
 use crate::agg::trans_affine::TransAffine;
 
 const SUBPIXEL_SHIFT: i32 = 8;
@@ -51,7 +51,7 @@ fn uround(v: f64) -> i32 {
 // ---------------------------------------------------------------------------
 // Channel arithmetic (gray8/rgba8, gray16/rgba16, gray32/rgba32, gray64/rgba64)
 
-pub trait Channel: Copy + Default + PartialOrd + 'static {
+pub trait Channel: Copy + Default + PartialOrd + Send + Sync + 'static {
     /// `long_type`, the filter accumulator.
     type Acc: Copy + PartialOrd;
     const FULL: Self;
@@ -681,7 +681,7 @@ impl FilterLut {
 // ---------------------------------------------------------------------------
 // Interpolators
 
-trait Interpolator {
+trait Interpolator: Clone + Send {
     fn begin(&mut self, x: f64, y: f64, len: u32);
     fn coordinates(&self) -> (i32, i32);
     fn next(&mut self);
@@ -725,6 +725,7 @@ impl Dda2 {
 }
 
 /// `agg::span_interpolator_linear<>` (MPL_FIX_AGG_INTERPOLATION_ENDPOINT_BUG).
+#[derive(Clone)]
 struct LinearInterp {
     trans: TransAffine,
     li_x: Dda2,
@@ -761,6 +762,7 @@ impl Interpolator for LinearInterp {
 }
 
 /// matplotlib's `accurate_interpolator_affine_nn`.
+#[derive(Clone)]
 struct AccurateNnInterp {
     trans: TransAffine,
     len: u32,
@@ -808,6 +810,7 @@ impl Interpolator for AccurateNnInterp {
 }
 
 /// `span_interpolator_adaptor<span_interpolator_linear<>, lookup_distortion>`.
+#[derive(Clone)]
 struct DistortedInterp<'a> {
     base: LinearInterp,
     mesh: Option<&'a [f64]>,
@@ -843,13 +846,48 @@ impl<'a> Interpolator for DistortedInterp<'a> {
 // ---------------------------------------------------------------------------
 // Image accessors
 
-struct Image<'a, V> {
-    data: &'a [V],
+/// Where span generators read source pixel values: `get(p, c)` is channel
+/// *c* of the pixel at element offset *p* (pixel index times the channel
+/// count).
+pub trait Source<V>: Sync {
+    fn get(&self, p: usize, c: usize) -> V;
+}
+
+impl<V: Channel> Source<V> for [V] {
+    #[inline(always)]
+    fn get(&self, p: usize, c: usize) -> V {
+        self[p + c]
+    }
+}
+
+/// An RGBA image given as row indices into a lookup table of RGBA values
+/// (`lut[idx]` is the image), read as that image.
+pub struct Indexed<'a, V> {
+    pub idx: &'a [u32],
+    pub lut: &'a [[V; 4]],
+}
+
+impl<V: Channel> Source<V> for Indexed<'_, V> {
+    #[inline(always)]
+    fn get(&self, p: usize, c: usize) -> V {
+        self.lut[self.idx[p >> 2] as usize][c]
+    }
+}
+
+struct Image<'a, S: ?Sized> {
+    data: &'a S,
     width: i32,
     height: i32,
 }
 
+impl<S: ?Sized> Clone for Image<'_, S> {
+    fn clone(&self) -> Self {
+        Image { data: self.data, width: self.width, height: self.height }
+    }
+}
+
 /// `agg::wrap_mode_reflect`.
+#[derive(Clone)]
 struct WrapReflect {
     size: u32,
     size2: u32,
@@ -886,6 +924,7 @@ impl WrapReflect {
 
 /// `agg::image_accessor_wrap<pixfmt, wrap_mode_reflect, wrap_mode_reflect>`;
 /// returns element offsets of pixels.
+#[derive(Clone)]
 struct AccessorWrap {
     width: usize,
     n: usize,
@@ -933,13 +972,19 @@ trait SpanGen<V: Channel> {
 
 /// `span_image_filter_{gray,rgba}_nn` over `image_accessor_clip` with a
 /// transparent (zero) background.
-struct NnGen<'a, V, I> {
-    src: Image<'a, V>,
+struct NnGen<'a, S: ?Sized, I> {
+    src: Image<'a, S>,
     n: usize,
     interp: I,
 }
 
-impl<'a, V: Channel, I: Interpolator> SpanGen<V> for NnGen<'a, V, I> {
+impl<S: ?Sized, I: Clone> Clone for NnGen<'_, S, I> {
+    fn clone(&self) -> Self {
+        NnGen { src: self.src.clone(), n: self.n, interp: self.interp.clone() }
+    }
+}
+
+impl<'a, V: Channel, S: Source<V> + ?Sized, I: Interpolator> SpanGen<V> for NnGen<'a, S, I> {
     fn generate(&mut self, span: &mut [[V; 4]], x: i32, y: i32) {
         self.interp.begin(x as f64 + 0.5, y as f64 + 0.5, span.len() as u32);
         for s in span.iter_mut() {
@@ -949,14 +994,16 @@ impl<'a, V: Channel, I: Interpolator> SpanGen<V> for NnGen<'a, V, I> {
             let inside = py >= 0 && py < self.src.height && px >= 0 && px < self.src.width;
             if self.n == 1 {
                 s[0] = if inside {
-                    self.src.data[(py as usize) * self.src.width as usize + px as usize]
+                    self.src.data.get((py as usize) * self.src.width as usize + px as usize, 0)
                 } else {
                     V::default()
                 };
                 s[3] = V::FULL;
             } else if inside {
                 let o = ((py as usize) * self.src.width as usize + px as usize) * 4;
-                s.copy_from_slice(&self.src.data[o..o + 4]);
+                for (c, v) in s.iter_mut().enumerate() {
+                    *v = self.src.data.get(o, c);
+                }
             } else {
                 *s = [V::default(); 4];
             }
@@ -984,15 +1031,21 @@ fn clamp_rgba<V: Channel>(fg: &mut [V::Acc; 4]) {
 
 /// `span_image_filter_{gray,rgba}` (general LUT filter) over the reflecting
 /// accessor.
-struct FilterGen<'a, V, I> {
-    src: Image<'a, V>,
+struct FilterGen<'a, S: ?Sized, I> {
+    src: Image<'a, S>,
     n: usize,
     acc: AccessorWrap,
     interp: I,
     lut: &'a FilterLut,
 }
 
-impl<'a, V: Channel, I: Interpolator> SpanGen<V> for FilterGen<'a, V, I> {
+impl<S: ?Sized, I: Clone> Clone for FilterGen<'_, S, I> {
+    fn clone(&self) -> Self {
+        FilterGen { src: self.src.clone(), n: self.n, acc: self.acc.clone(), interp: self.interp.clone(), lut: self.lut }
+    }
+}
+
+impl<'a, V: Channel, S: Source<V> + ?Sized, I: Interpolator> SpanGen<V> for FilterGen<'a, S, I> {
     fn generate(&mut self, span: &mut [[V; 4]], x: i32, y: i32) {
         self.interp.begin(x as f64 + 0.5, y as f64 + 0.5, span.len() as u32);
         let diameter = self.lut.diameter;
@@ -1018,7 +1071,7 @@ impl<'a, V: Channel, I: Interpolator> SpanGen<V> for FilterGen<'a, V, I> {
                 loop {
                     let weight = (weight_y * w[x_hr as usize] as i32 + FILTER_SCALE / 2) >> FILTER_SHIFT;
                     for c in 0..n {
-                        fg[c] = V::acc_mul_add(fg[c], data[p + c], weight);
+                        fg[c] = V::acc_mul_add(fg[c], data.get(p, c), weight);
                     }
                     x_count -= 1;
                     if x_count == 0 {
@@ -1053,8 +1106,8 @@ impl<'a, V: Channel, I: Interpolator> SpanGen<V> for FilterGen<'a, V, I> {
 }
 
 /// `span_image_resample_{gray,rgba}_affine`.
-struct ResampleAffineGen<'a, V> {
-    src: Image<'a, V>,
+struct ResampleAffineGen<'a, S: ?Sized> {
+    src: Image<'a, S>,
     n: usize,
     acc: AccessorWrap,
     interp: LinearInterp,
@@ -1065,7 +1118,23 @@ struct ResampleAffineGen<'a, V> {
     ry_inv: i32,
 }
 
-impl<'a, V: Channel> SpanGen<V> for ResampleAffineGen<'a, V> {
+impl<S: ?Sized> Clone for ResampleAffineGen<'_, S> {
+    fn clone(&self) -> Self {
+        ResampleAffineGen {
+            src: self.src.clone(),
+            n: self.n,
+            acc: self.acc.clone(),
+            interp: self.interp.clone(),
+            lut: self.lut,
+            rx: self.rx,
+            ry: self.ry,
+            rx_inv: self.rx_inv,
+            ry_inv: self.ry_inv,
+        }
+    }
+}
+
+impl<'a, V: Channel, S: Source<V> + ?Sized> SpanGen<V> for ResampleAffineGen<'a, S> {
     fn prepare(&mut self) {
         let scale_limit = 200.0;
         let t = &self.interp.trans;
@@ -1129,7 +1198,7 @@ impl<'a, V: Channel> SpanGen<V> for ResampleAffineGen<'a, V> {
                 loop {
                     let weight = (weight_y * w[x_hr as usize] as i32 + FILTER_SCALE / 2) >> FILTER_SHIFT;
                     for c in 0..n {
-                        fg[c] = V::acc_mul_add(fg[c], data[p + c], weight);
+                        fg[c] = V::acc_mul_add(fg[c], data.get(p, c), weight);
                     }
                     total_weight += weight;
                     x_hr += rx_inv;
@@ -1164,9 +1233,16 @@ impl<'a, V: Channel> SpanGen<V> for ResampleAffineGen<'a, V> {
 // ---------------------------------------------------------------------------
 // Rendering
 
+/// Below this many output pixels, spans are generated on one thread.
+const PARALLEL_MIN_PIXELS: usize = 1 << 14;
+
 /// `render_scanlines(rasterizer, scanline32_u8, renderer_scanline_aa<
 /// renderer_base, span_allocator, span_converter<gen, span_conv_alpha>>)`.
-fn render<C: ColorType, G: SpanGen<C::V>>(
+///
+/// The scanlines are swept first; then each output row (which only its own
+/// spans write to) is generated and blended, on several threads for large
+/// images, with the same results.
+fn render<C: ColorType, G: SpanGen<C::V> + Clone + Send>(
     ras: &mut RasterizerScanlineAa,
     out: &mut [C::V],
     out_width: i32,
@@ -1180,50 +1256,99 @@ fn render<C: ColorType, G: SpanGen<C::V>>(
     }
     sl.reset(ras.min_x(), ras.max_x());
     gen.prepare();
-    let mut colors: Vec<[C::V; 4]> = Vec::new();
-    let n = C::N;
+    let mut store = ScanlineStorage::default();
     while ras.sweep_scanline(&mut sl) {
-        let y = sl.y();
-        let covers = sl.covers();
-        for span in sl.spans() {
-            let mut x = span.x;
-            let mut len = span.len.abs();
-            colors.clear();
-            colors.resize(len as usize, [C::V::default(); 4]);
-            gen.generate(&mut colors, x, y);
-            if alpha != 1.0 {
-                for c in colors.iter_mut() {
-                    c[3] = C::V::scale_alpha(c[3], alpha);
+        store.render(&sl);
+    }
+    // (renderer_base::blend_color_hspan clipping drops the other rows)
+    let lines: Vec<&StoredScanline> = store.scanlines.iter().filter(|l| l.y >= 0 && l.y < out_height).collect();
+    let row_len = out_width as usize * C::N;
+    let pixels: usize = store.spans.iter().map(|s| s.len.unsigned_abs() as usize).sum();
+    let threads = crate::backend::renderer_agg::collection_threads().min(lines.len());
+    if threads < 2 || pixels < PARALLEL_MIN_PIXELS {
+        let mut colors = Vec::new();
+        for l in &lines {
+            let y = l.y as usize;
+            render_line::<C, G>(gen, &mut colors, &store, l, &mut out[y * row_len..(y + 1) * row_len], out_width, alpha);
+        }
+        return;
+    }
+    // Contiguous groups of rows (scanlines come in increasing y).
+    let mut jobs = Vec::new();
+    let mut rest: &mut [C::V] = out;
+    let mut first_row = 0usize;
+    for chunk in lines.chunks(lines.len().div_ceil(threads)) {
+        let y0 = chunk[0].y as usize;
+        let y1 = chunk[chunk.len() - 1].y as usize + 1;
+        let tail = std::mem::take(&mut rest).split_at_mut((y0 - first_row) * row_len).1;
+        let (rows, tail) = tail.split_at_mut((y1 - y0) * row_len);
+        rest = tail;
+        first_row = y1;
+        jobs.push((chunk, rows, y0));
+    }
+    let store = &store;
+    std::thread::scope(|s| {
+        for (chunk, rows, y0) in jobs {
+            let mut gen = gen.clone();
+            s.spawn(move || {
+                let mut colors = Vec::new();
+                for l in chunk {
+                    let r = (l.y as usize - y0) * row_len;
+                    render_line::<C, G>(&mut gen, &mut colors, store, l, &mut rows[r..r + row_len], out_width, alpha);
                 }
+            });
+        }
+    });
+}
+
+/// Generate and blend the spans of one scanline into its output *row*.
+fn render_line<C: ColorType, G: SpanGen<C::V>>(
+    gen: &mut G,
+    colors: &mut Vec<[C::V; 4]>,
+    store: &ScanlineStorage,
+    line: &StoredScanline,
+    row: &mut [C::V],
+    out_width: i32,
+    alpha: f64,
+) {
+    let n = C::N;
+    let y = line.y;
+    let covers = &store.covers;
+    let first = line.span_start as usize;
+    for span in &store.spans[first..first + line.num_spans as usize] {
+        let mut x = span.x;
+        let mut len = span.len.abs();
+        colors.clear();
+        colors.resize(len as usize, [C::V::default(); 4]);
+        gen.generate(colors, x, y);
+        if alpha != 1.0 {
+            for c in colors.iter_mut() {
+                c[3] = C::V::scale_alpha(c[3], alpha);
             }
-            // renderer_base::blend_color_hspan clipping
-            if y > out_height - 1 || y < 0 {
+        }
+        // renderer_base::blend_color_hspan clipping
+        let mut cstart = 0usize;
+        let mut cov = span.cover_idx as usize;
+        if x < 0 {
+            let d = -x;
+            len -= d;
+            if len <= 0 {
                 continue;
             }
-            let mut cstart = 0usize;
-            let mut cov = span.cover_idx as usize;
-            if x < 0 {
-                let d = -x;
-                len -= d;
-                if len <= 0 {
-                    continue;
-                }
-                cov += d as usize;
-                cstart = d as usize;
-                x = 0;
+            cov += d as usize;
+            cstart = d as usize;
+            x = 0;
+        }
+        if x + len > out_width - 1 {
+            len = out_width - 1 - x + 1;
+            if len <= 0 {
+                continue;
             }
-            if x + len > out_width - 1 {
-                len = out_width - 1 - x + 1;
-                if len <= 0 {
-                    continue;
-                }
-            }
-            let row = y as usize * out_width as usize;
-            for i in 0..len as usize {
-                let o = (row + x as usize + i) * n;
-                let cover = if span.len < 0 { covers[span.cover_idx as usize] } else { covers[cov + i] };
-                C::copy_or_blend(&mut out[o..o + n], &colors[cstart + i], cover);
-            }
+        }
+        for i in 0..len as usize {
+            let o = (x as usize + i) * n;
+            let cover = if span.len < 0 { covers[span.cover_idx as usize] } else { covers[cov + i] };
+            C::copy_or_blend(&mut row[o..o + n], &colors[cstart + i], cover);
         }
     }
 }
@@ -1244,8 +1369,8 @@ pub struct ResampleParams<'a> {
 
 /// matplotlib's `resample<color_type>(input, in_w, in_h, output, out_w,
 /// out_h, params)`.
-pub fn resample<C: ColorType>(
-    input: &[C::V],
+pub fn resample<C: ColorType, S: Source<C::V> + ?Sized>(
+    input: &S,
     in_width: i32,
     in_height: i32,
     output: &mut [C::V],

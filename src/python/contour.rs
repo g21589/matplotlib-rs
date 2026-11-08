@@ -101,6 +101,52 @@ impl PyMpl2014 {
         to_python(py, self.inner.filled(lower_level, upper_level))
     }
 
+    /// ``[filled(lower, upper) for lower, upper in zip(lowers, uppers)]``,
+    /// computed on several threads (each level by its own copy of the
+    /// generator).
+    fn filled_many<'py>(&mut self, py: Python<'py>, lowers: Vec<f64>, uppers: Vec<f64>) -> PyResult<Vec<Bound<'py, PyTuple>>> {
+        let levels: Vec<(f64, f64)> = lowers.into_iter().zip(uppers).collect();
+        for &(lower, upper) in &levels {
+            if lower.is_nan() || upper.is_nan() {
+                return Err(PyValueError::new_err("lower_level and upper_level cannot be NaN"));
+            }
+            if lower >= upper {
+                return Err(PyValueError::new_err("upper_level must be larger than lower_level"));
+            }
+        }
+        let outs = for_levels(&self.inner, &levels, |g, &(lower, upper)| g.filled(lower, upper));
+        outs.into_iter().map(|o| to_python(py, o)).collect()
+    }
+
+    /// ``[lines(level) for level in levels]``, computed on several threads.
+    fn lines_many<'py>(&mut self, py: Python<'py>, levels: Vec<f64>) -> PyResult<Vec<Bound<'py, PyTuple>>> {
+        let outs = for_levels(&self.inner, &levels, |g, &level| g.lines(level));
+        outs.into_iter().map(|o| to_python(py, o)).collect()
+    }
+
+    /// The levels of `filled_many`, each as one path: the concatenated
+    /// vertices ((N, 2) float64) and codes (uint8) of its polygons, as
+    /// `ContourSet` builds them, or None if it has none.
+    fn filled_paths<'py>(&mut self, py: Python<'py>, lowers: Vec<f64>, uppers: Vec<f64>) -> PyResult<Vec<Option<Bound<'py, PyTuple>>>> {
+        let levels: Vec<(f64, f64)> = lowers.into_iter().zip(uppers).collect();
+        for &(lower, upper) in &levels {
+            if lower.is_nan() || upper.is_nan() {
+                return Err(PyValueError::new_err("lower_level and upper_level cannot be NaN"));
+            }
+            if lower >= upper {
+                return Err(PyValueError::new_err("upper_level must be larger than lower_level"));
+            }
+        }
+        let outs = for_levels(&self.inner, &levels, |g, &(lower, upper)| joined(g.filled(lower, upper)));
+        outs.into_iter().map(|o| joined_to_python(py, o)).collect()
+    }
+
+    /// The levels of `lines_many`, each as one path (see `filled_paths`).
+    fn lines_paths<'py>(&mut self, py: Python<'py>, levels: Vec<f64>) -> PyResult<Vec<Option<Bound<'py, PyTuple>>>> {
+        let outs = for_levels(&self.inner, &levels, |g, &level| joined(g.lines(level)));
+        outs.into_iter().map(|o| joined_to_python(py, o)).collect()
+    }
+
     fn create_filled_contour<'py>(
         &mut self,
         py: Python<'py>,
@@ -124,6 +170,63 @@ impl PyMpl2014 {
     fn corner_mask(&self) -> bool {
         self.corner_mask
     }
+}
+
+/// The polygons of an output concatenated: (number of vertices, flat x, y
+/// pairs, codes, number of polygons).
+struct Joined {
+    n: usize,
+    xy: Vec<f64>,
+    codes: Vec<u8>,
+    polygons: usize,
+}
+
+fn joined(out: Output) -> Joined {
+    let n = out.vertices.iter().map(Vec::len).sum();
+    let mut xy = Vec::with_capacity(2 * n);
+    let mut codes = Vec::with_capacity(n);
+    for (v, c) in out.vertices.iter().zip(&out.codes) {
+        xy.extend(v.iter().flat_map(|&(x, y)| [x, y]));
+        codes.extend_from_slice(c);
+    }
+    Joined { n, xy, codes, polygons: out.vertices.len() }
+}
+
+fn joined_to_python<'py>(py: Python<'py>, j: Joined) -> PyResult<Option<Bound<'py, PyTuple>>> {
+    if j.polygons == 0 {
+        return Ok(None);
+    }
+    let v = PyArray1::from_vec(py, j.xy).reshape([j.n, 2])?;
+    let c = PyArray1::from_vec(py, j.codes);
+    Ok(Some(PyTuple::new(py, [v.into_any(), c.into_any()])?))
+}
+
+/// `f(generator, level)` for each level, in order, with copies of the
+/// generator on several threads (each thread takes every n-th level).
+fn for_levels<L: Sync, T: Send>(gen: &Mpl2014, levels: &[L], f: impl Fn(&mut Mpl2014, &L) -> T + Sync) -> Vec<T> {
+    let threads = crate::backend::renderer_agg::collection_threads().min(levels.len());
+    if threads < 2 {
+        let mut g = gen.clone();
+        return levels.iter().map(|l| f(&mut g, l)).collect();
+    }
+    let mut outs: Vec<Option<T>> = (0..levels.len()).map(|_| None).collect();
+    std::thread::scope(|s| {
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let f = &f;
+                s.spawn(move || {
+                    let mut g = gen.clone();
+                    (t..levels.len()).step_by(threads).map(|i| (i, f(&mut g, &levels[i]))).collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        for h in handles {
+            for (i, o) in h.join().expect("contour thread") {
+                outs[i] = Some(o);
+            }
+        }
+    });
+    outs.into_iter().map(|o| o.unwrap()).collect()
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
