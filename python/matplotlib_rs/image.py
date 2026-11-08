@@ -12,29 +12,10 @@ import warnings
 import numpy as np
 import sys
 
-
-try:
-    import PIL
-except ImportError:  # Pillow is optional: PNG files are read and written natively
-    PIL = None
-
-
-def _pil_getattr(name):
-    # matplotlib imports PIL.Image and PIL.PngImagePlugin when imported, so
-    # scripts may use them after a bare ``import PIL``; they are imported
-    # on first access here instead (PEP 562), which keeps startup fast.
-    if name in ("Image", "PngImagePlugin"):
-        import PIL.Image
-        import PIL.PngImagePlugin
-        return getattr(PIL, name)
-    raise AttributeError(f"module 'PIL' has no attribute {name!r}")
-
-
-if PIL is not None and not hasattr(PIL, "__getattr__"):
-    PIL.__getattr__ = _pil_getattr
-
+# Pillow is never imported: image files are read and written by the Rust
+# core (matplotlib_rs._imageio); PIL images passed in are still accepted.
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, _colormap, _png, cbook
+from matplotlib_rs import _api, _colormap, _imageio, _png, cbook
 # For clarity, names from _image are given explicitly in this module
 from matplotlib_rs import _image
 # For user convenience, the names from _image are also imported into
@@ -715,10 +696,7 @@ class _ImageBase(mcolorizer.ColorizingArtist):
         """Write the image to png file *fname*."""
         im = self.to_rgba(self._A[::-1] if self.origin == 'lower' else self._A,
                           bytes=True, norm=True)
-        if PIL is None:
-            _png.write(fname, im)
-        else:
-            PIL.Image.fromarray(im).save(fname, format="png")
+        _png.write(fname, im)
 
     @staticmethod
     def _normalize_image_array(A):
@@ -763,7 +741,8 @@ class _ImageBase(mcolorizer.ColorizingArtist):
         ----------
         A : array-like or `PIL.Image.Image`
         """
-        if 'PIL.Image' in sys.modules and isinstance(A, PIL.Image.Image):
+        pil_image = sys.modules.get('PIL.Image')
+        if pil_image is not None and isinstance(A, pil_image.Image):
             A = pil_to_array(A)  # Needed e.g. to apply png palette.
         self._A = self._normalize_image_array(A)
         self._imcache = None
@@ -1634,27 +1613,13 @@ def imread(fname, format=None):
             ext = 'png'
     else:
         ext = format
-    if PIL is None:
-        if ext != 'png':
-            _png.require_pil(f"Reading {ext!r} images")
-        if isinstance(fname, str) and len(parse.urlparse(fname).scheme) > 1:
-            raise ValueError(
-                "Please open the URL for reading and pass the result to imread, e.g. "
-                "with ``imread(urllib.request.urlopen(url))``.")
-        return _png.read(fname)
-    img_open = (
-        PIL.PngImagePlugin.PngImageFile if ext == 'png' else PIL.Image.open)
     if isinstance(fname, str) and len(parse.urlparse(fname).scheme) > 1:
-        # Pillow doesn't handle URLs directly.
         raise ValueError(
-            "Please open the URL for reading and pass the "
-            "result to Pillow, e.g. with "
-            "``np.array(PIL.Image.open(urllib.request.urlopen(url)))``."
-            )
-    with img_open(fname) as image:
-        return (_pil_png_to_float_array(image)
-                if isinstance(image, PIL.PngImagePlugin.PngImageFile) else
-                pil_to_array(image))
+            "Please open the URL for reading and pass the result to imread, e.g. "
+            "with ``imread(urllib.request.urlopen(url))``.")
+    # PNG files as 0-1 floats, JPEG, TIFF, GIF and WebP files as Pillow's
+    # pil_to_array returns them; all decoded by the Rust core.
+    return _imageio.read(fname, ext)
 
 
 def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
@@ -1708,6 +1673,10 @@ def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
         Keyword arguments passed to `PIL.Image.Image.save`.  If the 'pnginfo'
         key is present, it completely overrides *metadata*, including the
         default 'Software' key.
+
+        matplotlib_rs writes every format with the Rust core instead (Pillow
+        is not used); the options it supports for each format, with Pillow's
+        meaning, are listed in `matplotlib_rs._imageio`.
     """
     from matplotlib_rs.figure import Figure
 
@@ -1747,58 +1716,20 @@ def imsave(fname, arr, vmin=None, vmax=None, cmap=None, format=None,
             sm = mcolorizer.Colorizer(cmap=cmap)
             sm.set_clim(vmin, vmax)
             rgba = sm.to_rgba(arr, bytes=True)
-        if pil_kwargs is None:
-            pil_kwargs = {}
-        else:
-            # we modify this below, so make a copy (don't modify caller's dict)
-            pil_kwargs = pil_kwargs.copy()
-        pil_shape = (rgba.shape[1], rgba.shape[0])
-        rgba = np.require(rgba, requirements='C')
-        if PIL is None:
-            if format != "png" or pil_kwargs:
-                _png.require_pil(f"Saving {format!r} images" if format != "png"
-                                 else "pil_kwargs")
-            metadata = {
-                "Software": (f"Matplotlib version{mpl.__version__}, "
-                             f"https://matplotlib.org/"),
-                **(metadata if metadata is not None else {}),
-            }
-            _png.write(fname, np.asarray(rgba), dpi,
-                       [(k, v) for k, v in metadata.items() if v is not None])
-            return
-        image = PIL.Image.frombuffer(
-            "RGBA", pil_shape, rgba, "raw", "RGBA", 0, 1)
-        if format == "png":
-            # Only use the metadata kwarg if pnginfo is not set, because the
-            # semantics of duplicate keys in pnginfo is unclear.
-            if "pnginfo" in pil_kwargs:
-                if metadata:
-                    _api.warn_external("'metadata' is overridden by the "
-                                       "'pnginfo' entry in 'pil_kwargs'.")
-            else:
-                metadata = {
-                    "Software": (f"Matplotlib version{mpl.__version__}, "
-                                 f"https://matplotlib.org/"),
-                    **(metadata if metadata is not None else {}),
-                }
-                pil_kwargs["pnginfo"] = pnginfo = PIL.PngImagePlugin.PngInfo()
-                for k, v in metadata.items():
-                    if v is not None:
-                        pnginfo.add_text(k, v)
-        elif metadata is not None:
-            raise ValueError(f"metadata not supported for format {format!r}")
-        if format in ["jpg", "jpeg"]:
-            format = "jpeg"  # Pillow doesn't recognize "jpg".
+        fmt = _imageio.canonical_format(format)
+        if fmt is None:
+            raise ValueError(
+                f"Format {format!r} is not supported (matplotlib_rs writes png, jpg, "
+                f"tiff, gif, webp and avif images, and pdf, ps, eps and svg files)")
+        background = None
+        if fmt == "jpeg":
             facecolor = mpl.rcParams["savefig.facecolor"]
             if cbook._str_equal(facecolor, "auto"):
                 facecolor = mpl.rcParams["figure.facecolor"]
-            color = tuple(int(x * 255) for x in mcolors.to_rgb(facecolor))
-            background = PIL.Image.new("RGB", pil_shape, color)
-            background.paste(image, image)
-            image = background
-        pil_kwargs.setdefault("format", format)
-        pil_kwargs.setdefault("dpi", (dpi, dpi))
-        image.save(fname, **pil_kwargs)
+            background = tuple(int(x * 255) for x in mcolors.to_rgb(facecolor))
+        # Written by the Rust core, with Pillow's options (see _imageio).
+        _imageio.save(fname, np.require(rgba, requirements='C'), fmt, dpi=dpi,
+                      metadata=metadata, pil_kwargs=pil_kwargs, background=background)
 
 
 def pil_to_array(pilImage):

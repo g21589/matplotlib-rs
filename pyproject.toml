@@ -10,18 +10,17 @@ readme = "README.md"
 requires-python = ">=3.10"
 # NumPy is the only run-time dependency: cycler, pyparsing and python-dateutil
 # are vendored (matplotlib_rs._vendor); constrained layout (kiwi), the default
-# contour algorithm (mpl2014) and PNG input/output are built into the Rust core.
+# contour algorithm (mpl2014) and image file input/output (PNG, JPEG, TIFF, GIF,
+# WebP, AVIF; Pillow is never used) are built into the Rust core.
 dependencies = [
     "numpy>=1.25",
 ]
 license = { text = "PSF-2.0" }
 
 [project.optional-dependencies]
-# Used when installed: Pillow for JPEG/TIFF/WebP/GIF/AVIF files, pil_kwargs and
-# PillowWriter; fontTools for Type 42 fonts in PDF/PS; ContourPy for the
+# Used when installed: fontTools for Type 42 fonts in PDF/PS; ContourPy for the
 # non-default contour algorithms (and instead of the built-in mpl2014 port).
 full = [
-    "pillow>=9",
     "fonttools>=4.28.2",
     "contourpy>=1.0.1",
 ]

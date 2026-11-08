@@ -12,12 +12,11 @@ Parts of this file are from matplotlib 3.11 (see licenses/LICENSE_MATPLOTLIB).
 from contextlib import contextmanager, nullcontext
 import io
 import math
-import os
 
 import numpy as np
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, cbook, _mplrs
+from matplotlib_rs import _api, cbook, _mplrs, _png
 from matplotlib_rs.backend_bases import (
     _Backend, FigureCanvasBase, FigureManagerBase, RendererBase)
 from matplotlib_rs.font_manager import fontManager as _fontManager, get_font
@@ -317,6 +316,11 @@ class RendererAgg(RendererBase):
     def buffer_rgba(self):
         return memoryview(self._renderer.buffer_rgba())
 
+    def _encode_png(self, dpi, text, level, strategy):
+        """The PNG file of the buffer, encoded in place (see `._png.encode`)."""
+        return self._renderer.encode_png(
+            (float(dpi[0]), float(dpi[1])), text, level, strategy)
+
     def tostring_argb(self):
         return np.asarray(self._renderer.buffer_rgba()).take([3, 0, 1, 2], axis=2).tobytes()
 
@@ -467,27 +471,39 @@ class FigureCanvasAgg(FigureCanvasBase):
         """
         Write the figure to a PNG file.
 
-        The pixels are encoded by the Rust core unless *pil_kwargs* are given.
+        Parameters
+        ----------
+        filename_or_obj : str or path-like or file-like
+            The file to write to.
+
+        metadata : dict, optional
+            Metadata in the PNG file as key-value pairs of bytes or latin-1
+            encodable strings.  According to the PNG specification, keys must
+            be shorter than 79 chars.  The default ``"Software"`` key can be
+            removed by setting it to None.
+
+        pil_kwargs : dict, optional
+            Keyword arguments with the meaning of `PIL.Image.Image.save`'s;
+            see `matplotlib_rs._imageio` for the supported ones (``pnginfo``
+            may be a Pillow ``PngInfo``).
+
+        Notes
+        -----
+        The pixels are encoded by the Rust core in place, on several threads,
+        at zlib level 6 by default (as Pillow); Pillow is not used.
         """
-        if pil_kwargs is not None:
+        options = _png.native_options(pil_kwargs)
+        if options is None:
             return self._print_pil(filename_or_obj, "png", pil_kwargs, metadata)
+        level, strategy, dpi = options
         FigureCanvasAgg.draw(self)
-        meta = {"Software": f"Matplotlib version{mpl.__version__}, https://matplotlib.org/",
-                **(metadata or {})}
-        items = []
-        for k, v in meta.items():
-            if v is None:
-                continue
-            if isinstance(v, bytes):
-                v = v.decode("latin-1")
-            items.append((str(k), str(v)))
-        rgba = np.asarray(self.renderer.buffer_rgba())
-        data = _mplrs.encode_png(rgba, float(self.figure.dpi), items, 1)
-        if isinstance(filename_or_obj, (str, os.PathLike)):
-            with open(filename_or_obj, "wb") as fh:
-                fh.write(data)
-        else:
-            filename_or_obj.write(data)
+        text = _png.text_chunks({
+            "Software": f"Matplotlib version{mpl.__version__}, https://matplotlib.org/",
+            **(metadata or {})})
+        if dpi is None:
+            dpi = (self.figure.dpi, self.figure.dpi)
+        data = self.renderer._encode_png(dpi, text, level, strategy)
+        _png.write_bytes(filename_or_obj, data)
 
     def print_to_buffer(self):
         FigureCanvasAgg.draw(self)
@@ -516,12 +532,6 @@ class FigureCanvasAgg(FigureCanvasBase):
         self._print_pil(filename_or_obj, "webp", pil_kwargs, metadata)
 
     def print_avif(self, filename_or_obj, *, metadata=None, pil_kwargs=None):
-        from PIL import features
-        if not features.check("avif"):
-            raise RuntimeError(
-                "The installed pillow version does not support avif. Full "
-                "avif support has been added in pillow 11.3."
-            )
         self._print_pil(filename_or_obj, "avif", pil_kwargs, metadata)
 
 

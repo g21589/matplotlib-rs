@@ -970,13 +970,9 @@ class RendererSVG(RendererBase):
 
         attrib = {}
         oid = gc.get_gid()
-        Image = _png.pil_image()
         if mpl.rcParams['svg.image_inline']:
             buf = BytesIO()
-            if Image is None:
-                buf.write(_png.encode(im))
-            else:
-                Image.fromarray(im).save(buf, format="png")
+            buf.write(_png.encode(im))
             oid = oid or self._make_id('image', buf.getvalue())
             attrib['xlink:href'] = (
                 "data:image/png;base64,\n" +
@@ -987,10 +983,7 @@ class RendererSVG(RendererBase):
                                  "writing SVG to an in-memory buffer")
             filename = f'{self.basename}.image{next(self._image_counter)}.png'
             _log.info('Writing image file for inclusion: %s', filename)
-            if Image is None:
-                _png.write(filename, im)
-            else:
-                Image.fromarray(im).save(filename)
+            _png.write(filename, im)
             oid = oid or 'Im_' + self._make_id('image', filename)
             attrib['xlink:href'] = filename
         attrib['id'] = oid

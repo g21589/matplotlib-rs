@@ -8,7 +8,7 @@ it saves must be pixel-identical.  Exit status 1 if any case differs.
 COMPARE_MPL_PYTHON and COMPARE_RS_PYTHON select the interpreters of the two
 sides (default: this one), e.g. matplotlib 3.11.2 on Python 3.12 against
 matplotlib_rs on Python 3.10 with NumPy as its only installed package.
-Without Pillow, matplotlib_rs encodes embedded raster images itself; with
+matplotlib_rs encodes embedded raster images itself (never with Pillow); with
 COMPARE_DECODE_IMAGES=1, SVG/PDF files that differ are compared again with
 their images decoded to pixels (see normalize.py), and all other content
 must still be identical.

@@ -664,11 +664,7 @@ class RendererPgf(RendererBase):
         # save the images to png files
         path = pathlib.Path(self.fh.name)
         fname_img = "%s-img%d.png" % (path.stem, self.image_counter)
-        Image = _png.pil_image()
-        if Image is None:
-            _png.write(path.parent / fname_img, im[::-1])
-        else:
-            Image.fromarray(im[::-1]).save(path.parent / fname_img)
+        _png.write(path.parent / fname_img, im[::-1])
         self.image_counter += 1
 
         # reference the image in the pgf picture

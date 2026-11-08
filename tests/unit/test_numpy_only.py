@@ -76,7 +76,6 @@ class NumpyOnlyTests(unittest.TestCase):
             import matplotlib.dates, matplotlib.contour, matplotlib.tri, matplotlib.mathtext
             from matplotlib_rs import _contour, _kiwi, _layoutgrid, _png
             assert _layoutgrid.kiwi is _kiwi and _contour._contourpy("mpl2014") is None
-            assert _png.pil_image() is None
             # Scripts written for matplotlib can import its pure-Python dependencies.
             from cycler import cycler
             import dateutil.parser
@@ -98,19 +97,32 @@ class NumpyOnlyTests(unittest.TestCase):
             import matplotlib_rs.pyplot as plt
             fig, ax = plt.subplots()
             ax.text(0.5, 0.5, "x")
-            for fmt, needs in [("jpg", "Pillow"), ("tiff", "Pillow"), ("webp", "Pillow")]:
-                try:
-                    fig.savefig(io.BytesIO(), format=fmt)
-                except ImportError as e:
-                    assert needs in str(e), e
-                else:
-                    raise AssertionError(fmt)
+            # Every raster format is written and read by the Rust core.
+            for fmt in ["png", "jpg", "tiff", "webp", "gif", "avif"]:
+                buf = io.BytesIO()
+                fig.savefig(buf, format=fmt)
+                if fmt != "avif":
+                    buf.seek(0)
+                    a = plt.imread(buf, format=fmt)
+                    assert a.shape[:2] == (480, 640), (fmt, a.shape)
+            for kw in [{"optimize": True}, {"compress_level": 1, "dpi": (50, 50)},
+                       {"icc_profile": b"profile"}]:
+                fig.savefig(io.BytesIO(), format="png", pil_kwargs=kw)
+                plt.imsave(io.BytesIO(), [[0, 1]], format="png", pil_kwargs=kw)
+            fig.savefig(io.BytesIO(), format="jpg", pil_kwargs={"quality": 90})
             try:
-                fig.savefig(io.BytesIO(), format="png", pil_kwargs={"optimize": True})
-            except ImportError as e:
-                assert "Pillow" in str(e)
+                fig.savefig(io.BytesIO(), format="png", pil_kwargs={"bits": 4})
+            except ValueError as e:
+                assert "bits" in str(e)
             else:
                 raise AssertionError("pil_kwargs")
+            from matplotlib_rs.animation import FuncAnimation, PillowWriter
+            import tempfile, os
+            with tempfile.TemporaryDirectory() as d:
+                anim = FuncAnimation(fig, lambda i: None, frames=2)
+                for ext in ("gif", "png", "webp"):
+                    anim.save(os.path.join(d, "a." + ext), writer=PillowWriter(fps=4))
+            assert "PIL" not in sys.modules
             for key in ("pdf.fonttype", "ps.fonttype"):
                 with plt.rc_context({key: 42}):
                     try:

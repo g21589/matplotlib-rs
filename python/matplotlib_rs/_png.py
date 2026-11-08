@@ -1,12 +1,15 @@
 """
-PNG reading and writing without Pillow.
+PNG reading and writing in the Rust core (Pillow is never used).
 
-Pillow is optional for matplotlib_rs: when it is not installed, PNG files are
-decoded and encoded by the Rust core.  `read` returns the same arrays as
-matplotlib's Pillow-based ``imread`` (``_pil_png_to_float_array``): float32
-values in [0, 1]; grayscale images are 2D, palette and grayscale+alpha
-images are expanded to RGBA, and 16-bit color samples are truncated to their
-most significant byte as Pillow does.
+Rows are filtered with libpng's (and Pillow's) heuristic and deflated at zlib
+level 6 by default, as Pillow does, in strips compressed on several threads
+(``MPLRS_THREADS``).  `native_options` reads the compression options of
+``pil_kwargs`` with Pillow's meaning; `._imageio` handles the others.
+
+`read` returns the same arrays as matplotlib's Pillow-based ``imread``
+(``_pil_png_to_float_array``): float32 values in [0, 1]; grayscale images are
+2D, palette and grayscale+alpha images are expanded to RGBA, and 16-bit color
+samples are truncated to their most significant byte as Pillow does.
 """
 
 import os
@@ -15,43 +18,103 @@ import numpy as np
 
 from . import _mplrs
 
+#: The zlib level of Pillow's PNG writer (``compress_level=-1``).
+DEFAULT_LEVEL = 6
 
-def pil_image():
-    """``PIL.Image`` if Pillow is installed, else None."""
-    try:
-        import PIL.Image
-    except ImportError:
+#: The ``pil_kwargs`` of a PNG save that `native_options` reads, with
+#: Pillow's meaning: ``optimize`` (zlib level 9), ``compress_level`` (0-9,
+#: -1 for the default), ``compress_type`` (the zlib strategy, 0-4, -1 for the
+#: default), ``dpi`` (an (x, y) pair for the pHYs chunk) and ``format``.
+NATIVE_PIL_KWARGS = frozenset({"optimize", "compress_level", "compress_type", "dpi", "format"})
+
+
+def native_options(pil_kwargs):
+    """
+    The zlib ``(level, strategy)`` and pHYs ``dpi`` (an (x, y) pair, or None
+    if not given) of a PNG save with *pil_kwargs* (a dict or None), or None if
+    *pil_kwargs* has other options (see `._imageio`).
+    """
+    pil_kwargs = pil_kwargs or {}
+    if not NATIVE_PIL_KWARGS.issuperset(pil_kwargs):
         return None
-    return PIL.Image
+    if str(pil_kwargs.get("format", "png")).lower() != "png":
+        return None
+    level = pil_kwargs.get("compress_level", -1)
+    strategy = pil_kwargs.get("compress_type", -1)
+    if pil_kwargs.get("optimize", False):
+        level = 9  # Pillow's ZipEncoder: optimize means Z_BEST_COMPRESSION
+    if not isinstance(level, (int, np.integer)) or not -1 <= level <= 9:
+        raise ValueError(f"compress_level must be an integer from -1 to 9, not {level!r}")
+    if not isinstance(strategy, (int, np.integer)) or not -1 <= strategy <= 4:
+        raise ValueError(f"compress_type must be an integer from -1 to 4, not {strategy!r}")
+    dpi = pil_kwargs.get("dpi")
+    if dpi:
+        dpi = (float(dpi[0]), float(dpi[1]))
+    else:
+        dpi = None
+    return (DEFAULT_LEVEL if level == -1 else int(level),
+            0 if strategy == -1 else int(strategy), dpi)
 
 
-def require_pil(what):
-    """``PIL.Image``, or an ImportError naming *what* needs Pillow."""
-    image = pil_image()
-    if image is None:
-        raise ImportError(
-            f"{what} requires Pillow (pip install pillow); matplotlib_rs reads and "
-            f"writes PNG files without it")
-    return image
+def text_chunks(metadata):
+    """
+    The (keyword, text) pairs of the text chunks Pillow's ``PngInfo.add_text``
+    writes for the items of the dict *metadata*, skipping None values; bytes
+    are Latin-1.  Keywords must be Latin-1; texts that are not are written as
+    UTF-8 iTXt chunks.
+    """
+    items = []
+    for key, value in metadata.items():
+        if value is None:
+            continue
+        if isinstance(key, bytes):
+            key = key.decode("latin-1")
+        else:
+            key = str(key)
+            key.encode("latin-1", "strict")  # raises as PngInfo.add_text does
+        if isinstance(value, bytes):
+            value = value.decode("latin-1")
+        items.append((key, str(value)))
+    return items
 
 
-def encode(rgba, dpi=0, text=()):
-    """PNG file contents of the (h, w, 4) uint8 array *rgba*, with a pHYs
-    chunk if *dpi* > 0 and the tEXt chunks *text* (pairs of str)."""
-    rgba = np.require(np.asarray(rgba, dtype=np.uint8), requirements="C")
-    if rgba.ndim != 3 or rgba.shape[2] != 4:
+def _dpi_pair(dpi):
+    if dpi is None:
+        return None
+    if np.ndim(dpi) == 0:
+        return None if dpi <= 0 else (float(dpi), float(dpi))
+    return (float(dpi[0]), float(dpi[1]))
+
+
+def encode(rgba, dpi=None, text=(), level=DEFAULT_LEVEL, strategy=0):
+    """
+    PNG file contents of the (h, w, 4) uint8 array *rgba* (or an (h, w) gray,
+    (h, w, 2) gray + alpha or (h, w, 3) RGB array), with a pHYs chunk if *dpi*
+    (a number > 0 or an (x, y) pair) is given, the text chunks *text* (pairs
+    of str, as from `text_chunks`) and the zlib *level* and *strategy*.
+    """
+    rgba = np.asarray(rgba, dtype=np.uint8)
+    if not (rgba.ndim == 2 or rgba.ndim == 3 and 1 <= rgba.shape[2] <= 4):
         raise ValueError(f"expected an RGBA array, not one of shape {rgba.shape}")
-    return _mplrs.encode_png(rgba, float(dpi), [(str(k), str(v)) for k, v in text], 6)
+    return _mplrs.encode_png(rgba, _dpi_pair(dpi), [(str(k), str(v)) for k, v in text],
+                             level, strategy)
 
 
-def write(fname, rgba, dpi=0, text=()):
-    """Write `encode` (*rgba*, *dpi*, *text*) to a path or binary file."""
-    data = encode(rgba, dpi, text)
-    if isinstance(fname, (str, os.PathLike)):
+def write_bytes(fname, data):
+    """Write *data* to the path or binary file *fname* (as ``PIL.Image.save``)."""
+    if isinstance(fname, (str, bytes, os.PathLike)):
         with open(fname, "wb") as fh:
             fh.write(data)
     else:
         fname.write(data)
+        if hasattr(fname, "flush"):
+            fname.flush()
+
+
+def write(fname, rgba, dpi=None, text=(), level=DEFAULT_LEVEL, strategy=0):
+    """Write `encode` (*rgba*, *dpi*, *text*, *level*, *strategy*) to a path or
+    binary file."""
+    write_bytes(fname, encode(rgba, dpi, text, level, strategy))
 
 
 def _unpack(samples, height, width, channels, depth):

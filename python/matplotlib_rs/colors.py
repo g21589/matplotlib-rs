@@ -710,19 +710,10 @@ def _create_lookup_table(N, data, gamma=1.0):
 
 
 def _save_repr_png(fh, pixels, title, author):
-    """Write the PNG of a colormap's ``_repr_png_`` (with Pillow if installed)."""
-    text = [('Title', title), ('Description', title), ('Author', author),
-            ('Software', author)]
-    try:
-        from PIL import Image, PngImagePlugin
-    except ImportError:
-        from matplotlib_rs import _png
-        _png.write(fh, pixels, text=text)
-        return
-    pnginfo = PngImagePlugin.PngInfo()
-    for k, v in text:
-        pnginfo.add_text(k, v)
-    Image.fromarray(pixels).save(fh, format='png', pnginfo=pnginfo)
+    """Write the PNG of a colormap's ``_repr_png_`` (by the Rust core)."""
+    from matplotlib_rs import _png
+    _png.write(fh, pixels, text=_png.text_chunks({
+        'Title': title, 'Description': title, 'Author': author, 'Software': author}))
 
 
 class Colormap:

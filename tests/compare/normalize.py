@@ -1,6 +1,6 @@
 """Compare SVG/PDF files independently of how their raster images are encoded.
 
-Without Pillow, matplotlib_rs encodes embedded images itself: the pixels are
+matplotlib_rs encodes embedded images itself (it never uses Pillow): the pixels are
 the same, but the PNG/deflate bytes (and PDF palette conversion) differ from
 Pillow's.  These functions decode every embedded image to its RGB(A) pixels
 and decompress every PDF stream, leaving all other content byte for byte, so

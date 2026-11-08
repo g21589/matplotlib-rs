@@ -59,6 +59,10 @@ def main(outdir):
         for ext in ("png", "svg", "pdf", "eps"):
             fig.savefig(out / f"{name}.{ext}", metadata={"CreationDate": None}
                         if ext == "pdf" else None)
+        if name == "overview":
+            for ext in ("jpg", "tif", "webp", "gif"):
+                fig.savefig(out / f"{name}.{ext}")
+                np.save(out / f"imread_{ext}.npy", plt.imread(out / f"{name}.{ext}"))
         plt.close(fig)
     image = plt.imread(out / "overview.png")
     plt.imsave(out / "imsave.png", image[::4, ::4])
