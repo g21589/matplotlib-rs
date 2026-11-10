@@ -1208,6 +1208,106 @@ def _gc_paused(func):
     return wrapper
 
 
+def _fills_when_read(cls):
+    """
+    Class decorator for a list whose items are made when they are first
+    needed: every way to read or change the list calls ``cls._fill`` first,
+    except ``len`` (and what the class defines itself).
+    """
+    def filled(name):
+        method = getattr(list, name)
+
+        @functools.wraps(method)
+        def wrapper(self, *args, **kwargs):
+            self._fill()
+            return method(self, *args, **kwargs)
+
+        return wrapper
+
+    def filled_both(name):
+        # (list's own methods read the items of another list directly)
+        method = getattr(list, name)
+
+        @functools.wraps(method)
+        def wrapper(self, other):
+            self._fill()
+            fill = getattr(other, "_fill", None)
+            if fill is not None:
+                fill()
+            return method(self, other)
+
+        return wrapper
+
+    def __radd__(self, other):
+        # (``[...] + self``, which list would do by reading the items directly)
+        self._fill()
+        if isinstance(other, list):
+            return other + list.copy(self)
+        return NotImplemented
+
+    for name in ("__iter__", "__getitem__", "__setitem__", "__delitem__", "__contains__",
+                 "__reversed__", "__mul__", "__rmul__", "__imul__", "__repr__",
+                 "__sizeof__", "append", "extend", "insert", "remove", "pop", "clear",
+                 "index", "count", "sort", "reverse", "copy"):
+        if name not in cls.__dict__:
+            setattr(cls, name, filled(name))
+    for name in ("__eq__", "__ne__", "__lt__", "__le__", "__gt__", "__ge__", "__add__", "__iadd__"):
+        if name not in cls.__dict__:
+            setattr(cls, name, filled_both(name))
+    if "__radd__" not in cls.__dict__:
+        cls.__radd__ = __radd__
+    return cls
+
+
+@_fills_when_read
+class _BoxplotStats(list):
+    """
+    The statistics of `boxplot_stats` for a regular float array, kept as
+    arrays: ``columns[key][i]`` is ``self[i][key]``, the fliers of box *i* are
+    the next ``counts[i]`` of ``fliers`` and its label is ``labels[i]``
+    (*labels* may be None, as its items).
+
+    The dicts are made when the list is first read; the arrays are dropped
+    then (``columns`` is None), as the dicts may be changed.  Only
+    `.Axes.boxplot` gets such a list, which it passes on to `.Axes.bxp`.
+    """
+
+    __slots__ = ("columns", "fliers", "counts", "labels", "_n")
+
+    def __init__(self, columns, fliers, counts, labels):
+        super().__init__()
+        self.columns = columns
+        self.fliers = fliers
+        self.counts = counts
+        self.labels = labels
+        self._n = len(counts)
+
+    def __len__(self):
+        return self._n if self.columns is not None else list.__len__(self)
+
+    def __reduce_ex__(self, protocol):
+        self._fill()
+        return (list, (list(self),))
+
+    def _fill(self):
+        columns = self.columns
+        if columns is None:
+            return
+        self.columns = None
+        labels = self.labels
+        fliers = [f.copy() for f in np.split(self.fliers, np.cumsum(self.counts)[:-1])]
+        keys = ('mean', 'iqr', 'cilo', 'cihi', 'whishi', 'whislo', 'fliers', 'q1', 'med', 'q3')
+        values = [fliers if key == 'fliers' else columns[key] for key in keys]
+        result = []
+        for i, stat in enumerate(zip(*values)):
+            stats = {}
+            if labels is not None and labels[i] is not None:
+                stats['label'] = labels[i]
+            stats.update(zip(keys, stat))
+            result.append(stats)
+        list.extend(self, result)
+
+
 def _boxplot_stats_dense(X, whis, labels):
     """The regular finite float64 case, with the same per-column arithmetic.
 
@@ -1237,16 +1337,21 @@ def _boxplot_stats_dense(X, whis, labels):
     order = np.lexsort((cols, high[rows, cols], rows))
     values = columns[rows[order], cols[order]]
     counts = np.bincount(rows, minlength=ncols)
-    fliers = [f.copy() for f in np.split(values, np.cumsum(counts)[:-1])]
-    result = []
-    for i, stat in enumerate(zip(means, iqr, cilo, cihi, hi, lo, fliers, q1, med, q3)):
-        stats = {}
-        if labels is not None and labels[i] is not None:
-            stats['label'] = labels[i]
-        stats.update(zip(('mean', 'iqr', 'cilo', 'cihi', 'whishi', 'whislo', 'fliers',
-                          'q1', 'med', 'q3'), stat))
-        result.append(stats)
-    return result
+    return _BoxplotStats(
+        dict(mean=means, iqr=iqr, cilo=cilo, cihi=cihi, whishi=hi, whislo=lo,
+             q1=q1, med=med, q3=q3),
+        values, counts, labels)
+
+
+def _boxplot_stats(X, whis=1.5, bootstrap=None, labels=None, autorange=False):
+    """`boxplot_stats`, as a `_BoxplotStats` where it can be one."""
+    if (type(X) is np.ndarray and X.ndim == 2 and X.dtype == np.float64
+            and X.shape[0] and X.shape[1] > 1 and bootstrap is None
+            and not autorange and isinstance(whis, numbers.Real)
+            and np.isfinite(X).all()):
+        return _boxplot_stats_dense(X, whis, labels)
+    return boxplot_stats(X, whis=whis, bootstrap=bootstrap, labels=labels,
+                         autorange=autorange)
 
 
 def boxplot_stats(X, whis=1.5, bootstrap=None, labels=None, autorange=False):
@@ -1332,7 +1437,7 @@ def boxplot_stats(X, whis=1.5, bootstrap=None, labels=None, autorange=False):
             and X.shape[0] and X.shape[1] > 1 and bootstrap is None
             and not autorange and isinstance(whis, numbers.Real)
             and np.isfinite(X).all()):
-        return _boxplot_stats_dense(X, whis, labels)
+        return list(_boxplot_stats_dense(X, whis, labels))
 
     def _bootstrap_median(data, N=5000):
         # determine 95% confidence intervals of the median

@@ -14,6 +14,7 @@ use crate::backend::png_encode;
 use crate::mpl::artist::{shared, Lock, Shared, SpinePosition, TransCtx};
 use crate::mpl::axes::{anchor_coefs, scale_from_name, Aspect, Axes, Child};
 use crate::mpl::axis::{GridKw, TickKw};
+use crate::mpl::batch::{ArtistBatch, Slot, SlotKind};
 use crate::mpl::colors::ColorSpec;
 use crate::mpl::figure::{snapshot_for, DrawSnapshot, FigChild, Figure, LayoutEngine};
 use crate::mpl::fonts::{self, FontProperties, NumOrName};
@@ -1623,8 +1624,118 @@ fn child_from(obj: &Bound<'_, PyAny>) -> PyResult<Child> {
     if let Ok(c) = obj.cast::<super::collections::PyImage>() {
         return Ok(Child::Image(c.borrow().inner.clone()));
     }
+    if let Ok(b) = obj.cast::<PyArtistBatch>() {
+        return Ok(Child::Batch(b.borrow().inner.clone()));
+    }
     // any other object is a Python artist drawn by its own `draw`
     Ok(Child::Ext(super::ext::ext_from(obj)))
+}
+
+/// The handle of a child that is a line or a patch.
+fn child_handle(py: Python<'_>, c: &Child) -> PyResult<Py<PyAny>> {
+    Ok(match c {
+        Child::Line(l) => Py::new(py, PyLine2D { inner: l.clone() })?.into_any(),
+        Child::Patch(p) => Py::new(py, PyPatch { inner: p.clone() })?.into_any(),
+        _ => return err("not a line or a patch"),
+    })
+}
+
+/// Lines and patches kept as arrays (`mpl::batch::ArtistBatch`): one child
+/// of an Axes standing for the artists of a plotting call, in the order
+/// (box 0, slot 0), (box 0, slot 1), ..., (box 1, slot 0), ...
+#[pyclass(name = "ArtistBatch", module = "matplotlib_rs._mplrs")]
+pub struct PyArtistBatch {
+    pub inner: Shared<ArtistBatch>,
+}
+
+#[pymethods]
+impl PyArtistBatch {
+    /// ArtistBatch(n, base, slots): *n* artists per slot, the first of them
+    /// child *base* of the Axes.  Each slot is one of
+    ///
+    /// - ``("lines", line, x, y, auto_label)``: the copies of the handle
+    ///   *line* (as `Line2D.copy_many`) with the rows of the (n, m) arrays;
+    /// - ``("ragged", line, x, y, offsets, auto_label)``: copies (as
+    ///   `Line2D.copy_many_ragged`) with ``x[offsets[i]:offsets[i + 1]]``;
+    /// - ``("patches", patch, verts, codes)``: the copies of the handle
+    ///   *patch* (as `Patch.copy_many_paths`) with the (n, m, 2) vertices.
+    ///
+    /// With *auto_label*, lines are labelled ``_child{index}`` by their index
+    /// among the children.
+    #[new]
+    fn new(n: usize, base: usize, slots: Vec<Bound<'_, PyTuple>>) -> PyResult<Self> {
+        use numpy::{PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3};
+        let bad = || PyValueError::new_err("ArtistBatch: mismatched shapes");
+        let mut out = Vec::with_capacity(slots.len());
+        for t in &slots {
+            let kind: String = t.get_item(0)?.extract()?;
+            out.push(match kind.as_str() {
+                "lines" => {
+                    let style = t.get_item(1)?.cast::<PyLine2D>()?.borrow().inner.lk().clone();
+                    let x: PyReadonlyArray2<'_, f64> = t.get_item(2)?.extract()?;
+                    let y: PyReadonlyArray2<'_, f64> = t.get_item(3)?.extract()?;
+                    let (x, y) = (x.as_array(), y.as_array());
+                    if x.shape() != y.shape() || x.nrows() != n {
+                        return Err(bad());
+                    }
+                    let xy = x.iter().zip(y.iter()).map(|(&a, &b)| [a, b]).collect();
+                    Slot::new(SlotKind::Lines { style, m: x.ncols() }, xy, t.get_item(4)?.extract()?)
+                }
+                "ragged" => {
+                    let style = t.get_item(1)?.cast::<PyLine2D>()?.borrow().inner.lk().clone();
+                    let x: PyReadonlyArray1<'_, f64> = t.get_item(2)?.extract()?;
+                    let y: PyReadonlyArray1<'_, f64> = t.get_item(3)?.extract()?;
+                    let offsets: Vec<usize> = t.get_item(4)?.extract()?;
+                    let (x, y) = (x.as_array(), y.as_array());
+                    if x.len() != y.len()
+                        || offsets.len() != n + 1
+                        || offsets.windows(2).any(|w| w[0] > w[1])
+                        || offsets.last().is_some_and(|&e| e > x.len())
+                    {
+                        return Err(bad());
+                    }
+                    let xy = x.iter().zip(y.iter()).map(|(&a, &b)| [a, b]).collect();
+                    Slot::new(SlotKind::Ragged { style, offsets }, xy, t.get_item(5)?.extract()?)
+                }
+                "patches" => {
+                    let style = t.get_item(1)?.cast::<PyPatch>()?.borrow().lk().clone();
+                    let verts: PyReadonlyArray3<'_, f64> = t.get_item(2)?.extract()?;
+                    let codes: Vec<u8> = t.get_item(3)?.extract()?;
+                    let v = verts.as_array();
+                    if v.shape()[0] != n || v.shape()[1] != codes.len() || v.shape()[2] != 2 {
+                        return Err(bad());
+                    }
+                    let flat: Vec<f64> = v.iter().copied().collect();
+                    let xy = flat.chunks_exact(2).map(|p| [p[0], p[1]]).collect();
+                    let simplify = crate::mpl::lines::simplify_params();
+                    Slot::new(SlotKind::Patches { style, m: codes.len(), codes, simplify }, xy, false)
+                }
+                _ => return err(format!("unknown slot kind {kind}")),
+            });
+        }
+        Ok(PyArtistBatch { inner: shared(ArtistBatch { n, base, slots: out, exploded: false }) })
+    }
+
+    /// The handles of the artists of slot *slot* (independent artists, as
+    /// `copy_many` makes them).  They are not children of the Axes, which
+    /// draws the batch, until `Axes.explode_batch`.
+    fn handles(&self, py: Python<'_>, slot: usize) -> PyResult<Vec<Py<PyAny>>> {
+        let mut b = self.inner.lk();
+        if slot >= b.slots.len() {
+            return err("no such slot");
+        }
+        b.handles(slot).iter().map(|c| child_handle(py, c)).collect()
+    }
+
+    /// Whether the batch was replaced by its artists (`Axes.explode_batch`).
+    #[getter]
+    fn exploded(&self) -> bool {
+        self.inner.lk().exploded
+    }
+
+    fn __len__(&self) -> usize {
+        self.inner.lk().len()
+    }
 }
 
 #[pymethods]
@@ -1695,6 +1806,20 @@ impl PyAxes {
         })
     }
 
+    /// Replace the child *batch* by the handles of its artists (those of
+    /// `ArtistBatch.handles`), from now on drawn one by one.  Returns whether
+    /// the batch was a child.
+    fn explode_batch(&self, batch: &PyArtistBatch) -> PyResult<bool> {
+        let handles = batch.inner.lk().explode();
+        self.with(|a, _| match a.children.iter().position(|c| matches!(c, Child::Batch(b) if Arc::ptr_eq(b, &batch.inner))) {
+            Some(i) => {
+                a.children.splice(i..i + 1, handles);
+                true
+            }
+            None => false,
+        })
+    }
+
     /// Kinds of children in order ("line", "patch", "text", "collection", "image").
     fn children(&self, py: Python<'_>) -> PyResult<Vec<Py<PyAny>>> {
         let ch = self.with(|a, _| a.children.clone())?;
@@ -1706,6 +1831,7 @@ impl PyAxes {
                 Child::Text(t) => Py::new(py, PyText { inner: t })?.into_any(),
                 Child::Collection(c) => Py::new(py, super::collections::PyCollection { inner: c })?.into_any(),
                 Child::Image(c) => Py::new(py, super::collections::PyImage { inner: c })?.into_any(),
+                Child::Batch(b) => Py::new(py, PyArtistBatch { inner: b })?.into_any(),
                 Child::Ext(e) => match super::ext::py_object(&e) {
                     Some(o) => o.clone_ref(py),
                     None => continue,
@@ -2847,6 +2973,7 @@ fn decode_png<'py>(
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyArtistBatch>()?;
     m.add_function(wrap_pyfunction!(decode_png, m)?)?;
     m.add_class::<PyFigure>()?;
     m.add_class::<PyAxes>()?;

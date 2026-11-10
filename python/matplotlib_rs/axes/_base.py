@@ -31,6 +31,7 @@ import matplotlib_rs.table as mtable
 import matplotlib_rs.text as mtext
 import matplotlib_rs.ticker as mticker
 import matplotlib_rs.transforms as mtransforms
+from matplotlib_rs.axes import _base_rs
 
 _log = logging.getLogger(__name__)
 
@@ -1570,8 +1571,11 @@ class _AxesBase(martist.Artist):
             return f'<Axes.ArtistList of {len(self)} {self._prop_name}>'
 
         def __len__(self):
-            return sum(self._type_check(artist)
-                       for artist in self._axes._children)
+            children = self._axes._children
+            count = getattr(children, "_count", None)
+            if count is not None:  # (artists not created yet are counted)
+                return count(self._type_check)
+            return sum(self._type_check(artist) for artist in children)
 
         def __iter__(self):
             for artist in list(self._axes._children):
@@ -2382,6 +2386,8 @@ class _AxesBase(martist.Artist):
         need to be updated, and may not actually be useful for
         anything.
         """
+        if _base_rs._pending_children(self):  # (lines and patches)
+            return True
         return any(isinstance(a, (mcoll.Collection, mimage.AxesImage,
                                   mlines.Line2D, mpatches.Patch))
                    for a in self._children)
@@ -2719,7 +2725,19 @@ class _AxesBase(martist.Artist):
         self.dataLim.set_points(mtransforms.Bbox.null().get_points())
         self.ignore_existing_data_limits = True
 
-        for artist in self._children:
+        # Lines not created yet (and so unchanged) give their points at once.
+        children = self._children
+        for pending in _base_rs._pending_children(self):
+            points = pending.limit_points(visible_only)
+            if points is None:
+                break  # (their artists tell, with the other children)
+        else:
+            children = _base_rs._existing_children(self)
+            for pending in _base_rs._pending_children(self):
+                for points in pending.limit_points(visible_only):
+                    self.update_datalim(points)
+
+        for artist in children:
             if not visible_only or artist.get_visible():
                 if not artist._get_in_autoscale():
                     continue
@@ -3177,19 +3195,23 @@ class _AxesBase(martist.Artist):
             if self._xmargin and scalex and self.get_autoscalex_on():
                 x_sticky = []
                 for ax in x_shared_axes:
-                    for artist in ax._get_data_children():
+                    for artist in ax._get_existing_data_children():
                         sticky_edges = artist._sticky_edges
                         if sticky_edges is not None and sticky_edges.x:
                             x_sticky.extend(sticky_edges.x)
+                    for pending in _base_rs._pending_children(ax):
+                        x_sticky.extend(pending.pending_sticky("x"))
                 if x_sticky:
                     x_stickies = np.sort(x_sticky)
             if self._ymargin and scaley and self.get_autoscaley_on():
                 y_sticky = []
                 for ax in y_shared_axes:
-                    for artist in ax._get_data_children():
+                    for artist in ax._get_existing_data_children():
                         sticky_edges = artist._sticky_edges
                         if sticky_edges is not None and sticky_edges.y:
                             y_sticky.extend(sticky_edges.y)
+                    for pending in _base_rs._pending_children(ax):
+                        y_sticky.extend(pending.pending_sticky("y"))
                 if y_sticky:
                     y_stickies = np.sort(y_sticky)
         if self.get_xscale() == 'log':
@@ -4686,10 +4708,37 @@ class _AxesBase(martist.Artist):
         """
         return [*self._children, *self._axis_map.values()]
 
+    def _get_existing_data_children(self):
+        """
+        `_get_data_children` without the artists that are not created yet
+        (see `._base_rs._Pending`).
+        """
+        if type(self)._get_data_children is not _AxesBase._get_data_children:
+            return self._get_data_children()
+        return [*_base_rs._existing_children(self), *self._axis_map.values()]
+
     def get_children(self):
         # docstring inherited.
         return [
             *self._children,
+            *self.spines.values(),
+            *self._axis_map.values(),
+            self.title, self._left_title, self._right_title,
+            *self.child_axes,
+            *([self.legend_] if self.legend_ is not None else []),
+            self.patch,
+        ]
+
+    def _get_existing_children(self):
+        """
+        `get_children` without the artists that are not created yet (see
+        `._base_rs._Pending`): lines and patches that draw inside the Axes
+        only, with the properties their plotting method gave them.
+        """
+        if type(self).get_children is not _AxesBase.get_children:
+            return self.get_children()
+        return [
+            *_base_rs._existing_children(self),
             *self.spines.values(),
             *self._axis_map.values(),
             self.title, self._left_title, self._right_title,
@@ -4718,7 +4767,8 @@ class _AxesBase(martist.Artist):
         ``artist.set_in_layout(False)``.
         """
 
-        artists = self.get_children()
+        # (artists not created yet are fully clipped to the Axes)
+        artists = self._get_existing_children()
 
         for axis in self._axis_map.values():
             # axis tight bboxes are calculated separately inside

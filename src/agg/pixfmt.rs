@@ -308,7 +308,11 @@ impl PixfmtRgba32 {
     }
 }
 
-impl PixFmt for PixfmtRgba32 {
+/// The plain RGBA32 blender of a type with `width`, `height`, `buf`, `luts`
+/// and `offset(x, y)`.
+macro_rules! impl_rgba32_pixfmt {
+    ($ty:ty) => {
+        impl PixFmt for $ty {
     #[inline(always)]
     fn width(&self) -> u32 {
         self.width
@@ -384,6 +388,49 @@ impl PixFmt for PixfmtRgba32 {
                 }
             }
         }
+    }
+        }
+    };
+}
+
+impl_rgba32_pixfmt!(PixfmtRgba32);
+impl_rgba32_pixfmt!(PixfmtBand<'_>);
+
+/// Some rows of a `PixfmtRgba32` (`PixfmtRgba32::bands`): a renderer whose
+/// clip box is within them blends as it would into the whole image.
+pub struct PixfmtBand<'a> {
+    pub width: u32,
+    /// the height of the whole image
+    pub height: u32,
+    /// the rows `y0..y1` of the image
+    pub y0: i32,
+    pub y1: i32,
+    buf: &'a mut [u8],
+    luts: BlendLuts,
+}
+
+impl PixfmtBand<'_> {
+    #[inline(always)]
+    fn offset(&self, x: i32, y: i32) -> usize {
+        ((y - self.y0) as usize * self.width as usize + x as usize) * 4
+    }
+}
+
+impl PixfmtRgba32 {
+    /// The image as bands of *rows* rows (the last one of what is left),
+    /// which threads can blend into at the same time.
+    pub fn bands(&mut self, rows: usize) -> Vec<PixfmtBand<'_>> {
+        let (width, height) = (self.width, self.height);
+        let rows = rows.max(1);
+        self.buf
+            .chunks_mut((rows * width as usize * 4).max(1))
+            .enumerate()
+            .map(|(k, buf)| {
+                let y0 = (k * rows) as i32;
+                let y1 = y0 + (buf.len() / (width as usize * 4).max(1)) as i32;
+                PixfmtBand { width, height, y0, y1, buf, luts: BlendLuts::default() }
+            })
+            .collect()
     }
 }
 

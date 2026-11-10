@@ -1262,10 +1262,15 @@ class Legend(Artist):
 # `axes.legend`:
 def _get_legend_handles(axs, legend_handler_map=None):
     """Yield artists that can be used as handles in a legend."""
+    from matplotlib_rs.axes._base_rs import _existing_children, _pending_children
     handles_original = []
     for ax in axs:
+        # Of artists not created yet, only those with a label to show are
+        # created (the others would be skipped below).
+        for pending in _pending_children(ax):
+            pending.make_labelled()
         handles_original += [
-            *(a for a in ax._children
+            *(a for a in _existing_children(ax)
               if isinstance(a, (Line2D, Patch, Collection, Text))),
             *ax.containers]
         # support parasite Axes:

@@ -166,7 +166,8 @@ class FigureBase(Artist):
             locator = ax.get_axes_locator()
             ax.apply_aspect(locator(ax, renderer) if locator else None)
 
-            for child in ax.get_children():
+            # (lines and patches not created yet have no aspect)
+            for child in ax._get_existing_children():
                 if hasattr(child, 'apply_aspect'):
                     locator = child.get_axes_locator()
                     child.apply_aspect(

@@ -74,6 +74,50 @@ impl<'a> VertexSource for PathIter<'a> {
     }
 }
 
+/// The vertices (and codes) of a path kept elsewhere, as `PathIter` gives
+/// those of a `MplPath`.
+pub struct SlicePath<'a> {
+    verts: &'a [[f64; 2]],
+    codes: Option<&'a [u8]>,
+    i: usize,
+}
+
+impl<'a> SlicePath<'a> {
+    pub fn new(verts: &'a [[f64; 2]], codes: Option<&'a [u8]>) -> Self {
+        SlicePath { verts, codes, i: 0 }
+    }
+}
+
+impl VertexSource for SlicePath<'_> {
+    #[inline]
+    fn rewind(&mut self, path_id: u32) {
+        self.i = path_id as usize;
+    }
+    #[inline]
+    fn vertex(&mut self, x: &mut f64, y: &mut f64) -> u32 {
+        if self.i >= self.verts.len() {
+            *x = 0.0;
+            *y = 0.0;
+            return PATH_CMD_STOP;
+        }
+        let idx = self.i;
+        self.i += 1;
+        let v = self.verts[idx];
+        *x = v[0];
+        *y = v[1];
+        match self.codes {
+            Some(c) => c[idx] as u32,
+            None => {
+                if idx == 0 {
+                    PATH_CMD_MOVE_TO
+                } else {
+                    PATH_CMD_LINE_TO
+                }
+            }
+        }
+    }
+}
+
 /// The paths of a path collection: a list of paths, or the quadrilaterals
 /// of a mesh generated on the fly.
 pub trait PathList: Sync {
@@ -598,23 +642,22 @@ impl RendererAgg {
         Self::set_clipbox_ras(&mut self.ras, gc.cliprect_d(), self.width, self.height);
         let has_clippath = self.render_clippath(&gc.clippath, gc.snap_mode);
 
-        let mut trans = *trans;
-        trans.multiply(&TransAffine::scaling(1.0, -1.0));
-        trans.multiply(&TransAffine::translation(0.0, self.height as f64));
+        let trans = Self::path_trans(trans, self.height);
         let has_hatch = gc.hatch.as_ref().map(|h| h.path.total_vertices() != 0).unwrap_or(false);
         let clip = matches!(face, Face::None) && !has_hatch;
-        let simplify = path.should_simplify && clip;
-        let mut snapping_linewidth = self.points_to_pixels(gc.linewidth);
-        if gc.color.a == 0.0 {
-            snapping_linewidth = 0.0;
-        }
-
-        let tpath = ConvTransform::new(path.iter(), trans);
-        let nan_removed = PathNanRemover::new(tpath, true, path.has_codes());
-        let clipped = PathClipper::new(nan_removed, clip, self.width as f64, self.height as f64);
-        let snapped = PathSnapper::new(clipped, gc.snap_mode, path.total_vertices(), snapping_linewidth);
-        let simplified = PathSimplifier::new(snapped, simplify, path.simplify_threshold);
-        let curve = ConvCurve::new(simplified);
+        let curve = path_pipeline(
+            path.iter(),
+            path.total_vertices(),
+            path.has_codes(),
+            path.should_simplify,
+            path.simplify_threshold,
+            trans,
+            clip,
+            gc,
+            self.dpi,
+            self.width,
+            self.height,
+        );
         match gc.sketch {
             Some((scale, length, randomness)) => {
                 let mut sketch = Sketch::new(curve, scale, length, randomness);
@@ -624,6 +667,134 @@ impl RendererAgg {
                 let mut curve = curve;
                 self.draw_path_inner(&mut curve, has_clippath, face, gc);
             }
+        }
+    }
+
+    /// The transform `draw_path` applies to the vertices of its path.
+    fn path_trans(trans: &TransAffine, height: u32) -> TransAffine {
+        let mut trans = *trans;
+        trans.multiply(&TransAffine::scaling(1.0, -1.0));
+        trans.multiply(&TransAffine::translation(0.0, height as f64));
+        trans
+    }
+
+    /// The first half of `draw_markers`: the marker rasterized by *ras*
+    /// into scanlines that `stamp_points` renders at each point.
+    #[allow(clippy::too_many_arguments)]
+    fn marker_stamp(
+        ras: &mut RasterizerScanlineAa,
+        gc: &Gc,
+        marker_path: &MplPath,
+        marker_trans: &TransAffine,
+        face: Option<Rgba>,
+        dpi: f64,
+        width: u32,
+        height: u32,
+    ) -> MarkerStamp {
+        let points_to_pixels = |points: f64| points * dpi / 72.0;
+        // Deal with the difference in y-axis direction
+        let mut marker_trans = *marker_trans;
+        marker_trans.multiply(&TransAffine::scaling(1.0, -1.0));
+
+        let mpt = ConvTransform::new(marker_path.iter(), marker_trans);
+        let mpnr = PathNanRemover::new(mpt, true, marker_path.has_codes());
+        let mut marker_path_snapped =
+            PathSnapper::new(mpnr, gc.snap_mode, marker_path.total_vertices(), points_to_pixels(gc.linewidth));
+        if !marker_path_snapped.is_snapping() {
+            // If the path snapper isn't in effect, at least make sure the marker
+            // at (0, 0) is in the center of a pixel.  This, importantly, makes
+            // the circle markers look centered around the point they refer to.
+            marker_path_snapped.source.source.trans.multiply(&TransAffine::translation(0.5, 0.5));
+        }
+        let mut marker_path_curve = ConvCurve::new(marker_path_snapped);
+
+        let face = match face {
+            Some(f) if f.a != 0.0 => Some(f.to_rgba8()),
+            _ => None,
+        };
+
+        // maxim's suggestions for cached scanlines
+        let mut scanlines = ScanlineStorage::default();
+        ras.reset();
+        ras.reset_clipping();
+        let mut marker_size = RectI::new(0x7FFFFFFF, 0x7FFFFFFF, -0x7FFFFFFF, -0x7FFFFFFF);
+
+        let mut sl = ScanlineP8::new();
+        let mut fill = None;
+        if let Some(fc) = face {
+            ras.add_path(&mut marker_path_curve);
+            render_scanlines_to_storage(ras, &mut sl, &mut scanlines);
+            fill = Some((scanlines.clone(), fc));
+            marker_size = RectI::new(scanlines.min_x, scanlines.min_y, scanlines.max_x, scanlines.max_y);
+        }
+
+        {
+            let mut stroke = conv_stroke(&mut marker_path_curve);
+            stroke.generator.width(points_to_pixels(gc.linewidth));
+            stroke.generator.line_cap(gc.cap);
+            stroke.generator.line_join(gc.join);
+            stroke.generator.miter_limit(points_to_pixels(gc.linewidth));
+            ras.reset();
+            ras.add_path(&mut stroke);
+        }
+        render_scanlines_to_storage(ras, &mut sl, &mut scanlines);
+        let stroke = scanlines;
+        marker_size = RectI::new(
+            marker_size.x1.min(stroke.min_x),
+            marker_size.y1.min(stroke.min_y),
+            marker_size.x2.max(stroke.max_x),
+            marker_size.y2.max(stroke.max_y),
+        );
+
+        let clipping_rect = RectD::new(
+            -1.0 - marker_size.x2 as f64,
+            -1.0 - marker_size.y2 as f64,
+            1.0 + width as f64 - marker_size.x1 as f64,
+            1.0 + height as f64 - marker_size.y1 as f64,
+        );
+        let mut rows = (i32::MAX, i32::MIN);
+        for st in fill.iter().map(|f| &f.0).chain([&stroke]) {
+            for sl in &st.scanlines {
+                rows = (rows.0.min(sl.y), rows.1.max(sl.y));
+            }
+        }
+        MarkerStamp { fill, stroke, edge: gc.color.to_rgba8(), clipping_rect, rows }
+    }
+
+    /// The transform `draw_markers` applies to the points of its path.
+    fn marker_points_trans(trans: &TransAffine, height: u32) -> TransAffine {
+        let mut trans = *trans;
+        trans.multiply(&TransAffine::scaling(1.0, -1.0));
+        trans.multiply(&TransAffine::translation(0.5, height as f64 + 0.5));
+        trans
+    }
+
+    /// The second half of `draw_markers`: *stamp* rendered at each of
+    /// *points* (already in the coordinates of `marker_points_trans`).
+    fn stamp_points<V: VertexSource, P: PixFmt>(stamp: &MarkerStamp, points: V, npoints: usize, rb: &mut RendererBase<P>) {
+        Self::stamp_positions(stamp, points, npoints, |dx, dy| stamp.render(dx, dy, rb));
+    }
+
+    /// `position(dx, dy)` for each place `stamp_points` renders *stamp* at.
+    fn stamp_positions<V: VertexSource>(stamp: &MarkerStamp, points: V, npoints: usize, mut position: impl FnMut(i32, i32)) {
+        let pnr = PathNanRemover::new(points, false, false);
+        let psn = PathSnapper::new(pnr, SnapMode::False, npoints, 0.0);
+        let mut path_curve = ConvCurve::new(psn);
+        path_curve.rewind(0);
+        let (mut x, mut y) = (0.0, 0.0);
+        while path_curve.vertex(&mut x, &mut y) != PATH_CMD_STOP {
+            if !(x.is_finite() && y.is_finite()) {
+                continue;
+            }
+            // These values are correctly snapped above -- so we don't want
+            // to round here, we really only want to truncate
+            x = x.floor();
+            y = y.floor();
+            // Cull points outside the boundary of the image.
+            if !stamp.clipping_rect.hit_test(x, y) {
+                continue;
+            }
+            position(iround(x), iround(y));
         }
     }
 
@@ -637,127 +808,24 @@ impl RendererAgg {
         trans: &TransAffine,
         face: Option<Rgba>,
     ) {
-        // Deal with the difference in y-axis direction
-        let mut marker_trans = *marker_trans;
-        marker_trans.multiply(&TransAffine::scaling(1.0, -1.0));
-
-        let mut trans = *trans;
-        trans.multiply(&TransAffine::scaling(1.0, -1.0));
-        trans.multiply(&TransAffine::translation(0.5, self.height as f64 + 0.5));
-
-        let mpt = ConvTransform::new(marker_path.iter(), marker_trans);
-        let mpnr = PathNanRemover::new(mpt, true, marker_path.has_codes());
-        let mut marker_path_snapped =
-            PathSnapper::new(mpnr, gc.snap_mode, marker_path.total_vertices(), self.points_to_pixels(gc.linewidth));
-        if !marker_path_snapped.is_snapping() {
-            // If the path snapper isn't in effect, at least make sure the marker
-            // at (0, 0) is in the center of a pixel.  This, importantly, makes
-            // the circle markers look centered around the point they refer to.
-            marker_path_snapped.source.source.trans.multiply(&TransAffine::translation(0.5, 0.5));
-        }
-        let mut marker_path_curve = ConvCurve::new(marker_path_snapped);
-
-        let pt = ConvTransform::new(path.iter(), trans);
-        let pnr = PathNanRemover::new(pt, false, false);
-        let psn = PathSnapper::new(pnr, SnapMode::False, path.total_vertices(), 0.0);
-        let mut path_curve = ConvCurve::new(psn);
-        path_curve.rewind(0);
-
-        let face = match face {
-            Some(f) if f.a != 0.0 => Some(f.to_rgba8()),
-            _ => None,
-        };
-
-        // maxim's suggestions for cached scanlines
-        let mut scanlines = ScanlineStorage::default();
-        self.ras.reset();
-        self.ras.reset_clipping();
-        let mut marker_size = RectI::new(0x7FFFFFFF, 0x7FFFFFFF, -0x7FFFFFFF, -0x7FFFFFFF);
-
-        let mut sl = ScanlineP8::new();
-        let mut fill_buffer: Option<ScanlineStorage> = None;
-        if face.is_some() {
-            self.ras.add_path(&mut marker_path_curve);
-            render_scanlines_to_storage(&mut self.ras, &mut sl, &mut scanlines);
-            fill_buffer = Some(scanlines.clone());
-            marker_size = RectI::new(scanlines.min_x, scanlines.min_y, scanlines.max_x, scanlines.max_y);
-        }
-
-        {
-            let mut stroke = conv_stroke(&mut marker_path_curve);
-            stroke.generator.width(self.points_to_pixels(gc.linewidth));
-            stroke.generator.line_cap(gc.cap);
-            stroke.generator.line_join(gc.join);
-            stroke.generator.miter_limit(self.points_to_pixels(gc.linewidth));
-            self.ras.reset();
-            self.ras.add_path(&mut stroke);
-        }
-        render_scanlines_to_storage(&mut self.ras, &mut sl, &mut scanlines);
-        let stroke_buffer = scanlines;
-        marker_size = RectI::new(
-            marker_size.x1.min(stroke_buffer.min_x),
-            marker_size.y1.min(stroke_buffer.min_y),
-            marker_size.x2.max(stroke_buffer.max_x),
-            marker_size.y2.max(stroke_buffer.max_y),
-        );
+        let stamp = Self::marker_stamp(&mut self.ras, gc, marker_path, marker_trans, face, self.dpi, self.width, self.height);
+        let points = ConvTransform::new(path.iter(), Self::marker_points_trans(trans, self.height));
 
         self.ras.reset_clipping();
         let has_clippath = self.render_clippath(&gc.clippath, gc.snap_mode);
 
-        let clipping_rect = RectD::new(
-            -1.0 - marker_size.x2 as f64,
-            -1.0 - marker_size.y2 as f64,
-            1.0 + self.width as f64 - marker_size.x1 as f64,
-            1.0 + self.height as f64 - marker_size.y1 as f64,
-        );
-
-        let edge = gc.color.to_rgba8();
         let (w, h) = (self.width, self.height);
-        let cliprect = gc.cliprect_d();
-        let (mut x, mut y) = (0.0, 0.0);
-
         if has_clippath {
             let mask = self.alpha_mask.as_ref().unwrap();
             let pfa = PixfmtAmaskAdaptor::new(&mut self.pixf, mask);
             // A fresh renderer_base over the adaptor: the clip box set on the
             // shared renderer_base does not apply here (as in matplotlib).
             let mut rb = RendererBase::new(pfa);
-            while path_curve.vertex(&mut x, &mut y) != PATH_CMD_STOP {
-                if !(x.is_finite() && y.is_finite()) {
-                    continue;
-                }
-                // These values are correctly snapped above -- so we don't want
-                // to round here, we really only want to truncate
-                x = x.floor();
-                y = y.floor();
-                // Cull points outside the boundary of the image.
-                if !clipping_rect.hit_test(x, y) {
-                    continue;
-                }
-                let (dx, dy) = (iround(x), iround(y));
-                if let (Some(fc), Some(fb)) = (face, &fill_buffer) {
-                    render_storage_aa_solid(fb, dx, dy, &mut rb, &fc);
-                }
-                render_storage_aa_solid(&stroke_buffer, dx, dy, &mut rb, &edge);
-            }
+            Self::stamp_points(&stamp, points, path.total_vertices(), &mut rb);
         } else {
             let mut rb = RendererBase::new(&mut self.pixf);
-            Self::set_clipbox_rb(&mut rb, cliprect, w, h);
-            while path_curve.vertex(&mut x, &mut y) != PATH_CMD_STOP {
-                if !(x.is_finite() && y.is_finite()) {
-                    continue;
-                }
-                x = x.floor();
-                y = y.floor();
-                if !clipping_rect.hit_test(x, y) {
-                    continue;
-                }
-                let (dx, dy) = (iround(x), iround(y));
-                if let (Some(fc), Some(fb)) = (face, &fill_buffer) {
-                    render_storage_aa_solid(fb, dx, dy, &mut rb, &fc);
-                }
-                render_storage_aa_solid(&stroke_buffer, dx, dy, &mut rb, &edge);
-            }
+            Self::set_clipbox_rb(&mut rb, gc.cliprect_d(), w, h);
+            Self::stamp_points(&stamp, points, path.total_vertices(), &mut rb);
         }
 
         self.ras.reset_clipping();
@@ -1177,6 +1245,371 @@ fn blend_from_rgba<P: PixFmt>(
     }
 }
 
+/// The converters `draw_path` passes its path through.
+type PathPipeline<V> = ConvCurve<PathSimplifier<PathSnapper<PathClipper<PathNanRemover<ConvTransform<V>>>>>>;
+
+/// The converters of `draw_path` for the path *source* (with *trans*
+/// already as `RendererAgg::path_trans` gives it); *clip* tells whether the
+/// path has neither face nor hatch.
+#[allow(clippy::too_many_arguments)]
+fn path_pipeline<V: VertexSource>(
+    source: V,
+    total_vertices: usize,
+    has_codes: bool,
+    should_simplify: bool,
+    simplify_threshold: f64,
+    trans: TransAffine,
+    clip: bool,
+    gc: &Gc,
+    dpi: f64,
+    width: u32,
+    height: u32,
+) -> PathPipeline<V> {
+    let simplify = should_simplify && clip;
+    let mut snapping_linewidth = gc.linewidth * dpi / 72.0;
+    if gc.color.a == 0.0 {
+        snapping_linewidth = 0.0;
+    }
+    let tpath = ConvTransform::new(source, trans);
+    let nan_removed = PathNanRemover::new(tpath, true, has_codes);
+    let clipped = PathClipper::new(nan_removed, clip, width as f64, height as f64);
+    let snapped = PathSnapper::new(clipped, gc.snap_mode, total_vertices, snapping_linewidth);
+    let simplified = PathSimplifier::new(snapped, simplify, simplify_threshold);
+    ConvCurve::new(simplified)
+}
+
+/// A marker rasterized as `draw_markers` does, to be rendered at points.
+pub struct MarkerStamp {
+    fill: Option<(ScanlineStorage, Rgba8)>,
+    stroke: ScanlineStorage,
+    edge: Rgba8,
+    clipping_rect: RectD,
+    /// the first and last rows of the marker rendered at (0, 0)
+    rows: (i32, i32),
+}
+
+impl MarkerStamp {
+    /// Render the marker at (dx, dy).
+    fn render<P: PixFmt>(&self, dx: i32, dy: i32, rb: &mut RendererBase<P>) {
+        if let Some((fb, fc)) = &self.fill {
+            render_storage_aa_solid(fb, dx, dy, rb, fc);
+        }
+        render_storage_aa_solid(&self.stroke, dx, dy, rb, &self.edge);
+    }
+
+    /// The first and last rows of the marker rendered at (0, 0).
+    fn rows(&self) -> (i32, i32) {
+        self.rows
+    }
+}
+
+/// A `draw_path(gc, path, trans, face)` call of `draw_artists`, with the
+/// path given by its vertices and codes.
+pub struct PathOp<'a> {
+    pub gc: &'a Gc,
+    pub verts: &'a [[f64; 2]],
+    pub codes: Option<&'a [u8]>,
+    pub should_simplify: bool,
+    pub simplify_threshold: f64,
+    pub trans: &'a TransAffine,
+    pub face: Option<Rgba>,
+}
+
+/// A `draw_markers` call of `draw_artists`: the marker *stamp* (of
+/// `prepare_markers`, for a graphics context with the clip rectangle
+/// *cliprect*) at each of *points*.
+pub struct MarkersOp<'a> {
+    pub stamp: &'a MarkerStamp,
+    pub cliprect: Option<[f64; 4]>,
+    pub points: &'a [[f64; 2]],
+    pub trans: &'a TransAffine,
+}
+
+/// What one artist of `draw_artists` draws: a path, then markers.
+#[derive(Default)]
+pub struct ArtistOp<'a> {
+    pub path: Option<PathOp<'a>>,
+    pub markers: Option<MarkersOp<'a>>,
+}
+
+/// The artists of a `draw_artists` call.
+pub trait ArtistOps: Sync {
+    fn len(&self) -> usize;
+    fn get(&self, i: usize) -> ArtistOp<'_>;
+}
+
+impl RendererAgg {
+    /// Whether `draw_artists` can draw with the graphics context *gc*
+    /// (it implements neither clip paths, hatches nor sketches).
+    pub fn can_batch(gc: &Gc) -> bool {
+        !gc.clippath.as_ref().is_some_and(|cp| cp.path.total_vertices() != 0)
+            && !gc.hatch.as_ref().is_some_and(|h| h.path.total_vertices() != 0)
+            && gc.sketch.is_none()
+    }
+
+    /// The marker of a `draw_markers(gc, marker_path, marker_trans, ..., face)`
+    /// call, for a `MarkersOp`.
+    pub fn prepare_markers(&self, gc: &Gc, marker_path: &MplPath, marker_trans: &TransAffine, face: Option<Rgba>) -> MarkerStamp {
+        let mut ras = RasterizerScanlineAa::new();
+        Self::marker_stamp(&mut ras, gc, marker_path, marker_trans, face, self.dpi, self.width, self.height)
+    }
+
+    /// For each artist of *ops*, in order: `draw_path` of its path, then
+    /// `draw_markers` of its markers.  Many artists are rasterized and
+    /// rendered on several threads (see `draw_artists_parallel`); the image
+    /// is the same as when drawing them one after the other.
+    pub fn draw_artists(&mut self, ops: &dyn ArtistOps) {
+        let n = ops.len();
+        let threads = if n >= PARALLEL_MIN_PATHS { collection_threads() } else { 1 };
+        if threads > 1 {
+            return self.draw_artists_parallel(ops, threads);
+        }
+        let (w, h, dpi) = (self.width, self.height, self.dpi);
+        let mut worker = PathWorker::new();
+        let mut out = RecordedArtist::default();
+        let mut rb = RendererBase::new(&mut self.pixf);
+        for i in 0..n {
+            let op = ops.get(i);
+            out.record(&mut worker, &op, w, h, dpi);
+            out.render(&op, &mut rb, 0, h as i32, w, h);
+        }
+    }
+
+    /// `draw_artists` on *threads* threads (this one included), in rounds of
+    /// consecutive artists.  In a round, the threads first rasterize the
+    /// artists, chunk by chunk, into buffers; then they render the recorded
+    /// scanlines band by band: a band (some rows of the image) is rendered by
+    /// one thread, artist after artist, so every pixel gets the artists in
+    /// order.
+    fn draw_artists_parallel(&mut self, ops: &dyn ArtistOps, threads: usize) {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Mutex, RwLock};
+        /// The artists a thread takes at a time.
+        const CHUNK: usize = 32;
+        /// Chunks per thread in a round: small rounds keep the recorded
+        /// scanlines in cache.
+        const PER_THREAD: usize = 4;
+        /// Bands per thread (at least `MIN_BAND_ROWS` rows high): several, so
+        /// that the threads share the work when few rows have most of it.
+        const BANDS_PER_THREAD: usize = 6;
+        const MIN_BAND_ROWS: usize = 16;
+        let n = ops.len();
+        let (w, h, dpi) = (self.width, self.height, self.dpi);
+        let round = CHUNK * PER_THREAD * threads;
+        let nrounds = n.div_ceil(round);
+        /// The artists of a chunk and the rows each covers, and the rows
+        /// they cover together.
+        #[derive(Default)]
+        struct Chunk {
+            artists: Vec<RecordedArtist>,
+            rows: Vec<(i32, i32)>,
+            all_rows: (i32, i32),
+        }
+        let chunks: Vec<RwLock<Chunk>> = (0..PER_THREAD * threads).map(|_| RwLock::default()).collect();
+        let band_rows = (h as usize).div_ceil(BANDS_PER_THREAD * threads).max(MIN_BAND_ROWS);
+        let bands: Vec<Mutex<PixfmtBand<'_>>> = self.pixf.bands(band_rows).into_iter().map(Mutex::new).collect();
+        let barrier = SpinBarrier::new(threads);
+        // what the threads take next: (round << 32) | index of a chunk / band
+        let next_chunk = AtomicU64::new(0);
+        let next_band = AtomicU64::new(0);
+        let take = |next: &AtomicU64, r: usize, count: usize| {
+            let v = next.fetch_add(1, Ordering::AcqRel);
+            debug_assert_eq!(v >> 32, r as u64);
+            Some((v & 0xffff_ffff) as usize).filter(|&k| k < count)
+        };
+        let work = |t: usize| {
+            let _guard = barrier.guard();
+            let mut worker = PathWorker::new();
+            for r in 0..nrounds {
+                let (a, b) = (r * round, ((r + 1) * round).min(n));
+                let nchunks = (b - a).div_ceil(CHUNK);
+                while let Some(c) = take(&next_chunk, r, nchunks) {
+                    let (lo, hi) = (a + c * CHUNK, (a + (c + 1) * CHUNK).min(b));
+                    let mut g = chunks[c].write().unwrap();
+                    let chunk = &mut *g;
+                    if chunk.artists.len() < hi - lo {
+                        chunk.artists.resize_with(hi - lo, RecordedArtist::default);
+                    }
+                    chunk.rows.clear();
+                    chunk.all_rows = (i32::MAX, i32::MIN);
+                    for (j, i) in (lo..hi).enumerate() {
+                        let rows = chunk.artists[j].record(&mut worker, &ops.get(i), w, h, dpi);
+                        chunk.rows.push(rows);
+                        chunk.all_rows = (chunk.all_rows.0.min(rows.0), chunk.all_rows.1.max(rows.1));
+                    }
+                }
+                if t == 0 {
+                    next_band.store((r as u64) << 32, Ordering::Release);
+                }
+                barrier.wait();
+                while let Some(k) = take(&next_band, r, bands.len()) {
+                    let mut band = bands[k].lock().unwrap();
+                    let (y0, y1) = (band.y0, band.y1);
+                    let mut rb = RendererBase::new(&mut *band);
+                    for (c, chunk) in chunks[..nchunks].iter().enumerate() {
+                        let chunk = chunk.read().unwrap();
+                        if chunk.all_rows.0 >= y1 || chunk.all_rows.1 < y0 {
+                            continue;
+                        }
+                        for (j, &(first, last)) in chunk.rows.iter().enumerate() {
+                            if first < y1 && last >= y0 {
+                                let artist = &chunk.artists[j];
+                                // (the artist is only needed for its markers)
+                                let op = if artist.stamps.is_empty() { ArtistOp::default() } else { ops.get(a + c * CHUNK + j) };
+                                artist.render(&op, &mut rb, y0, y1, w, h);
+                            }
+                        }
+                    }
+                }
+                if t == 0 {
+                    next_chunk.store((r as u64 + 1) << 32, Ordering::Release);
+                }
+                barrier.wait();
+            }
+        };
+        std::thread::scope(|s| {
+            for t in 1..threads {
+                let work = &work;
+                s.spawn(move || work(t));
+            }
+            work(0);
+        });
+    }
+}
+
+/// What `draw_artists` rasterized of an artist: the scanlines of its path
+/// and the positions of its markers.
+#[derive(Default)]
+struct RecordedArtist {
+    path: RecordedPath,
+    stamps: Vec<(i32, i32)>,
+}
+
+impl RecordedArtist {
+    /// Rasterize the artist *op* as `draw_path` and `draw_markers` would
+    /// (for graphics contexts `can_batch` accepts), in a (w, h) image.
+    /// Returns the first and last rows it covers (first > last: none).
+    fn record(&mut self, worker: &mut PathWorker, op: &ArtistOp<'_>, w: u32, h: u32, dpi: f64) -> (i32, i32) {
+        let mut rows = (i32::MAX, i32::MIN);
+        self.path.face = None;
+        self.path.stroke = None;
+        if let Some(p) = &op.path {
+            // (what `draw_path` does before it renders)
+            let face = match p.face {
+                Some(f) if f.a != 0.0 => Face::Some(f.to_rgba8()),
+                _ => Face::None,
+            };
+            worker.ras.reset_clipping();
+            RendererAgg::set_clipbox_ras(&mut worker.ras, p.gc.cliprect_d(), w, h);
+            let mut curve = path_pipeline(
+                SlicePath::new(p.verts, p.codes),
+                p.verts.len(),
+                p.codes.is_some(),
+                p.should_simplify,
+                p.simplify_threshold,
+                RendererAgg::path_trans(p.trans, h),
+                matches!(face, Face::None),
+                p.gc,
+                dpi,
+                w,
+                h,
+            );
+            worker.record(&mut curve, face, p.gc, dpi, &mut self.path);
+            let recorded = [self.path.face.map(|_| &self.path.face_rows), self.path.stroke.map(|_| &self.path.stroke_rows)];
+            for (first, last) in recorded.into_iter().flatten().filter_map(Recorded::rows) {
+                rows = (rows.0.min(first), rows.1.max(last));
+            }
+        }
+        self.stamps.clear();
+        if let Some(m) = &op.markers {
+            let points = ConvTransform::new(SlicePath::new(m.points, None), RendererAgg::marker_points_trans(m.trans, h));
+            let stamps = &mut self.stamps;
+            RendererAgg::stamp_positions(m.stamp, points, m.points.len(), |dx, dy| stamps.push((dx, dy)));
+            let (top, bottom) = m.stamp.rows();
+            for &(_, dy) in &self.stamps {
+                rows = (rows.0.min(dy.saturating_add(top)), rows.1.max(dy.saturating_add(bottom)));
+            }
+        }
+        rows
+    }
+
+    /// Render the rows y0..y1 of the recorded artist *op* (*rb* renders
+    /// rows within these only).
+    fn render<P: PixFmt>(&self, op: &ArtistOp<'_>, rb: &mut RendererBase<P>, y0: i32, y1: i32, w: u32, h: u32) {
+        // (as render_current: the path was clipped by the rasterizer)
+        rb.clip_box = RectI::new(0, y0.max(0), w as i32 - 1, y1.min(h as i32) - 1);
+        self.path.replay_rows(rb, y0, y1);
+        if let (Some(m), false) = (&op.markers, self.stamps.is_empty()) {
+            RendererAgg::set_clipbox_rb(rb, m.cliprect.unwrap_or([0.0; 4]), w, h);
+            rb.clip_box.y1 = rb.clip_box.y1.max(y0);
+            rb.clip_box.y2 = rb.clip_box.y2.min(y1 - 1);
+            if rb.clip_box.y1 > rb.clip_box.y2 {
+                return;
+            }
+            let (top, bottom) = m.stamp.rows();
+            for &(dx, dy) in &self.stamps {
+                if dy.saturating_add(top) < y1 && dy.saturating_add(bottom) >= y0 {
+                    m.stamp.render(dx, dy, rb);
+                }
+            }
+        }
+    }
+}
+
+/// A barrier for threads that work between its `wait`s (so they wait a short
+/// time, without sleeping).
+struct SpinBarrier {
+    threads: usize,
+    waiting: std::sync::atomic::AtomicUsize,
+    generation: std::sync::atomic::AtomicUsize,
+    /// a thread panicked: the others must not wait for it
+    failed: std::sync::atomic::AtomicBool,
+}
+
+/// Marks its barrier as failed when its thread panics.
+struct SpinBarrierGuard<'a>(&'a SpinBarrier);
+
+impl Drop for SpinBarrierGuard<'_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.failed.store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+impl SpinBarrier {
+    fn new(threads: usize) -> SpinBarrier {
+        SpinBarrier { threads, waiting: 0.into(), generation: 0.into(), failed: false.into() }
+    }
+
+    fn guard(&self) -> SpinBarrierGuard<'_> {
+        SpinBarrierGuard(self)
+    }
+
+    /// Wait until all the threads have called `wait`.
+    fn wait(&self) {
+        use std::sync::atomic::Ordering;
+        let generation = self.generation.load(Ordering::Acquire);
+        if self.waiting.fetch_add(1, Ordering::AcqRel) + 1 == self.threads {
+            self.waiting.store(0, Ordering::Release);
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            return;
+        }
+        let mut spins = 0u32;
+        while self.generation.load(Ordering::Acquire) == generation {
+            if self.failed.load(Ordering::Acquire) {
+                panic!("a drawing thread panicked");
+            }
+            spins += 1;
+            if spins < 256 {
+                std::hint::spin_loop();
+            } else {
+                std::thread::yield_now();
+            }
+        }
+    }
+}
+
 /// Below this many paths `draw_path_collection` draws on one thread.
 const PARALLEL_MIN_PATHS: usize = 256;
 
@@ -1214,8 +1647,9 @@ struct Collection<'a, L: PathList + ?Sized> {
 /// The scanlines a rasterization produced, as the renderer received them.
 #[derive(Default)]
 struct Recorded {
-    /// (y, first span, number of spans)
-    rows: Vec<(i32, u32, u32)>,
+    /// (y, first span, number of spans, number of following scanlines with
+    /// the same spans: see `RasterizerScanlineAa::skip_repeated_rows`)
+    rows: Vec<(i32, u32, u32, u32)>,
     spans: Vec<Span>,
     covers: Vec<u8>,
 }
@@ -1237,7 +1671,7 @@ impl Recorded {
                 self.covers.extend_from_slice(sl.covers());
                 let first = self.spans.len() as u32;
                 self.spans.extend(sl.spans().iter().map(|sp| Span { cover_idx: sp.cover_idx + base, ..*sp }));
-                self.rows.push((sl.y(), first, self.spans.len() as u32 - first));
+                self.rows.push((sl.y(), first, self.spans.len() as u32 - first, ras.skip_repeated_rows()));
             }
         }
     }
@@ -1245,14 +1679,12 @@ impl Recorded {
     /// The recorded scanlines through `render_scanline_aa_solid` (*aa*) or
     /// `render_scanline_bin_solid`.
     fn replay<P: PixFmt>(&self, rb: &mut RendererBase<P>, c: &Rgba8, aa: bool) {
-        for &(y, first, n) in &self.rows {
-            let row = RowView { y, spans: &self.spans[first as usize..(first + n) as usize], covers: &self.covers };
-            if aa {
-                render_scanline_aa_solid(&row, rb, c);
-            } else {
-                render_scanline_bin_solid(&row, rb, c);
-            }
-        }
+        self.replay_rows(rb, c, aa, i32::MIN, i32::MAX);
+    }
+
+    /// The first and last scanlines recorded.
+    fn rows(&self) -> Option<(i32, i32)> {
+        Some((self.rows.first()?.0, self.rows.last().map(|r| r.0 + r.3 as i32)?))
     }
 }
 
@@ -1282,6 +1714,44 @@ struct RecordedPath {
     stroke: Option<Rgba8>,
     stroke_rows: Recorded,
     isaa: bool,
+}
+
+impl Recorded {
+    /// `replay` of the scanlines y0..y1 (the scanlines are in order).
+    fn replay_rows<P: PixFmt>(&self, rb: &mut RendererBase<P>, c: &Rgba8, aa: bool, y0: i32, y1: i32) {
+        let start = self.rows.partition_point(|r| r.0.saturating_add(r.3 as i32) < y0);
+        for &(y, first, n, repeat) in self.rows[start..].iter().take_while(|r| r.0 < y1) {
+            let spans = &self.spans[first as usize..(first + n) as usize];
+            // (this scanline and the same ones that follow it)
+            for y in y.max(y0)..=y.saturating_add(repeat as i32).min(y1.saturating_sub(1)) {
+                let row = RowView { y, spans, covers: &self.covers };
+                if aa {
+                    render_scanline_aa_solid(&row, rb, c);
+                } else {
+                    render_scanline_bin_solid(&row, rb, c);
+                }
+            }
+        }
+    }
+}
+
+impl RecordedPath {
+    /// Render the scanlines y0..y1 of the recorded face and stroke, as
+    /// `render_current` renders them.
+    fn replay_rows<P: PixFmt>(&self, rb: &mut RendererBase<P>, y0: i32, y1: i32) {
+        if let Some(fc) = &self.face {
+            self.face_rows.replay_rows(rb, fc, self.isaa, y0, y1);
+        }
+        if let Some(ec) = &self.stroke {
+            self.stroke_rows.replay_rows(rb, ec, self.isaa, y0, y1);
+        }
+    }
+}
+
+impl PathWorker {
+    fn new() -> PathWorker {
+        PathWorker { ras: RasterizerScanlineAa::new(), sl_p8: ScanlineP8::new(), sl_bin: ScanlineBin::new() }
+    }
 }
 
 /// The rasterizer and scanlines of a thread of `draw_path_collection_parallel`.

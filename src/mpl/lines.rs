@@ -7,6 +7,7 @@ use super::path::{new_path, Path, SimplifyParams};
 use super::rc::rc;
 use super::renderer::Renderer;
 use super::transforms::{Bbox, Transform};
+use crate::agg::pixfmt::Rgba;
 use crate::agg::stroke::{LineCap, LineJoin};
 
 pub type DashPattern = (f64, Option<Vec<f64>>);
@@ -460,21 +461,8 @@ impl Line2D {
                 std::borrow::Cow::Owned(super::path::transform_path_non_affine(path, &transform))
             };
             if !tpath.vertices.is_empty() {
-                let mut gc = GcState::default();
-                gc.set_clip_from(&self.base, clip);
-                gc.url = self.base.url.clone();
-                gc.antialiased = self.antialiased;
-                gc.linewidth = self.linewidth;
-                let (cap, join) = if self.is_dashed() {
-                    (self.dash_capstyle, self.dash_joinstyle)
-                } else {
-                    (self.solid_capstyle, self.solid_joinstyle)
-                };
-                gc.joinstyle = join;
-                gc.capstyle = cap;
-                gc.snap = self.base.snap;
-                gc.sketch = self.base.sketch;
-                if self.linewidth > 0.0 && self.is_dashed() {
+                let mut gc = self.line_gc(clip);
+                if self.draws_gaps() {
                     if let Some(gcol) = self.gapcolor {
                         gc.set_foreground(gcol.to_rgba(self.base.alpha));
                         let (o, g) = inverse_dash_pattern(&self.dash_pattern);
@@ -482,32 +470,13 @@ impl Line2D {
                         renderer.draw_path(&gc, &tpath, &affine, None);
                     }
                 }
-                gc.set_foreground(self.color.to_rgba(self.base.alpha));
-                if self.linewidth > 0.0 {
-                    gc.set_dashes(self.dash_pattern.0, self.dash_pattern.1.clone());
-                } else {
-                    gc.set_dashes(0.0, None);
-                }
+                self.finish_line_gc(&mut gc);
                 renderer.draw_path(&gc, &tpath, &affine, None);
             }
         }
 
-        if marker_is_truthy(&self.marker) && self.markersize > 0.0 {
-            let mut gc = GcState::default();
-            gc.set_clip_from(&self.base, clip);
-            gc.url = self.base.url.clone();
-            gc.linewidth = self.markeredgewidth;
-            gc.antialiased = self.antialiased;
-            let mut ec = self.marker_edgecolor().to_rgba(self.base.alpha);
-            let fc = self.marker_facecolor(false).to_rgba(self.base.alpha);
-            let fcalt = self.marker_facecolor(true).to_rgba(self.base.alpha);
-            if self.markeredgecolor.is_auto() && !self.marker_facecolor(false).is_none() {
-                ec.a = fc.a;
-            }
-            gc.set_foreground(ec);
-            if let Some((s, l, r)) = self.base.sketch {
-                gc.sketch = Some((s / 2.0, l / 2.0, 2.0 * r));
-            }
+        if self.draws_markers() {
+            let MarkerPlan { gc, trans: mtrans, face: fc, face_alt: fcalt } = self.marker_plan(renderer, clip);
             // points (always the non-stepped data)
             let xy: &[[f64; 2]] = match &sub_xy {
                 Some(v) => v,
@@ -525,23 +494,9 @@ impl Line2D {
                 if let Some(me) = &self.markevery {
                     tpoints = mark_every_path(me, &tpoints, &affine, ctx);
                 }
-                let snap = match self.marker.snap_threshold {
-                    SnapThreshold::None => None,
-                    SnapThreshold::Inf => Some(false),
-                    SnapThreshold::Value(v) => Some(renderer.points_to_pixels(self.markersize) >= v),
-                };
-                gc.snap = snap;
-                gc.joinstyle = self.marker.joinstyle();
-                gc.capstyle = self.marker.capstyle();
-                let w = renderer.points_to_pixels(self.markersize);
-                let mut mtrans = self.marker.get_transform();
-                if self.marker.is_pixel {
-                    gc.linewidth = 0.0;
-                } else {
-                    mtrans = mtrans.scale(w, w);
-                }
-                renderer.draw_markers(&gc, &self.marker.path, &mtrans.0, &tpoints, &affine, Some(fc));
+                renderer.draw_markers(&gc, &self.marker.path, &mtrans, &tpoints, &affine, Some(fc));
                 if let Some(alt) = &self.marker.alt_path {
+                    let w = renderer.points_to_pixels(self.markersize);
                     let at = self.marker.get_alt_transform().unwrap().scale(w, w);
                     renderer.draw_markers(&gc, alt, &at.0, &tpoints, &affine, Some(fcalt));
                 }
@@ -549,6 +504,147 @@ impl Line2D {
         }
         renderer.close_group("line2d");
     }
+
+    /// The graphics context `draw` strokes the line with, before its colour
+    /// and dashes are set.
+    fn line_gc(&self, clip: &ClipCtx) -> GcState {
+        let mut gc = GcState::default();
+        gc.set_clip_from(&self.base, clip);
+        gc.url = self.base.url.clone();
+        gc.antialiased = self.antialiased;
+        gc.linewidth = self.linewidth;
+        let (cap, join) = if self.is_dashed() {
+            (self.dash_capstyle, self.dash_joinstyle)
+        } else {
+            (self.solid_capstyle, self.solid_joinstyle)
+        };
+        gc.joinstyle = join;
+        gc.capstyle = cap;
+        gc.snap = self.base.snap;
+        gc.sketch = self.base.sketch;
+        gc
+    }
+
+    /// The colour and dashes of the line on the context of `line_gc`.
+    fn finish_line_gc(&self, gc: &mut GcState) {
+        gc.set_foreground(self.color.to_rgba(self.base.alpha));
+        if self.linewidth > 0.0 {
+            gc.set_dashes(self.dash_pattern.0, self.dash_pattern.1.clone());
+        } else {
+            gc.set_dashes(0.0, None);
+        }
+    }
+
+    /// Whether `draw` first strokes the gaps of the dashes.
+    fn draws_gaps(&self) -> bool {
+        self.linewidth > 0.0 && self.is_dashed() && self.gapcolor.is_some()
+    }
+
+    fn draws_markers(&self) -> bool {
+        marker_is_truthy(&self.marker) && self.markersize > 0.0
+    }
+
+    /// The arguments of `draw`'s `draw_markers` call that do not depend on
+    /// the data.
+    fn marker_plan(&self, renderer: &Renderer, clip: &ClipCtx) -> MarkerPlan {
+        let mut gc = GcState::default();
+        gc.set_clip_from(&self.base, clip);
+        gc.url = self.base.url.clone();
+        gc.linewidth = self.markeredgewidth;
+        gc.antialiased = self.antialiased;
+        let mut ec = self.marker_edgecolor().to_rgba(self.base.alpha);
+        let fc = self.marker_facecolor(false).to_rgba(self.base.alpha);
+        let fcalt = self.marker_facecolor(true).to_rgba(self.base.alpha);
+        if self.markeredgecolor.is_auto() && !self.marker_facecolor(false).is_none() {
+            ec.a = fc.a;
+        }
+        gc.set_foreground(ec);
+        if let Some((s, l, r)) = self.base.sketch {
+            gc.sketch = Some((s / 2.0, l / 2.0, 2.0 * r));
+        }
+        gc.snap = match self.marker.snap_threshold {
+            SnapThreshold::None => None,
+            SnapThreshold::Inf => Some(false),
+            SnapThreshold::Value(v) => Some(renderer.points_to_pixels(self.markersize) >= v),
+        };
+        gc.joinstyle = self.marker.joinstyle();
+        gc.capstyle = self.marker.capstyle();
+        let w = renderer.points_to_pixels(self.markersize);
+        let mut mtrans = self.marker.get_transform();
+        if self.marker.is_pixel {
+            gc.linewidth = 0.0;
+        } else {
+            mtrans = mtrans.scale(w, w);
+        }
+        MarkerPlan { gc, trans: mtrans.0, face: fc, face_alt: fcalt }
+    }
+
+    /// The renderer calls of `draw` when they are at most one `draw_path` of
+    /// the line's path and one `draw_markers` at its points, both with the
+    /// affine transform of the data; None when `draw` does anything else (a
+    /// non-affine transform, gaps between dashes, `markevery`, a marker of
+    /// two paths).  An invisible line gives a plan that draws nothing.
+    pub fn plan(&self, renderer: &Renderer, ctx: &TransCtx, clip: &ClipCtx) -> Option<LinePlan> {
+        if !self.base.visible {
+            return Some(LinePlan { affine: super::transforms::IDENTITY, line: None, markers: None });
+        }
+        let transform = ctx.resolve(&self.base.transform);
+        if !transform.is_affine() || self.markevery.is_some() {
+            return None;
+        }
+        let mut plan = LinePlan { affine: transform.get_affine(), line: None, markers: None };
+        if self.linestyle != "None" {
+            if self.draws_gaps() {
+                return None;
+            }
+            let mut gc = self.line_gc(clip);
+            self.finish_line_gc(&mut gc);
+            plan.line = Some(gc);
+        }
+        if self.draws_markers() {
+            if self.marker.alt_path.is_some() {
+                return None;
+            }
+            plan.markers = Some(self.marker_plan(renderer, clip));
+        }
+        Some(plan)
+    }
+
+    /// The path `draw` strokes and the points it puts markers at, when the
+    /// cache is built and `draw` uses all of it (no subslice).
+    pub fn cached_path(&self) -> Option<(&Path, &[[f64; 2]])> {
+        self.cache.as_ref().filter(|c| !c.subslice).map(|c| (&c.path, &c.xy[..]))
+    }
+
+    /// `draw`'s cache (see `cached_path`), built if needed.
+    pub fn build_cache(&mut self, subslice_ok: bool) {
+        self.ensure_cache(subslice_ok);
+    }
+
+    pub fn marker_path(&self) -> &Path {
+        &self.marker.path
+    }
+
+    pub fn has_default_drawstyle(&self) -> bool {
+        self.drawstyle == DrawStyle::Default
+    }
+}
+
+/// See `Line2D::plan`.
+pub struct LinePlan {
+    pub affine: super::transforms::Mat,
+    /// the graphics context of the `draw_path` call, if there is one
+    pub line: Option<GcState>,
+    pub markers: Option<MarkerPlan>,
+}
+
+/// The arguments of a line's `draw_markers` call, except the points.
+pub struct MarkerPlan {
+    pub gc: GcState,
+    /// the marker transform
+    pub trans: super::transforms::Mat,
+    pub face: Rgba,
+    pub face_alt: Rgba,
 }
 
 fn rc_marker_color(r: &super::rc::Rc, key: &str) -> ColorSpec {
