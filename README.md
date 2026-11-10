@@ -1,7 +1,7 @@
 # matplotlib-rs
 
 以 Rust 實作繪圖與字型核心，提供與 Matplotlib 相容的 Python／`pyplot` 介面。
-目前發行版本為 `0.0.4`：大量資料的基本圖表（長條、直方圖、影像、hist2d、等高線、pcolormesh 等）大幅加速，
+目前發行版本為 `0.0.6`：箱形圖在需要時才建立 artists，並以多執行緒加速大量物件繪製，
 畫布仍與 Matplotlib 逐像素相同；支援 **Python 3.10** 以上，執行期**只依賴 NumPy**。
 Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 NumPy 連接，
 處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
@@ -12,18 +12,18 @@ Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 N
 Linux x86_64、glibc 2.28 以上、CPython 3.10～3.13 可直接安裝預編譯 wheel：
 
 ```bash
-python -m pip install matplotlib-rs==0.0.4
+python -m pip install matplotlib-rs==0.0.6
 python -m pip list   # 只會多出 matplotlib-rs 與 numpy
 ```
 
-PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.4) 使用完全相同的已測試套件；
+PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.6) 使用完全相同的已測試套件；
 Release 另附 source distribution、效能原始紀錄與 `SHA256SUMS`。
 發布流程在只有 NumPy 的乾淨環境測試每個 wheel；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
 
 從 release 原始碼安裝：
 
 ```bash
-git clone --branch v0.0.4 https://github.com/g21589/matplotlib-rs.git
+git clone --branch v0.0.6 https://github.com/g21589/matplotlib-rs.git
 cd matplotlib-rs
 python -m venv .venv
 source .venv/bin/activate
@@ -37,7 +37,7 @@ pip 會透過 maturin 編譯 Rust extension 與內建的 qhull。
 
 Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
 
-| Matplotlib 依賴 | matplotlib-rs 0.0.4 的作法 |
+| Matplotlib 依賴 | matplotlib-rs 0.0.6 的作法 |
 | --- | --- |
 | cycler、pyparsing、python-dateutil（含 six） | 純 Python，原樣內建於 `matplotlib_rs._vendor`（`tools/vendor_deps.py` 可重現）；已安裝的 cycler 會優先使用 |
 | kiwisolver（constrained layout） | Rust 移植 kiwi 1.5 求解器，運算順序與 kiwi 相同 |
