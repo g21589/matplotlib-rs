@@ -261,6 +261,10 @@ pub struct ArtistBase {
     pub animated: bool,
     pub in_layout: bool,
     pub rasterized: bool,
+    /// the identity graphics contexts give the clip box (`GcState::clip_owner`)
+    /// instead of this artist's address, if not 0: for artists that only
+    /// exist while they are drawn (see `batch`)
+    pub clip_ident: usize,
 }
 
 impl Default for ArtistBase {
@@ -282,6 +286,7 @@ impl Default for ArtistBase {
             animated: false,
             in_layout: true,
             rasterized: false,
+            clip_ident: 0,
         }
     }
 }
@@ -378,7 +383,7 @@ impl GcState {
 
     /// Apply `Artist._set_gc_clip`.
     pub fn set_clip_from(&mut self, base: &ArtistBase, ctx: &ClipCtx) {
-        self.clip_owner = base as *const ArtistBase as usize;
+        self.clip_owner = if base.clip_ident != 0 { base.clip_ident } else { base as *const ArtistBase as usize };
         if base.clip_on {
             match &base.clip_box {
                 ClipBoxSpec::None => {}

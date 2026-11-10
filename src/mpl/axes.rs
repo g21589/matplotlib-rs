@@ -27,6 +27,8 @@ pub enum Child {
     Collection(Shared<Collection>),
     Image(Shared<AxesImage>),
     Ext(std::sync::Arc<dyn ExtArtist>),
+    /// Lines and patches kept as arrays (drawn at each of their zorders).
+    Batch(Shared<super::batch::ArtistBatch>),
 }
 
 impl Child {
@@ -38,6 +40,7 @@ impl Child {
             Child::Collection(a) => a.lk().base.zorder,
             Child::Image(a) => a.lk().base.zorder,
             Child::Ext(e) => e.zorder(),
+            Child::Batch(b) => b.lk().zorders().into_iter().fold(f64::INFINITY, f64::min),
         }
     }
 
@@ -49,6 +52,7 @@ impl Child {
             Child::Collection(a) => a.lk().base.animated,
             Child::Image(a) => a.lk().base.animated,
             Child::Ext(e) => e.animated(),
+            Child::Batch(_) => false,
         }
     }
 
@@ -60,6 +64,7 @@ impl Child {
             (Child::Collection(a), Child::Collection(b)) => std::sync::Arc::ptr_eq(a, b),
             (Child::Image(a), Child::Image(b)) => std::sync::Arc::ptr_eq(a, b),
             (Child::Ext(a), Child::Ext(b)) => a.ident() == b.ident(),
+            (Child::Batch(a), Child::Batch(b)) => std::sync::Arc::ptr_eq(a, b),
             _ => false,
         }
     }
@@ -1161,6 +1166,18 @@ impl Axes {
                     let e = im.lk().get_extent();
                     self.update_datalim(&[[e.0, e.2], [e.1, e.3]], true, true);
                 }
+                Child::Batch(b) => {
+                    let b = b.lk();
+                    for (xy, t) in b.limit_points(visible_only) {
+                        if let Some((ux, uy)) = Self::branch_flags(t) {
+                            if !xy.is_empty() && (ux || uy) {
+                                let ig = self.ignore_existing_data_limits;
+                                self.data_lim.update_from_xy(xy, Some(ig), ux, uy);
+                                self.ignore_existing_data_limits = false;
+                            }
+                        }
+                    }
+                }
                 Child::Text(_) | Child::Ext(_) => {}
             }
         }
@@ -1315,6 +1332,14 @@ impl Axes {
             if !fig.saving && c.animated() {
                 continue;
             }
+            if let Child::Batch(b) = c {
+                // (its artists follow each other among the children: those of
+                // a zorder are drawn together where the first one would be)
+                for z in b.lk().zorders() {
+                    items.push((z, Item::Child(c.clone())));
+                }
+                continue;
+            }
             items.push((c.zorder(), Item::Child(c.clone())));
         }
         if self.axison && self.frameon {
@@ -1365,20 +1390,31 @@ impl Axes {
         let xbound = Some(self.get_bound(true));
         let subslice_ok = self.name == "rectilinear" && self.xaxis.scale.name() == "linear";
         let nitems = items.len();
-        for (k, (_, it)) in items.into_iter().enumerate() {
+        let mut items = items.into_iter().enumerate().peekable();
+        let mut run: Vec<super::batch::RunItem> = Vec::new();
+        while let Some((k, (z, it))) = items.next() {
             if nraster > 0 && k == nraster {
                 renderer.raster_end();
                 (fig, tc, clip) = (fig0, &tc0, &clip0);
                 renderer.dpi = saved_dpi;
             }
             match it {
-                Item::Child(c) => match c {
-                    Child::Line(l) => {
-                        let mut l = l.lk();
-                        let ok = subslice_ok && l.base.transform == TSpec::Data;
-                        l.draw(renderer, tc, clip, xbound, ok);
+                // lines, patches and batches that follow each other (and are
+                // drawn at the same dpi) are drawn together
+                Item::Child(c) if super::batch::in_run(&c) => {
+                    run.clear();
+                    run.push((c, z));
+                    while let Some((k2, (z2, Item::Child(c2)))) = items.peek() {
+                        if (nraster > 0 && *k2 == nraster) || !super::batch::in_run(c2) {
+                            break;
+                        }
+                        run.push((c2.clone(), *z2));
+                        items.next();
                     }
-                    Child::Patch(p) => p.lk().draw(renderer, tc, clip),
+                    super::batch::draw_run(&run, renderer, tc, clip, xbound, subslice_ok);
+                }
+                Item::Child(c) => match c {
+                    Child::Line(_) | Child::Patch(_) | Child::Batch(_) => unreachable!("drawn in a run"),
                     Child::Text(t) => t.lk().draw(renderer, tc, clip),
                     Child::Collection(cc) => cc.lk().draw(renderer, tc, clip),
                     Child::Image(im) => im.lk().draw(renderer, tc, clip),

@@ -4566,8 +4566,9 @@ or pandas.DataFrame
         whis = mpl._val_or_rc(whis, 'boxplot.whiskers')
         bootstrap = mpl._val_or_rc(bootstrap, 'boxplot.bootstrap')
 
-        bxpstats = cbook.boxplot_stats(x, whis=whis, bootstrap=bootstrap,
-                                       labels=tick_labels, autorange=autorange)
+        # (statistics of a regular array stay arrays until they are read)
+        bxpstats = cbook._boxplot_stats(x, whis=whis, bootstrap=bootstrap,
+                                        labels=tick_labels, autorange=autorange)
         notch = mpl._val_or_rc(notch, 'boxplot.notch')
         patch_artist = mpl._val_or_rc(patch_artist, 'boxplot.patchartist')
         meanline = mpl._val_or_rc(meanline, 'boxplot.meanline')
@@ -4910,7 +4911,9 @@ or pandas.DataFrame
             raise ValueError(datashape_message.format("positions"))
 
         positions = np.array(positions)
-        if len(positions) > 0 and not all(isinstance(p, Real) for p in positions):
+        # (the items of integer and float arrays are numbers)
+        if (len(positions) > 0 and positions.dtype.kind not in "iuf"
+                and not all(isinstance(p, Real) for p in positions)):
             raise TypeError("positions should be an iterable of numbers")
 
         # width
@@ -4965,8 +4968,7 @@ or pandas.DataFrame
             cap_kw=cap_kw, median_kw=median_kw, mean_kw=mean_kw, flier_kw=flier_kw)
         if built is not None:
             whiskers, caps, boxes, medians, means, fliers = built
-            datalabels = [stats.get('label', pos)
-                          for pos, stats in zip(positions, bxpstats)]
+            datalabels = fast.datalabels(bxpstats, positions)
         for pos, width, stats, capwidth in zip(
                 *([] if built is not None else
                   [positions, widths, bxpstats, capwidths])):
@@ -5044,14 +5046,18 @@ or pandas.DataFrame
         # Set legend labels
         if label:
             box_or_med = boxes if showbox and patch_artist else medians
+            # (artists not created yet get their labels when they are)
+            set_labels = getattr(box_or_med, "_set_labels", None)
             if cbook.is_scalar_or_string(label):
                 # assign the label only to the first box
-                box_or_med[0].set_label(label)
+                if set_labels is None or not set_labels([label]):
+                    box_or_med[0].set_label(label)
             else:  # label is a sequence
                 if len(box_or_med) != len(label):
                     raise ValueError(datashape_message.format("label"))
-                for artist, lbl in zip(box_or_med, label):
-                    artist.set_label(lbl)
+                if set_labels is None or not set_labels(label):
+                    for artist, lbl in zip(box_or_med, label):
+                        artist.set_label(lbl)
 
         if manage_ticks:
             axis_name = "x" if orientation == 'vertical' else "y"
@@ -5066,9 +5072,13 @@ or pandas.DataFrame
             # are attached to the median lines, as they are always present.
             interval[:] = (min(interval[0], min(positions) - .5),
                            max(interval[1], max(positions) + .5))
-            for median, position in zip(medians, positions):
-                getattr(median.sticky_edges, axis_name).extend(
-                    [position - .5, position + .5])
+            # (medians not created yet get them when they are)
+            set_sticky = getattr(medians, "_set_sticky", None)
+            if set_sticky is None or not set_sticky(
+                    axis_name, positions - .5, positions + .5):
+                for median, position in zip(medians, positions):
+                    getattr(median.sticky_edges, axis_name).extend(
+                        [position - .5, position + .5])
             # Modified from Axis.set_ticks and Axis.set_ticklabels.
             locator = axis.get_major_locator()
             if not isinstance(axis.get_major_locator(),

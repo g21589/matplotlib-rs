@@ -661,6 +661,27 @@ impl Patch {
         args: &[(&Path, super::transforms::Mat, Option<Rgba>)],
     ) {
         renderer.open_group("patch", self.base.gid.as_deref());
+        let (mut gc, lw) = self.edge_gc(clip);
+        if self.draws_gaps(lw) {
+            if let Some(g) = self.gapcolor {
+                gc.set_foreground(g);
+                let (o, gaps) = inverse_dash_pattern(&self.dash_pattern);
+                gc.set_dashes(o, gaps);
+                for (p, t, f) in args {
+                    renderer.draw_path(&gc, p, t, *f);
+                }
+            }
+        }
+        self.finish_edge_gc(&mut gc, lw);
+        for (p, t, f) in args {
+            renderer.draw_path(&gc, p, t, *f);
+        }
+        renderer.close_group("patch");
+    }
+
+    /// The graphics context `draw_paths_with_artist_properties` draws with,
+    /// before the edge colour and dashes are set, and its line width.
+    fn edge_gc(&self, clip: &ClipCtx) -> (GcState, f64) {
         let mut gc = GcState::default();
         let mut lw = self.linewidth;
         if self.edgecolor.a == 0.0 || self.linestyle == "None" {
@@ -682,27 +703,60 @@ impl Patch {
             }
         }
         gc.sketch = self.base.sketch;
-        if lw > 0.0 && self.has_dashed_edge() {
-            if let Some(g) = self.gapcolor {
-                gc.set_foreground(g);
-                let (o, gaps) = inverse_dash_pattern(&self.dash_pattern);
-                gc.set_dashes(o, gaps);
-                for (p, t, f) in args {
-                    renderer.draw_path(&gc, p, t, *f);
-                }
-            }
-        }
+        (gc, lw)
+    }
+
+    /// The edge colour and dashes on the context of `edge_gc`.
+    fn finish_edge_gc(&self, gc: &mut GcState, lw: f64) {
         gc.set_foreground(self.edgecolor);
         if lw > 0.0 {
             gc.set_dashes(self.dash_pattern.0, self.dash_pattern.1.clone());
         } else {
             gc.set_dashes(0.0, None);
         }
-        for (p, t, f) in args {
-            renderer.draw_path(&gc, p, t, *f);
-        }
-        renderer.close_group("patch");
     }
+
+    /// Whether the gaps of the dashed edge are drawn first.
+    fn draws_gaps(&self, lw: f64) -> bool {
+        lw > 0.0 && self.has_dashed_edge() && self.gapcolor.is_some()
+    }
+
+    /// The renderer call of `draw` when it is one `draw_path` of the patch's
+    /// path with an affine transform: the transform, the graphics context
+    /// (None: the patch is invisible) and the face.  None when `draw` does
+    /// anything else (a non-affine transform, gaps between dashes).
+    pub fn plan(&self, ctx: &TransCtx, clip: &ClipCtx) -> Option<PatchPlan> {
+        if !self.base.visible {
+            return Some(PatchPlan { affine: super::transforms::IDENTITY, gc: None, face: None });
+        }
+        let transform = self.get_transform(ctx);
+        if !transform.is_affine() {
+            return None;
+        }
+        let (mut gc, lw) = self.edge_gc(clip);
+        if self.draws_gaps(lw) {
+            return None;
+        }
+        self.finish_edge_gc(&mut gc, lw);
+        let face = if self.facecolor.a != 0.0 { Some(self.facecolor) } else { None };
+        Some(PatchPlan { affine: transform.get_affine(), gc: Some(gc), face })
+    }
+
+    /// The path `draw` draws, when the patch keeps it.
+    pub fn stored_path(&self) -> Option<&Path> {
+        match &self.kind {
+            PatchKind::Path { path } => Some(path),
+            PatchKind::Generic { path, .. } => Some(path),
+            _ => None,
+        }
+    }
+}
+
+/// See `Patch::plan`.
+pub struct PatchPlan {
+    pub affine: super::transforms::Mat,
+    pub gc: Option<GcState>,
+    pub face: Option<Rgba>,
 }
 
 /// `Polygon.set_xy` path construction.

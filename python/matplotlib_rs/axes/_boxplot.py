@@ -5,20 +5,27 @@ It need not repeat plot's format/unit parsing, clipping setup and path limits
 for each of its thousands of two-point lines. The returned objects remain
 ordinary, independently mutable Line2D and PathPatch instances.
 
-When the statistics are plain floats, `_BoxplotArtists.build` creates all the
+When the statistics are plain floats, `_BoxplotArtists.build` handles all the
 artists of a bxp call at once: the coordinates are computed with NumPy (the
-same operations as bxp's loop, element by element), the Rust handles are
-copied in one call per component, and the children and data limits are
-updated once.
+same operations as bxp's loop, element by element) and handed to the Rust
+axes as one `_mplrs.ArtistBatch`, which draws the artists from the arrays.
+The artists themselves are created when they are first needed (see
+`_base_rs._Pending`): bxp returns lists that create the artists of their
+component when read, and ``Axes._children`` creates all of them when read.
+An artist that is changed (or removed) makes the Rust axes draw the artists
+of the call one by one, from their own handles, as if they had always
+existed.  ``MPLRS_LAZY=0`` creates the artists in bxp.
 """
 import functools
+import os
 import weakref
 
 import numpy as np
 
 from .. import _mplrs, artist, cbook, lines, patches
 from ..path import Path
-from ._base_rs import _RsChildren, _rs_native, _rs_py_drawn, _rs_switch_child
+from ._base_rs import (
+    _Pending, _PendingList, _RsChildren, _rs_native, _rs_py_drawn, _rs_switch_child)
 
 
 _PLAIN_FLOATS = (float, np.float64)
@@ -27,9 +34,32 @@ _PLAIN_NUMBERS = (float, int, np.float64, np.int64)
 _gc_paused = cbook._gc_paused
 
 
+class _Ragged:
+    """Rows of different lengths: the pieces of *flat* of the lengths *lengths*."""
+
+    __slots__ = ("flat", "lengths")
+
+    def __init__(self, flat, lengths):
+        self.flat = flat
+        self.lengths = lengths
+
+    def __len__(self):
+        return len(self.lengths)
+
+    def rows(self):
+        return np.split(self.flat, np.cumsum(self.lengths)[:-1])
+
+
+def _dense(stats):
+    """The arrays of the statistics *stats* if they are still as
+    `cbook.boxplot_stats` computed them (see `cbook._BoxplotStats`)."""
+    return stats.columns if type(stats) is cbook._BoxplotStats else None
+
+
 class _BoxplotArtists:
     def __init__(self, axes, line_styles, patch_style):
         self.axes = axes
+        self.children = axes._children
         self.styles = {}
         self.points = []
         self.point_arrays = []
@@ -76,7 +106,7 @@ class _BoxplotArtists:
         cycle_keys = axes._get_lines._prop_cycle._cycler_items[0]
         if any(kw.get(key) is None for kw in line_styles for key in cycle_keys):
             return None  # Preserve plot's per-line advancement of property cycles.
-        for stat in stats:
+        for stat in () if _dense(stats) is not None else stats:
             for k in ("q1", "q3", "med", "whislo", "whishi"):
                 v = stat[k]
                 if type(v) not in _PLAIN_FLOATS and not isinstance(v, Real):
@@ -133,51 +163,55 @@ class _BoxplotArtists:
 
     # -- all artists of a bxp call at once ---------------------------------
 
-    def _template(self, prototype, line):
+    def _template(self, prototype, line, switch, dead):
         """The attribute dict shared (by copy) by the copies of *prototype*."""
         d = prototype.__dict__.copy()
         del d["_callbacks"]  # (each copy creates its own on first use)
-        d["_remove_method"] = self.axes._children.remove
+        d["_remove_method"] = self.children.remove
         d["_rs_native_in"] = True
-        d["_rs_switch"] = self.switch
+        d["_rs_switch"] = switch
         if line:
             d["_in_autoscale"] = True
+        if dead:  # (as Axes.clear leaves its children)
+            d["_axes"] = d["_parent_figure"] = None
         return d
 
-    def _lines(self, kw, xs, ys, slot, nslots, base):
-        """Line2D copies of the style *kw* with the rows of *xs*, *ys* as data
-        (the original arrays, whose dtype is that of bxp's lists); the copy
-        for box *i* will be child ``base + i * nslots + slot``."""
+    def _line_slot(self, kw, xs, ys, slot, nslots, base):
+        """
+        The slot of an `_mplrs.ArtistBatch` and of a `_Pending` for Line2D
+        copies of the style *kw* with the rows of *xs*, *ys* as data (the
+        original arrays, whose dtype is that of bxp's lists); the copy for
+        box *i* is child ``base + i * nslots + slot``.
+        """
         prototype = self.styles[tuple(kw.items())]
-        n = len(xs)
-        labels = None
-        if not prototype._label:
-            labels = [f"_child{base + i * nslots + slot}" for i in range(n)]
-        if isinstance(xs, list):  # ragged (fliers): one 1D array per box
-            offsets = np.concatenate([[0], np.cumsum([len(x) for x in xs])]).tolist()
-            handles = prototype._h.copy_many_ragged(
-                np.concatenate(xs).astype(np.float64, copy=False),
-                np.concatenate(ys).astype(np.float64, copy=False), offsets)
-            if labels is not None:
-                for h, label in zip(handles, labels):
-                    h.set("label", label)
-            self.point_arrays.append(np.column_stack([np.concatenate(xs), np.concatenate(ys)]))
+        auto_label = not prototype._label
+        ragged = type(xs) is _Ragged  # (fliers): one 1D array per box
+        if ragged:
+            offsets = np.concatenate([[0], np.cumsum(xs.lengths)]).tolist()
+            points = np.column_stack([xs.flat, ys.flat])
+            spec = ("ragged", prototype._h, xs.flat.astype(np.float64, copy=False),
+                    ys.flat.astype(np.float64, copy=False), offsets, auto_label)
         else:
-            handles = prototype._h.copy_many(
-                np.ascontiguousarray(xs, np.float64), np.ascontiguousarray(ys, np.float64),
-                labels)
-            self.point_arrays.append(np.column_stack([xs.ravel(), ys.ravel()]))
-        names, columns = ["_xorig", "_yorig"], [list(xs), list(ys)]
-        if labels is not None:
-            names.append("_label")
-            columns.append(labels)
-        return self._clones(prototype, True, handles, names, columns)
+            points = np.column_stack([xs.ravel(), ys.ravel()])
+            spec = ("lines", prototype._h, np.ascontiguousarray(xs, np.float64),
+                    np.ascontiguousarray(ys, np.float64), auto_label)
 
-    def _clones(self, prototype, line, handles, names, columns):
+        def make(handles, switch, dead):
+            names = ["_xorig", "_yorig"]
+            columns = [xs.rows(), ys.rows()] if ragged else [list(xs), list(ys)]
+            if auto_label:
+                names.append("_label")
+                columns.append([f"_child{base + i * nslots + slot}" for i in range(len(xs))])
+            return self._clones(prototype, True, handles, names, columns, switch, dead)
+
+        return spec, {"prototype": prototype, "make": make, "points": points,
+                      "finite": bool(np.isfinite(points).all())}
+
+    def _clones(self, prototype, line, handles, names, columns, switch, dead):
         """Copies of *prototype* with the Rust *handles* and, per copy, the
         attributes *names* from *columns*."""
         cls = type(prototype)
-        template = self._template(prototype, line)
+        template = self._template(prototype, line, switch, dead)
         if cls.__new__ is object.__new__:
             return _mplrs.clone_instances(cls, template, handles, names, columns)
         out = []
@@ -190,17 +224,32 @@ class _BoxplotArtists:
             out.append(a)
         return out
 
-    def _patches(self, verts):
-        """PathPatch copies with the closed paths through each (m, 2) block
-        of *verts*, as ``Path._create_closed`` makes them."""
+    def _patch_slot(self, verts):
+        """The slot (see `_line_slot`) for PathPatch copies with the closed
+        paths through each (m, 2) block of *verts*, as ``Path._create_closed``
+        makes them."""
         prototype = self.patch_style
         verts = np.concatenate([verts, verts[:, :1]], axis=1)
         first = Path._create_closed(verts[0, :-1])
         codes = first.codes
-        handles = prototype._h.copy_many_paths(verts, codes.tolist())
-        fast_path = Path._fast_from_codes_and_verts
-        paths = [first] + [fast_path(v, codes.copy(), first) for v in verts[1:]]
-        return self._clones(prototype, False, handles, ["_path"], [paths])
+        spec = ("patches", prototype._h, np.ascontiguousarray(verts, np.float64), codes.tolist())
+
+        def make(handles, switch, dead):
+            fast_path = Path._fast_from_codes_and_verts
+            paths = [first] + [fast_path(v, codes.copy(), first) for v in verts[1:]]
+            return self._clones(prototype, False, handles, ["_path"], [paths], switch, dead)
+
+        return spec, {"prototype": prototype, "make": make, "points": None, "finite": True}
+
+    def _lazy(self):
+        """Whether the artists may be created when they are needed: the Axes
+        does without artists that draw only inside it (see `_Pending`)."""
+        if os.environ.get("MPLRS_LAZY", "1") == "0":
+            return False
+        prototypes = [*self.styles.values()]
+        if self.patch_style is not None:
+            prototypes.append(self.patch_style)
+        return all(not p.get_animated() and p._fully_clipped_to_axes() for p in prototypes)
 
     @_gc_paused
     def build(self, bxpstats, positions, widths, capwidths, vertical, *,
@@ -215,16 +264,19 @@ class _BoxplotArtists:
         """
         if positions.dtype not in (np.int64, np.float64):
             return None
-        if not all(type(w) in _PLAIN_NUMBERS for w in widths):
-            return None
-        if not all(type(w) in _PLAIN_NUMBERS for w in capwidths):
-            return None
+        for w in (widths, capwidths):
+            if type(w) is np.ndarray:  # (its items are np.float64 or np.int64)
+                if w.ndim != 1 or w.dtype not in (np.float64, np.int64):
+                    return None
+            elif not set(map(type, w)).issubset(_PLAIN_NUMBERS):
+                return None
         keys = ["q1", "q3", "med", "whislo", "whishi"]
         if shownotches:
             keys += ["cilo", "cihi"]
         if showmeans:
             keys.append("mean")
-        for stat in bxpstats:
+        dense = _dense(bxpstats)
+        for stat in () if dense is not None else bxpstats:
             for k in keys:
                 if type(stat[k]) not in _PLAIN_FLOATS:
                     return None
@@ -234,6 +286,8 @@ class _BoxplotArtists:
                     return None
 
         def column(key):
+            if dense is not None:
+                return dense[key]
             return np.array([stat[key] for stat in bxpstats], np.float64)
 
         def pairs(a, b):
@@ -286,39 +340,47 @@ class _BoxplotArtists:
                 data = oriented(pos[:, None].copy(), mean[:, None])
             components.append(("means", mean_kw, data))
         if showfliers:
-            fl = [stat["fliers"] for stat in bxpstats]
-            lengths = [len(f) for f in fl]
+            if dense is not None:
+                lengths, flier_y = bxpstats.counts, bxpstats.fliers
+            else:
+                fl = [stat["fliers"] for stat in bxpstats]
+                lengths = [len(f) for f in fl]
+                flier_y = np.concatenate(fl) if fl else np.empty(0)
             flier_x = np.repeat(pos.astype(np.float64), lengths)
-            flier_y = np.concatenate(fl) if fl else np.empty(0)
-            cuts = np.cumsum(lengths)[:-1]
-            components.append(("fliers", flier_kw, oriented(np.split(flier_x, cuts),
-                                                            np.split(flier_y, cuts))))
+            components.append(("fliers", flier_kw, oriented(_Ragged(flier_x, lengths),
+                                                            _Ragged(flier_y, lengths))))
 
         nslots = len(components)
-        base = len(self.axes._children)
+        base = len(self.children)
         n = len(bxpstats)
-        ordered = [None] * (n * nslots)
-        result = {name: [] for name in
-                  ("whiskers", "caps", "boxes", "medians", "means", "fliers")}
+        specs, slots, where = [], [], {}
         for slot, (name, kw, data) in enumerate(components):
             if kw == "patch":
-                artists = self._patches(data)
+                spec, info = self._patch_slot(data)
             else:
-                artists = self._lines(kw, data[0], data[1], slot, nslots, base)
-            ordered[slot::nslots] = artists
-            result[name].append(artists)
-        list.extend(self.axes._children, ordered)
-        self.axes._rs.add_children_raw([a._h for a in ordered])
-        out = []
-        for name in ("whiskers", "caps", "boxes", "medians", "means", "fliers"):
-            parts = result[name]
-            if len(parts) == 2:  # lower and upper, alternating per box
-                merged = [None] * (2 * n)
-                merged[0::2], merged[1::2] = parts
-                out.append(merged)
-            else:
-                out.append(parts[0] if parts else [])
+                spec, info = self._line_slot(kw, data[0], data[1], slot, nslots, base)
+                self.point_arrays.append(info["points"])
+            specs.append(spec)
+            slots.append(info)
+            where.setdefault(name, []).append(slot)  # (lower and upper: per box)
+        pending = _Pending(self.axes, _mplrs.ArtistBatch(n, base, specs), n, slots)
+        self.children._add_pending(pending)
+        out = [_PendingList(pending, where[name]) if name in where else []
+               for name in ("whiskers", "caps", "boxes", "medians", "means", "fliers")]
+        if not self._lazy():
+            self.children._unpack()
+            out = [list(artists) for artists in out]
         return tuple(out)
+
+    @staticmethod
+    def datalabels(bxpstats, positions):
+        """``[stats.get('label', pos) ...]`` for the boxes."""
+        if _dense(bxpstats) is None:
+            return [stats.get('label', pos) for pos, stats in zip(positions, bxpstats)]
+        labels = bxpstats.labels
+        if labels is None:
+            return list(positions)
+        return [pos if label is None else label for pos, label in zip(positions, labels)]
 
     def finish(self):
         if self.points:

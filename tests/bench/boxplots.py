@@ -133,8 +133,11 @@ def worker(args):
     built = time.perf_counter()
     build_cpu = time.process_time() - cpu
     assert len(ax.patches) == args.groups * args.boxes
-    paths_ready = sum(line._path is not None and not line._invalidx and not line._invalidy
-                      for line in ax.lines)
+    # (matplotlib_rs creates the artists when they are read: counting them
+    # does not, checking each of them would)
+    paths_ready = None if args.impl == "rs" else sum(
+        line._path is not None and not line._invalidx and not line._invalidy
+        for line in ax.lines)
 
     draw_begin = time.perf_counter()
     cpu = time.process_time()
@@ -167,7 +170,8 @@ def worker(args):
         "line_count": len(ax.lines), "peak_rss_mib": peak_mib,
         "official_optimization": args.official_optimization if args.impl == "mpl" else None,
         "rust_extension_loaded": "matplotlib_rs._mplrs" in sys.modules,
-        "line_paths_ready_after_build": int(paths_ready),
+        "line_paths_ready_after_build": paths_ready,
+        "environment": {k: os.environ[k] for k in ("MPLRS_LAZY", "MPLRS_THREADS") if k in os.environ},
         "pre_draw_check_seconds": draw_begin - built,
         "png_bytes": args.image.stat().st_size,
         "optimization_counts": (dict(official_boxplot_fastpath.COUNTS)

@@ -959,6 +959,33 @@ impl RasterizerScanlineAa {
         true
     }
 
+    /// After `sweep_scanline` gave a row: skip the rows that follow it with
+    /// the same spans and covers, and return their number.  These are the
+    /// rows of a rectilinear outline (`Rectilinear`) up to the next end of a
+    /// vertical edge: every edge either crosses all of them from top to
+    /// bottom or none of them, so `rectilinear_row` gives them the same
+    /// cells.  The next `sweep_scanline` gives the row after them.
+    pub fn skip_repeated_rows(&mut self) -> u32 {
+        let Some(r) = &self.outline.rect else { return 0 };
+        let y = self.scan_y - 1; // the row just swept
+        let (bottom, top) = (y << POLY_SUBPIXEL_SHIFT, (y + 1) << POLY_SUBPIXEL_SHIFT);
+        // the first row after y where an edge starts or ends
+        let mut event = self.outline.max_y().min(r.row_hi) + 1;
+        for &(_, lo, hi, _) in &r.segs[..r.n] {
+            if lo <= bottom && hi >= top {
+                // crosses row y: also the following rows it crosses entirely
+                event = event.min(hi >> POLY_SUBPIXEL_SHIFT);
+            } else if hi.min(top) - lo.max(bottom) > 0 {
+                return 0; // starts or ends in row y
+            } else if lo >= top {
+                event = event.min(lo >> POLY_SUBPIXEL_SHIFT);
+            }
+        }
+        let n = (event - 1 - y).max(0);
+        self.scan_y += n;
+        n as u32
+    }
+
     #[inline(always)]
     pub fn calculate_alpha(&self, area: i32) -> u32 {
         let mut cover = area >> (POLY_SUBPIXEL_SHIFT * 2 + 1 - AA_SHIFT);
@@ -1088,6 +1115,12 @@ mod tests {
 
     type Rows = Vec<(i32, Vec<(i32, i32, Vec<u8>)>)>;
 
+    thread_local! {
+        /// Whether `sweep` skips repeated rows (and repeats them itself).
+        static SKIP: StdCell<bool> = const { StdCell::new(false) };
+        static SKIPPED: StdCell<usize> = const { StdCell::new(0) };
+    }
+
     fn sweep<S: Scanline + ScanlineSpans>(ras: &mut RasterizerScanlineAa, sl: &mut S) -> Rows {
         let mut rows = Vec::new();
         // (renderers prepare their output only if there are cells)
@@ -1096,7 +1129,7 @@ mod tests {
             sl.reset(ras.min_x(), ras.max_x());
             while ras.sweep_scanline(sl) {
                 let covers = sl.covers();
-                let spans = sl
+                let spans: Vec<(i32, i32, Vec<u8>)> = sl
                     .spans()
                     .iter()
                     .map(|s| {
@@ -1105,7 +1138,14 @@ mod tests {
                         (s.x, s.len, c.map(|c| c.to_vec()).unwrap_or_else(|| vec![255; n]))
                     })
                     .collect();
-                rows.push((sl.y(), spans));
+                rows.push((sl.y(), spans.clone()));
+                if SKIP.with(|c| c.get()) {
+                    let n = ras.skip_repeated_rows();
+                    SKIPPED.with(|c| c.set(c.get() + n as usize));
+                    for k in 1..=n as i32 {
+                        rows.push((sl.y() + k, spans.clone()));
+                    }
+                }
             }
         }
         rows
@@ -1172,6 +1212,11 @@ mod tests {
         let b = render(&mut path, clip, rule, true, kind);
         assert_eq!(pixels(&a), pixels(&b), "clip {clip:?} rule {rule:?} kind {kind}");
         assert_eq!(a.iter().map(|r| r.0).collect::<Vec<_>>(), b.iter().map(|r| r.0).collect::<Vec<_>>());
+        // rows skipped as repeated are the rows swept one by one
+        SKIP.with(|c| c.set(true));
+        let c = render(&mut path, clip, rule, true, kind);
+        SKIP.with(|c| c.set(false));
+        assert_eq!(b, c, "clip {clip:?} rule {rule:?} kind {kind}");
     }
 
     fn polygon(pts: &[(f64, f64)], close: bool) -> PathStorage {
@@ -1247,7 +1292,8 @@ mod tests {
             }
         }
         let (r, n) = (RECTILINEAR.with(|c| c.get()), NONEMPTY.with(|c| c.get()));
-        eprintln!("rectilinear sweeps: {r} ({n} with coverage)");
-        assert!(r > 12000 && n > 6000);
+        let skipped = SKIPPED.with(|c| c.get());
+        eprintln!("rectilinear sweeps: {r} ({n} with coverage), {skipped} repeated rows skipped");
+        assert!(r > 12000 && n > 6000 && skipped > 20000);
     }
 }

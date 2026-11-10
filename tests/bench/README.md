@@ -211,6 +211,37 @@ PYTHON=/tmp/numpy-only/bin/python sh scripts/dev_build.sh --locked
     --rs-python /tmp/numpy-only/bin/python --output tests/output/boxplots-py310 --rounds 5
 ```
 
+### 延後建立與平行繪製（0.0.5 之後）
+
+`boxplot` 改為在讀取時才建立 artists，繪製改為多執行緒（作法與完整數據見
+[延後建立的箱形圖報告](../../docs/benchmarks/boxplots-lazy.md)）。`boxplots.py` 因此不再逐一檢查
+matplotlib_rs 的每條線（那會建立全部物件；`line_paths_ready_after_build` 對 `rs` 為 `null`），
+只以 `len(ax.lines)`、`len(ax.patches)` 確認數量；並記錄 `MPLRS_LAZY`／`MPLRS_THREADS`。
+
+同一負載（30 組 × 180 箱）五輪中位數，Matplotlib 3.11.2 → 0.0.5 → 本次：
+建圖 14.222 → 0.348 → **0.111 秒**，首次繪製 3.127 → 0.158 → **0.055 秒**，
+重繪 1.557 → 0.134 → **0.041 秒**，最高 RSS 538.5 → 264.5 → **126.4 MiB**；
+24 次執行的畫布相同，PNG 0 個差異像素。0.0.5 以 `--python-source` 指向該版原始碼樹量測。
+
+`boxplot_lazy.py` 量測一次呼叫 N 箱的各個階段，每個版本各在全新行程執行、每輪交替順序：
+
+```bash
+python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 \
+    --base-source /path/to/matplotlib-rs-0.0.5/python --mpl --output tests/output/boxplot-lazy
+```
+
+- 版本：`lazy`（預設）、`eager`（`MPLRS_LAZY=0`）、`lazy-1-thread`（`MPLRS_THREADS=1`）、
+  `base`（`--base-source` 指定的另一份 `python` 目錄）、`mpl`（`--mpl`，只跑一輪）。
+- 階段：`build`、`first_draw`、`redraw`、`save_png`；`read_boxes`（讀取每個箱體，建立該元件）、
+  `read_all`（`ax.get_children()`，建立其餘）與之後的重繪；`change_boxes`（修改每個箱體的顏色）、
+  `redraw_changed`（修改後第一次重繪）與 `redraw_one_by_one`；`rss_after_draw_mib` 與 `peak_rss_mib`。
+- 各版本在首次繪製後、讀取後、修改後的畫布雜湊必須全部相同，否則以非零狀態結束。
+
+50,000 箱（350,000 個 artists）五輪中位數：建圖 2.250 → **0.345 秒**、首次繪製 1.113 → **0.181 秒**、
+重繪 0.948 → **0.175 秒**（0.0.5 → 本次）；繪製完成時的最高 RSS 1,504 → **211 MiB**。
+Matplotlib 3.11.2 一輪為建圖 132.8 秒、首次繪製 25.7 秒、4,123 MiB，畫布相同。
+讀取全部 artists 需 1.25 秒；修改後逐一繪製的重繪為 0.60 秒（0.0.5 為 1.23 秒）。
+
 ## 一般四格圖
 
 `phases.py` 與 `best_of.sh` 使用較小的 2 × 2 subplot 工作負載，詳見專案根目錄 README。

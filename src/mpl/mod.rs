@@ -3,6 +3,7 @@
 pub mod artist;
 pub mod axes;
 pub mod axis;
+pub mod batch;
 pub mod collections;
 pub mod colors;
 pub mod contour2014;
