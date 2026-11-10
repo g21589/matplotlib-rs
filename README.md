@@ -208,7 +208,7 @@ pie 每片的 Python 物件流程仍比官方慢。0.5 秒以下的案例各輪�
 python tests/bench/basic_charts.py --rounds 3 --output tests/output/basic-charts
 ```
 
-`MPLRS_THREADS` 可指定平行處理（path collection 點陣化、影像重採樣、色彩對應、直方圖、等高線、PNG 壓縮）的執行緒數，`1` 為單執行緒。
+`MPLRS_THREADS` 可指定平行處理（path collection 與大量線段／patch 的點陣化、影像重採樣、色彩對應、直方圖、等高線、PNG 壓縮）的執行緒數，`1` 為單執行緒。
 
 ### 影像檔
 
@@ -310,6 +310,38 @@ python tests/bench/png_save.py --output tests/output/png-save
 Python 3.10 的最高 RSS 為 594.9（3.8.2）→ 295.5 MiB。
 主機為 4 vCPU Intel Xeon 2.80GHz；數據見 [`docs/benchmarks/boxplots-0.0.3.json`](docs/benchmarks/boxplots-0.0.3.json)，
 重跑方式見 [壓測說明](tests/bench/README.md#003批次建立與-python-310)。
+
+#### 延後建立的箱形圖（lazy plot）與平行繪製（0.0.5 之後，尚未發行）
+
+`boxplot`／`bxp` 不再為每個元件建立物件：一次呼叫的座標以陣列交給 Rust 核心直接繪製，
+`Line2D`／`PathPatch` 在第一次被讀取時才建立；Axes 內連續的大量線段與 patch 則以多個執行緒點陣化與混色。
+同一張 5,400 箱的圖與一次呼叫 50,000 箱（各五輪中位數，秒；Matplotlib 的 50,000 箱為一輪）：
+
+| 工作負載 | Matplotlib 3.11.2 | 0.0.5 | 延後建立 | 對 Matplotlib | 對 0.0.5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5,400 箱（30 次呼叫）建圖 | 14.222 | 0.348 | **0.111** | 128× | 3.1× |
+| 5,400 箱（30 次呼叫）建圖＋首次繪製 | 17.538 | 0.506 | **0.165** | 106× | 3.1× |
+| 5,400 箱（30 次呼叫）重繪 | 1.557 | 0.134 | **0.041** | 38× | 3.2× |
+| 50,000 箱（1 次呼叫）建圖 | 132.849 | 2.250 | **0.345** | 385× | 6.5× |
+| 50,000 箱（1 次呼叫）建圖＋首次繪製 | 158.527 | 3.335 | **0.527** | 301× | 6.3× |
+| 50,000 箱（1 次呼叫）重繪 | 11.613 | 0.948 | **0.175** | 67× | 5.4× |
+
+繪製完成時的最高 RSS：5,400 箱 538 → 265 → **126 MiB**，50,000 箱 4,123 → 1,504 → **211 MiB**。
+畫布在 artists 尚未建立、已建立、修改後各階段都與 Matplotlib 逐像素相同。
+
+- `result["boxes"]` 等回傳的 list 在讀取時建立該元件的 artists，`ax.get_children()`、`ax.lines[i]` 等讀取時建立全部；
+  建立出來的是一般的、可獨立修改的物件。`len()`、繪製、`savefig`、autoscale、`relim`、tight／constrained layout
+  與圖例不會建立它們。
+- 成本是延後而非消失：50,000 箱讀取全部 artists 需 1.25 秒（只讀箱體 0.18 秒）。未修改時仍由陣列繪製；
+  修改或移除其中一個 artist 後，該次呼叫的 artists 改為逐一繪製（50,000 箱重繪 0.60 秒，0.0.5 為 1.23 秒）。
+- `MPLRS_LAZY=0` 在 `boxplot` 內建立全部 artists；`MPLRS_THREADS=1` 時 50,000 箱重繪為 0.31 秒。
+
+作法、各階段的完整數據、驗證與限制見 [延後建立的箱形圖報告](docs/benchmarks/boxplots-lazy.md)，
+原始數據為 [`docs/benchmarks/boxplots-lazy.json`](docs/benchmarks/boxplots-lazy.json)。
+
+```bash
+python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 --output tests/output/boxplot-lazy
+```
 
 ## 開發與重跑測試
 
