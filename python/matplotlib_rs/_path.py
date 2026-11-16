@@ -16,6 +16,7 @@ path_intersects_path = _impl.path_intersects_path
 path_intersects_rectangle = _impl.path_intersects_rectangle
 clip_path_to_rect = _impl.clip_path_to_rect
 convert_to_string = _impl.convert_to_string
+legend_badness = _impl.legend_badness
 
 
 def count_bboxes_overlapping_bbox(bbox, bboxes):

@@ -39,14 +39,29 @@ fn path_from(
     if v.ndim() != 2 || (v.shape()[0] > 0 && v.shape()[1] != 2) {
         return Err(PyValueError::new_err("Invalid vertices array"));
     }
-    let verts: Vec<[f64; 2]> = (0..v.shape()[0]).map(|i| [v[[i, 0]], v[[i, 1]]]).collect();
-    let codes = codes.map(|c| c.as_array().iter().copied().collect::<Vec<u8>>());
+    let verts = verts_from(&v);
+    let codes = codes.map(|c| match c.as_slice() {
+        Ok(s) => s.to_vec(),
+        Err(_) => c.as_array().iter().copied().collect::<Vec<u8>>(),
+    });
     if let Some(c) = &codes {
         if c.len() != verts.len() {
             return Err(PyValueError::new_err("Invalid codes array"));
         }
     }
-    Ok(MplPath { vertices: verts, codes, should_simplify, simplify_threshold })
+    Ok(MplPath { vertices: verts.into(), codes, should_simplify, simplify_threshold })
+}
+
+/// The rows of an (n, 2) array (of a contiguous one, without indexing each
+/// element).
+pub(crate) fn verts_from(v: &numpy::ndarray::ArrayView2<'_, f64>) -> Vec<[f64; 2]> {
+    if v.shape()[1] != 2 {
+        return Vec::new();
+    }
+    match v.as_slice() {
+        Some(s) => s.chunks_exact(2).map(|p| [p[0], p[1]]).collect(),
+        None => (0..v.shape()[0]).map(|i| [v[[i, 0]], v[[i, 1]]]).collect(),
+    }
 }
 
 fn rgba_from(obj: &Bound<'_, PyAny>) -> PyResult<Rgba> {

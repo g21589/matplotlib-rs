@@ -786,6 +786,15 @@ def cohere(x, y, NFFT=256, Fs=2, detrend=detrend_none, window=window_hanning,
     return Cxy, f
 
 
+def _rs_kde_1d_arrays(dataset, points, inv_cov):
+    """
+    Whether `GaussianKDE.evaluate` can take several points at a time: plain
+    float64 arrays (so that operations on rows give what the loop gives).
+    """
+    return all(type(a) is np.ndarray and a.dtype == np.float64
+               for a in (dataset, points, inv_cov)) and inv_cov.shape == (1, 1)
+
+
 class GaussianKDE:
     """
     Representation of a kernel-density estimate using Gaussian kernels.
@@ -917,6 +926,24 @@ class GaussianKDE:
                 tdiff = np.dot(self.inv_cov, diff)
                 energy = np.sum(diff * tdiff, axis=0) / 2.0
                 result = result + np.exp(-energy)
+        elif self.dim == 1 and _rs_kde_1d_arrays(self.dataset, points,
+                                                 self.inv_cov):
+            # matplotlib_rs: the loop below for one dimension, several points
+            # at a time.  Every element goes through the same operations in
+            # the same order (the product with the 1x1 inverse covariance is
+            # one multiplication, the sum over the single dimension is the
+            # element itself), and each point's sum over the data is still
+            # NumPy's sum of one contiguous row.
+            data = self.dataset[0]
+            inv_cov = self.inv_cov[0, 0]
+            # (about 8,000 elements at a time: larger temporary arrays do
+            # not fit the processor's caches and take longer than the loop)
+            step = max(1, (1 << 13) // self.num_dp)
+            for i in range(0, num_m, step):
+                diff = data[np.newaxis, :] - points[0, i:i + step, np.newaxis]
+                tdiff = inv_cov * diff
+                energy = (diff * tdiff) / 2.0
+                result[i:i + step] = np.sum(np.exp(-energy), axis=1)
         else:
             # loop over points
             for i in range(num_m):

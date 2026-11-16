@@ -3,7 +3,7 @@
 use super::artist::{ArtistBase, ClipCtx, GcState, TSpec, TransCtx};
 use super::colors::ColorSpec;
 use super::markers::{MarkerStyle, SnapThreshold};
-use super::path::{new_path, Path, SimplifyParams};
+use super::path::{new_path, Path, SimplifyParams, Verts};
 use super::rc::rc;
 use super::renderer::Renderer;
 use super::transforms::{Bbox, Transform};
@@ -81,6 +81,14 @@ impl DrawStyle {
 }
 
 /// `pts_to_prestep` / `pts_to_poststep` / `pts_to_midstep` on (x, y) pairs.
+/// `step_vertices` of shared vertices (which a line without steps shares).
+fn step_verts(style: DrawStyle, xy: &Verts) -> Verts {
+    match style {
+        DrawStyle::Default => xy.clone(),
+        _ => step_vertices(style, xy).into(),
+    }
+}
+
 pub fn step_vertices(style: DrawStyle, xy: &[[f64; 2]]) -> Vec<[f64; 2]> {
     let n = xy.len();
     match style {
@@ -133,10 +141,10 @@ pub enum MarkEvery {
 }
 
 /// `_path.is_sorted_and_has_non_nan`.
-pub fn is_sorted_and_has_non_nan(x: &[f64]) -> bool {
+pub fn is_sorted_and_has_non_nan(x: impl IntoIterator<Item = f64>) -> bool {
     let mut last = f64::NEG_INFINITY;
     let mut found = false;
-    for &v in x {
+    for v in x {
         if v == v {
             found = true;
             if v < last {
@@ -189,10 +197,23 @@ pub struct Line2D {
 
 #[derive(Clone, Debug)]
 struct LineCache {
-    xy: Vec<[f64; 2]>,
+    /// the data (the path of a line without steps shares it)
+    xy: Verts,
     path: Path,
     subslice: bool,
+    /// x with its NaNs interpolated, if it has NaNs (for `subslice`)
     x_filled: Option<Vec<f64>>,
+}
+
+impl LineCache {
+    /// `np.searchsorted(x_filled, v, side)` (for `subslice`).
+    fn searchsorted_x(&self, v: f64, right: bool) -> usize {
+        match &self.x_filled {
+            Some(xf) => searchsorted(xf, v, right),
+            None if right => self.xy.partition_point(|p| p[0] <= v),
+            None => self.xy.partition_point(|p| p[0] < v),
+        }
+    }
 }
 
 impl Line2D {
@@ -344,34 +365,30 @@ impl Line2D {
     /// `recache`.  `subslice_ok` tells whether the artist sits in a
     /// rectilinear linear-x Axes with `transform == transData`.
     pub fn recache(&mut self, subslice_ok: bool) {
-        let xy = self.build_xy();
-        let x: Vec<f64> = xy.iter().map(|p| p[0]).collect();
+        let xy: Verts = self.build_xy().into();
         let mut subslice = false;
         let mut x_filled = None;
         if subslice_ok
-            && x.len() > 1000
-            && is_sorted_and_has_non_nan(&x)
+            && xy.len() > 1000
             && self.markevery.is_none()
             && self.base.clip_on
+            && is_sorted_and_has_non_nan(xy.iter().map(|p| p[0]))
         {
             subslice = true;
-            if x.iter().any(|v| v.is_nan()) {
+            if xy.iter().any(|p| p[0].is_nan()) {
                 // np.interp over the NaN positions
-                let idx: Vec<f64> = (0..x.len()).filter(|&i| !x[i].is_nan()).map(|i| i as f64).collect();
-                let vals: Vec<f64> = x.iter().copied().filter(|v| !v.is_nan()).collect();
-                let mut xf = x.clone();
+                let mut xf: Vec<f64> = xy.iter().map(|p| p[0]).collect();
+                let idx: Vec<f64> = (0..xf.len()).filter(|&i| !xf[i].is_nan()).map(|i| i as f64).collect();
+                let vals: Vec<f64> = xf.iter().copied().filter(|v| !v.is_nan()).collect();
                 for (i, v) in xf.iter_mut().enumerate() {
                     if v.is_nan() {
                         *v = np_interp(i as f64, &idx, &vals);
                     }
                 }
                 x_filled = Some(xf);
-            } else {
-                x_filled = Some(x.clone());
             }
         }
-        let vertices = step_vertices(self.drawstyle, &xy);
-        let path = new_path(vertices, None, simplify_params());
+        let path = new_path(step_verts(self.drawstyle, &xy), None, simplify_params());
         self.cache = Some(LineCache { xy, path, subslice, x_filled });
     }
 
@@ -414,8 +431,8 @@ impl Line2D {
     /// `get_window_extent`.
     pub fn get_window_extent(&mut self, ctx: &TransCtx, subslice_ok: bool) -> Bbox {
         let t = ctx.resolve(&self.base.transform);
-        let xy = self.get_xydata(subslice_ok).to_vec();
-        let pts = t.transform_points(&xy);
+        self.ensure_cache(subslice_ok);
+        let pts = t.transform_points(&self.cache.as_ref().unwrap().xy);
         let mut bb = bbox_from_data_xy(&pts);
         if marker_is_truthy(&self.marker) {
             let ms = (self.markersize / 72.0 * ctx.dpi) * 0.5;
@@ -434,20 +451,18 @@ impl Line2D {
         self.ensure_cache(subslice_ok);
         let transform = ctx.resolve(&self.base.transform);
         let cache = self.cache.as_ref().unwrap();
-        // subslice
+        // subslice (the visible part shares the data: nothing is copied)
         let mut sub_path_store: Option<Path> = None;
-        let mut sub_xy: Option<Vec<[f64; 2]>> = None;
+        let mut sub_xy: Option<Verts> = None;
         if cache.subslice {
             if let Some((x0, x1)) = xbound {
-                let xf = cache.x_filled.as_ref().unwrap();
-                let i0 = searchsorted(xf, x0, false);
-                let i1 = searchsorted(xf, x1, true);
+                let i0 = cache.searchsorted_x(x0, false);
+                let i1 = cache.searchsorted_x(x1, true);
                 let start = i0.saturating_sub(1);
                 let end = (i1 + 1).min(cache.xy.len());
-                let xy = &cache.xy[start.min(end)..end];
-                let verts = step_vertices(self.drawstyle, xy);
-                sub_path_store = Some(new_path(verts, None, simplify_params()));
-                sub_xy = Some(xy.to_vec());
+                let xy = cache.xy.slice(start.min(end)..end);
+                sub_path_store = Some(new_path(step_verts(self.drawstyle, &xy), None, simplify_params()));
+                sub_xy = Some(xy);
             }
         }
         let path: &Path = sub_path_store.as_ref().unwrap_or(&cache.path);
@@ -478,11 +493,11 @@ impl Line2D {
         if self.draws_markers() {
             let MarkerPlan { gc, trans: mtrans, face: fc, face_alt: fcalt } = self.marker_plan(renderer, clip);
             // points (always the non-stepped data)
-            let xy: &[[f64; 2]] = match &sub_xy {
+            let xy: &Verts = match &sub_xy {
                 Some(v) => v,
                 None => &self.cache.as_ref().unwrap().xy,
             };
-            let pts_nonaffine = if transform.is_affine() { xy.to_vec() } else { transform.transform_points_non_affine(xy) };
+            let pts_nonaffine: Verts = if transform.is_affine() { xy.clone() } else { transform.transform_points_non_affine(xy).into() };
             let src_path = &self.cache.as_ref().unwrap().path;
             let mut tpoints = Path {
                 vertices: pts_nonaffine,
@@ -702,7 +717,7 @@ pub fn bbox_from_data_xy(xy: &[[f64; 2]]) -> Bbox {
 fn mark_every_path(me: &MarkEvery, tpath: &Path, affine: &super::transforms::Mat, ctx: &TransCtx) -> Path {
     let verts = &tpath.vertices;
     let mk = |v: Vec<[f64; 2]>| Path {
-        vertices: v,
+        vertices: v.into(),
         codes: None,
         should_simplify: tpath.should_simplify,
         simplify_threshold: tpath.simplify_threshold,

@@ -557,7 +557,7 @@ impl Patch {
             PatchKind::FancyBbox { x, y, width, height, boxstyle } => {
                 let m = self.mutation_aspect;
                 let p = boxstyle.path(*x, y / m, *width, height / m, self.mutation_scale);
-                let verts = p.vertices.iter().map(|v| [v[0] * 1.0, v[1] * m]).collect();
+                let verts: Vec<[f64; 2]> = p.vertices.iter().map(|v| [v[0] * 1.0, v[1] * m]).collect();
                 new_path(verts, p.codes, SimplifyParams::default())
             }
             PatchKind::Shadow { patch, .. } => patch.get_path(),
@@ -784,7 +784,7 @@ pub fn wedge_path(center: (f64, f64), r: f64, theta1: f64, theta2: f64, width: O
     let acodes = arc.codes.clone().unwrap();
     let (v, c) = match width {
         Some(w) => {
-            let mut v = arc.vertices.clone();
+            let mut v = arc.vertices.to_vec();
             for p in arc.vertices.iter().rev() {
                 v.push([p[0] * (r - w) / r, p[1] * (r - w) / r]);
             }
@@ -796,7 +796,7 @@ pub fn wedge_path(center: (f64, f64), r: f64, theta1: f64, theta2: f64, width: O
             (v, c)
         }
         None => {
-            let mut v = arc.vertices.clone();
+            let mut v = arc.vertices.to_vec();
             v.push([0.0, 0.0]);
             v.push([0.0, 0.0]);
             let mut c = acodes.clone();
@@ -805,6 +805,6 @@ pub fn wedge_path(center: (f64, f64), r: f64, theta1: f64, theta2: f64, width: O
             (v, c)
         }
     };
-    let v = v.iter().map(|p| [p[0] * r + center.0, p[1] * r + center.1]).collect();
+    let v: Vec<[f64; 2]> = v.iter().map(|p| [p[0] * r + center.0, p[1] * r + center.1]).collect();
     new_path(v, Some(c), super::lines::simplify_params())
 }

@@ -10,19 +10,20 @@ use crate::agg::stroke::*;
 use crate::agg::trans_affine::{ConvTransform, TransAffine};
 
 use super::path_converters::*;
+pub use super::verts::Verts;
 
 /// A matplotlib `Path`: vertices, optional codes and simplification info.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MplPath {
-    pub vertices: Vec<[f64; 2]>,
+    pub vertices: Verts,
     pub codes: Option<Vec<u8>>,
     pub should_simplify: bool,
     pub simplify_threshold: f64,
 }
 
 impl MplPath {
-    pub fn new(vertices: Vec<[f64; 2]>, codes: Option<Vec<u8>>) -> Self {
-        MplPath { vertices, codes, should_simplify: false, simplify_threshold: 1.0 / 9.0 }
+    pub fn new(vertices: impl Into<Verts>, codes: Option<Vec<u8>>) -> Self {
+        MplPath { vertices: vertices.into(), codes, should_simplify: false, simplify_threshold: 1.0 / 9.0 }
     }
     #[inline]
     pub fn total_vertices(&self) -> usize {
@@ -1467,13 +1468,7 @@ impl RendererAgg {
                 barrier.wait();
             }
         };
-        std::thread::scope(|s| {
-            for t in 1..threads {
-                let work = &work;
-                s.spawn(move || work(t));
-            }
-            work(0);
-        });
+        crate::pool::run(threads, work);
     }
 }
 
@@ -1617,14 +1612,7 @@ const PARALLEL_MIN_PATHS: usize = 256;
 /// loops): the available parallelism (at most 8), or `MPLRS_THREADS` (1: one
 /// thread).
 pub fn collection_threads() -> usize {
-    static THREADS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *THREADS.get_or_init(|| {
-        std::env::var("MPLRS_THREADS")
-            .ok()
-            .and_then(|v| v.trim().parse::<usize>().ok())
-            .filter(|&t| t >= 1)
-            .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |t| t.get()).min(8))
-    })
+    crate::pool::threads()
 }
 
 /// The arguments of a `draw_path_collection` call.
@@ -1676,12 +1664,6 @@ impl Recorded {
         }
     }
 
-    /// The recorded scanlines through `render_scanline_aa_solid` (*aa*) or
-    /// `render_scanline_bin_solid`.
-    fn replay<P: PixFmt>(&self, rb: &mut RendererBase<P>, c: &Rgba8, aa: bool) {
-        self.replay_rows(rb, c, aa, i32::MIN, i32::MAX);
-    }
-
     /// The first and last scanlines recorded.
     fn rows(&self) -> Option<(i32, i32)> {
         Some((self.rows.first()?.0, self.rows.last().map(|r| r.0 + r.3 as i32)?))
@@ -1717,7 +1699,8 @@ struct RecordedPath {
 }
 
 impl Recorded {
-    /// `replay` of the scanlines y0..y1 (the scanlines are in order).
+    /// The recorded scanlines y0..y1 (they are in order) through
+    /// `render_scanline_aa_solid` (*aa*) or `render_scanline_bin_solid`.
     fn replay_rows<P: PixFmt>(&self, rb: &mut RendererBase<P>, c: &Rgba8, aa: bool, y0: i32, y1: i32) {
         let start = self.rows.partition_point(|r| r.0.saturating_add(r.3 as i32) < y0);
         for &(y, first, n, repeat) in self.rows[start..].iter().take_while(|r| r.0 < y1) {
@@ -1736,6 +1719,17 @@ impl Recorded {
 }
 
 impl RecordedPath {
+    /// The first and last rows the recorded face and stroke cover
+    /// (first > last: none).
+    fn rows(&self) -> (i32, i32) {
+        let recorded = [self.face.map(|_| &self.face_rows), self.stroke.map(|_| &self.stroke_rows)];
+        let mut rows = (i32::MAX, i32::MIN);
+        for (first, last) in recorded.into_iter().flatten().filter_map(Recorded::rows) {
+            rows = (rows.0.min(first), rows.1.max(last));
+        }
+        rows
+    }
+
     /// Render the scanlines y0..y1 of the recorded face and stroke, as
     /// `render_current` renders them.
     fn replay_rows<P: PixFmt>(&self, rb: &mut RendererBase<P>, y0: i32, y1: i32) {
@@ -1880,75 +1874,98 @@ impl RendererAgg {
             PathWorker { ras, sl_p8: ScanlineP8::new(), sl_bin: ScanlineBin::new() }
         };
 
-        // Batches: the threads (started once) rasterize their share of a
-        // batch into their own buffers, then this thread renders the batch
-        // in order.  Small batches keep the recorded scanlines in cache.
-        const PER_THREAD: usize = 512;
-        let batch = PER_THREAD * threads;
-        let share = |start: usize, t: usize| {
-            let end = (start + batch).min(n);
-            let per = (end - start).div_ceil(threads);
-            let a = (start + t * per).min(end);
-            (a, (a + per).min(end))
+        // Rounds of consecutive paths, as in `draw_artists_parallel`: the
+        // threads rasterize the paths of a round, chunk by chunk, into
+        // buffers; then they render the recorded scanlines band by band.  A
+        // band (some rows of the image) is rendered by one thread, path
+        // after path, so every pixel gets the paths in order.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::sync::{Mutex, RwLock};
+        /// The paths a thread takes at a time.
+        const CHUNK: usize = 128;
+        /// Chunks per thread in a round: small rounds keep the recorded
+        /// scanlines in cache.
+        const PER_THREAD: usize = 4;
+        /// Bands per thread (at least `MIN_BAND_ROWS` rows high): several, so
+        /// that the threads share the work when few rows have most of it.
+        const BANDS_PER_THREAD: usize = 6;
+        const MIN_BAND_ROWS: usize = 16;
+        let round = CHUNK * PER_THREAD * threads;
+        let nrounds = n.div_ceil(round);
+        /// The paths of a chunk and the rows each covers, and the rows they
+        /// cover together.
+        #[derive(Default)]
+        struct Chunk {
+            paths: Vec<RecordedPath>,
+            rows: Vec<(i32, i32)>,
+            all_rows: (i32, i32),
+        }
+        let chunks: Vec<RwLock<Chunk>> = (0..PER_THREAD * threads).map(|_| RwLock::default()).collect();
+        let band_rows = (h as usize).div_ceil(BANDS_PER_THREAD * threads).max(MIN_BAND_ROWS);
+        let bands: Vec<Mutex<PixfmtBand<'_>>> = self.pixf.bands(band_rows).into_iter().map(Mutex::new).collect();
+        let barrier = SpinBarrier::new(threads);
+        // what the threads take next: (round << 32) | index of a chunk / band
+        let next_chunk = AtomicU64::new(0);
+        let next_band = AtomicU64::new(0);
+        let take = |next: &AtomicU64, r: usize, count: usize| {
+            let v = next.fetch_add(1, Ordering::AcqRel);
+            debug_assert_eq!(v >> 32, r as u64);
+            Some((v & 0xffff_ffff) as usize).filter(|&k| k < count)
         };
-        let slots: Vec<std::sync::Mutex<(PathWorker, Gc, Vec<RecordedPath>)>> = (0..threads)
-            .map(|_| {
-                let mut gc = gc0.clone();
-                gc.linewidth = 0.0;
-                std::sync::Mutex::new((new_worker(), gc, Vec::new()))
-            })
-            .collect();
-        let next = std::sync::atomic::AtomicUsize::new(0);
-        let finished = std::sync::atomic::AtomicBool::new(false);
-        let go = std::sync::Barrier::new(threads + 1);
-        let done = std::sync::Barrier::new(threads + 1);
-        let pixf = &mut self.pixf;
-        std::thread::scope(|s| {
-            for (t, slot) in slots.iter().enumerate() {
-                let (rasterize, share, next, finished, go, done) = (&rasterize, &share, &next, &finished, &go, &done);
-                s.spawn(move || loop {
-                    go.wait();
-                    if finished.load(std::sync::atomic::Ordering::Acquire) {
-                        break;
+        let work = |t: usize| {
+            let _guard = barrier.guard();
+            let mut worker = new_worker();
+            // (the state gc_for gives path i depends on i only)
+            let mut gc = gc0.clone();
+            gc.linewidth = 0.0;
+            for r in 0..nrounds {
+                let (a, b) = (r * round, ((r + 1) * round).min(n));
+                let nchunks = (b - a).div_ceil(CHUNK);
+                while let Some(c) = take(&next_chunk, r, nchunks) {
+                    let (lo, hi) = (a + c * CHUNK, (a + (c + 1) * CHUNK).min(b));
+                    let mut g = chunks[c].write().unwrap();
+                    let chunk = &mut *g;
+                    if chunk.paths.len() < hi - lo {
+                        chunk.paths.resize_with(hi - lo, RecordedPath::default);
                     }
-                    let (a, b) = share(next.load(std::sync::atomic::Ordering::Acquire), t);
-                    {
-                        let mut g = slot.lock().unwrap();
-                        let (worker, gc, out) = &mut *g;
-                        if out.len() < b - a {
-                            out.resize_with(b - a, RecordedPath::default);
-                        }
-                        // (the state gc_for gives path i depends on i only)
-                        for (j, i) in (a..b).enumerate() {
-                            rasterize(worker, gc, i, &mut out[j]);
-                        }
+                    chunk.rows.clear();
+                    chunk.all_rows = (i32::MAX, i32::MIN);
+                    for (j, i) in (lo..hi).enumerate() {
+                        rasterize(&mut worker, &mut gc, i, &mut chunk.paths[j]);
+                        let rows = chunk.paths[j].rows();
+                        chunk.rows.push(rows);
+                        chunk.all_rows = (chunk.all_rows.0.min(rows.0), chunk.all_rows.1.max(rows.1));
                     }
-                    done.wait();
-                });
-            }
-            let mut start = 0;
-            while start < n {
-                next.store(start, std::sync::atomic::Ordering::Release);
-                go.wait();
-                done.wait();
-                // (as render_current: clipped by the rasterizer, not here)
-                let mut rb = RendererBase::new(&mut *pixf);
-                for (t, slot) in slots.iter().enumerate() {
-                    let (a, b) = share(start, t);
-                    let g = slot.lock().unwrap();
-                    for r in &g.2[..b - a] {
-                        if let Some(fc) = &r.face {
-                            r.face_rows.replay(&mut rb, fc, r.isaa);
+                }
+                if t == 0 {
+                    next_band.store((r as u64) << 32, Ordering::Release);
+                }
+                barrier.wait();
+                while let Some(k) = take(&next_band, r, bands.len()) {
+                    let mut band = bands[k].lock().unwrap();
+                    let (y0, y1) = (band.y0, band.y1);
+                    let mut rb = RendererBase::new(&mut *band);
+                    // (as render_current: the paths were clipped by the
+                    // rasterizer; the band renders its rows only)
+                    rb.clip_box = RectI::new(0, y0.max(0), w as i32 - 1, y1.min(h as i32) - 1);
+                    for chunk in &chunks[..nchunks] {
+                        let chunk = chunk.read().unwrap();
+                        if chunk.all_rows.0 >= y1 || chunk.all_rows.1 < y0 {
+                            continue;
                         }
-                        if let Some(ec) = &r.stroke {
-                            r.stroke_rows.replay(&mut rb, ec, r.isaa);
+                        for (j, &(first, last)) in chunk.rows.iter().enumerate() {
+                            if first < y1 && last >= y0 {
+                                chunk.paths[j].replay_rows(&mut rb, y0, y1);
+                            }
                         }
                     }
                 }
-                start = (start + batch).min(n);
+                if t == 0 {
+                    next_chunk.store((r as u64 + 1) << 32, Ordering::Release);
+                }
+                barrier.wait();
             }
-            finished.store(true, std::sync::atomic::Ordering::Release);
-            go.wait();
-        });
+        };
+        crate::pool::run(threads, work);
     }
 }

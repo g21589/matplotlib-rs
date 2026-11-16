@@ -4,4 +4,5 @@ pub mod agg;
 pub mod backend;
 pub mod font;
 pub mod mpl;
+pub mod pool;
 pub mod python;

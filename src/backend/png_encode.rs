@@ -370,17 +370,7 @@ fn compress_strips(
             results.lock().unwrap()[i] = Some(result);
         }
     };
-    let workers = threads.min(n);
-    if workers <= 1 {
-        work();
-    } else {
-        std::thread::scope(|s| {
-            for _ in 1..workers {
-                s.spawn(work);
-            }
-            work();
-        });
-    }
+    crate::pool::run(threads.min(n).max(1), |_| work());
     results
         .into_inner()
         .unwrap()

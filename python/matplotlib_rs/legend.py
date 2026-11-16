@@ -30,7 +30,7 @@ import time
 import numpy as np
 
 import matplotlib_rs as mpl
-from matplotlib_rs import _api, _docstring, cbook, colors, offsetbox
+from matplotlib_rs import _api, _docstring, _path, cbook, colors, offsetbox
 from matplotlib_rs.artist import Artist, allow_rasterization
 from matplotlib_rs.cbook import silent_list
 from matplotlib_rs.font_manager import FontProperties
@@ -779,20 +779,32 @@ class Legend(Artist):
             pad = 2 * (self.borderaxespad + self.borderpad) * fontsize
             self._legend_box.set_width(self.get_bbox_to_anchor().width - pad)
 
-        # update the location and size of the legend. This needs to
-        # be done in any case to clip the figure right.
-        bbox = self._legend_box.get_window_extent(renderer)
-        self.legendPatch.set_bounds(bbox.bounds)
-        self.legendPatch.set_mutation_scale(fontsize)
+        # matplotlib_rs: the extent and the draw of the box below both look
+        # for the best position, with the same Axes contents; the second one
+        # takes the result of the first (see _find_best_position).  The
+        # extents of the boxes are computed once too (see offsetbox).
+        self._rs_best_found = {}
+        outer_extents = getattr(offsetbox._rs_kept, "extents", None)
+        offsetbox._rs_kept.extents = {}
+        try:
+            # update the location and size of the legend. This needs to
+            # be done in any case to clip the figure right.
+            bbox = self._legend_box.get_window_extent(renderer)
+            self.legendPatch.set_bounds(bbox.bounds)
+            self.legendPatch.set_mutation_scale(fontsize)
 
-        # self.shadow is validated in __init__
-        # So by here it is a bool and self._shadow_props contains any configs
+            # self.shadow is validated in __init__
+            # So by here it is a bool and self._shadow_props contains any
+            # configs
 
-        if self.shadow:
-            Shadow(self.legendPatch, **self._shadow_props).draw(renderer)
+            if self.shadow:
+                Shadow(self.legendPatch, **self._shadow_props).draw(renderer)
 
-        self.legendPatch.draw(renderer)
-        self._legend_box.draw(renderer)
+            self.legendPatch.draw(renderer)
+            self._legend_box.draw(renderer)
+        finally:
+            del self._rs_best_found
+            offsetbox._rs_kept.extents = outer_extents
 
         renderer.close_group('legend')
         self.stale = False
@@ -1178,9 +1190,56 @@ class Legend(Artist):
             loc, bbox, parentbbox,
             pad, pad)
 
+    def _rs_best_position(self, bbox, width, height, renderer,
+                          bboxes, lines, offsets):
+        """
+        The position the loop of `_find_best_position` chooses, with the
+        badness of all candidates computed by one call into the Rust core;
+        None if the arguments are not arrays it takes (the loop then
+        decides).
+
+        The loop stops at the first candidate without badness and otherwise
+        takes the first one with the least: both are the first candidate
+        with the least badness.
+        """
+        try:
+            if len(offsets):
+                offsets = np.asarray(offsets)
+                if (offsets.ndim != 2 or offsets.shape[1] != 2
+                        or offsets.dtype.kind not in "fiu"):
+                    return None
+                offsets = np.ascontiguousarray(offsets, dtype=float)
+            else:
+                offsets = np.zeros((0, 2))
+            if len(bboxes):
+                bboxes = np.asarray([np.array(x) for x in bboxes],
+                                    dtype=float).reshape(-1, 2, 2)
+            else:
+                bboxes = np.zeros((0, 2, 2))
+            positions = []
+            boxes = []
+            for idx in range(1, len(self.codes)):
+                l, b = self._get_anchored_bbox(idx, bbox,
+                                               self.get_bbox_to_anchor(),
+                                               renderer)
+                positions.append((l, b))
+                boxes.append(Bbox.from_bounds(l, b, width, height).extents)
+            badness = _path.legend_badness(
+                np.asarray(boxes, dtype=float).reshape(-1, 4),
+                list(lines), offsets, bboxes)
+        except (TypeError, ValueError):
+            return None
+        return positions[min(range(len(badness)), key=badness.__getitem__)]
+
     def _find_best_position(self, width, height, renderer):
         """Determine the best location to place the legend."""
         assert self.isaxes  # always holds, as this is only called internally
+
+        # matplotlib_rs: within one Legend.draw (see there).
+        found = self.__dict__.get("_rs_best_found")
+        key = (width, height, id(renderer))
+        if found is not None and key in found:
+            return found[key]
 
         start_time = time.perf_counter()
 
@@ -1188,32 +1247,41 @@ class Legend(Artist):
 
         bbox = Bbox.from_bounds(0, 0, width, height)
 
-        candidates = []
-        for idx in range(1, len(self.codes)):
-            l, b = self._get_anchored_bbox(idx, bbox,
-                                           self.get_bbox_to_anchor(),
-                                           renderer)
-            legendBox = Bbox.from_bounds(l, b, width, height)
-            # XXX TODO: If markers are present, it would be good to take them
-            # into account when checking vertex overlaps in the next line.
-            badness = (sum(legendBox.count_contains(line.vertices)
-                           for line in lines)
-                       + legendBox.count_contains(offsets)
-                       + legendBox.count_overlaps(bboxes)
-                       + sum(line.intersects_bbox(legendBox, filled=False)
-                             for line in lines))
-            # Include the index to favor lower codes in case of a tie.
-            candidates.append((badness, idx, (l, b)))
-            if badness == 0:
-                break
+        # matplotlib_rs: the badness of every candidate in one call.
+        best = self._rs_best_position(bbox, width, height, renderer,
+                                      bboxes, lines, offsets)
+        if best is not None:
+            l, b = best
+        else:
+            candidates = []
+            for idx in range(1, len(self.codes)):
+                l, b = self._get_anchored_bbox(idx, bbox,
+                                               self.get_bbox_to_anchor(),
+                                               renderer)
+                legendBox = Bbox.from_bounds(l, b, width, height)
+                # XXX TODO: If markers are present, it would be good to take
+                # them into account when checking vertex overlaps in the next
+                # line.
+                badness = (sum(legendBox.count_contains(line.vertices)
+                               for line in lines)
+                           + legendBox.count_contains(offsets)
+                           + legendBox.count_overlaps(bboxes)
+                           + sum(line.intersects_bbox(legendBox, filled=False)
+                                 for line in lines))
+                # Include the index to favor lower codes in case of a tie.
+                candidates.append((badness, idx, (l, b)))
+                if badness == 0:
+                    break
 
-        _, _, (l, b) = min(candidates)
+            _, _, (l, b) = min(candidates)
 
         if self._loc_used_default and time.perf_counter() - start_time > 1:
             _api.warn_external(
                 'Creating legend with loc="best" can be slow with large '
                 'amounts of data.')
 
+        if found is not None:
+            found[key] = (l, b)
         return l, b
 
     def contains(self, mouseevent):

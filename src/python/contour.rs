@@ -202,31 +202,27 @@ fn joined_to_python<'py>(py: Python<'py>, j: Joined) -> PyResult<Option<Bound<'p
 }
 
 /// `f(generator, level)` for each level, in order, with copies of the
-/// generator on several threads (each thread takes every n-th level).
+/// generator on several threads (each takes the next level not yet taken).
 fn for_levels<L: Sync, T: Send>(gen: &Mpl2014, levels: &[L], f: impl Fn(&mut Mpl2014, &L) -> T + Sync) -> Vec<T> {
     let threads = crate::backend::renderer_agg::collection_threads().min(levels.len());
     if threads < 2 {
         let mut g = gen.clone();
         return levels.iter().map(|l| f(&mut g, l)).collect();
     }
-    let mut outs: Vec<Option<T>> = (0..levels.len()).map(|_| None).collect();
-    std::thread::scope(|s| {
-        let handles: Vec<_> = (0..threads)
-            .map(|t| {
-                let f = &f;
-                s.spawn(move || {
-                    let mut g = gen.clone();
-                    (t..levels.len()).step_by(threads).map(|i| (i, f(&mut g, &levels[i]))).collect::<Vec<_>>()
-                })
-            })
-            .collect();
-        for h in handles {
-            for (i, o) in h.join().expect("contour thread") {
-                outs[i] = Some(o);
+    let outs: Vec<std::sync::Mutex<Option<T>>> = (0..levels.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    crate::pool::run(threads, |_| {
+        let mut g = gen.clone();
+        loop {
+            let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if i >= levels.len() {
+                break;
             }
+            let o = f(&mut g, &levels[i]);
+            *outs[i].lock().unwrap() = Some(o);
         }
     });
-    outs.into_iter().map(|o| o.unwrap()).collect()
+    outs.into_iter().map(|o| o.into_inner().unwrap().expect("a contour level was not computed")).collect()
 }
 
 pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {

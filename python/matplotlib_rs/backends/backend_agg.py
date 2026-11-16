@@ -195,9 +195,19 @@ class RendererAgg(RendererBase):
                              linewidths, linestyles, antialiaseds, urls,
                              offset_position, *, hatchcolors=None):
         # docstring inherited
-        transforms = np.asarray(
-            [_matrix(t) for t in all_transforms] if len(all_transforms) else
-            np.zeros((0, 3, 3)), dtype=float).reshape(-1, 3, 3)
+        if isinstance(paths, (list, tuple)) and not paths:
+            # Nothing is drawn without paths (Collection.draw calls this way
+            # to find out whether the renderer takes hatchcolors).
+            return
+        if (isinstance(all_transforms, np.ndarray) and all_transforms.ndim == 3
+                and all_transforms.shape[1:] == (3, 3)
+                and all_transforms.dtype != object):
+            # (the matrices of a collection with sizes: no loop over them)
+            transforms = np.ascontiguousarray(all_transforms, dtype=float)
+        else:
+            transforms = np.asarray(
+                [_matrix(t) for t in all_transforms] if len(all_transforms) else
+                np.zeros((0, 3, 3)), dtype=float).reshape(-1, 3, 3)
         offsets = np.ascontiguousarray(offsets, dtype=float).reshape(-1, 2) \
             if len(offsets) else np.zeros((0, 2))
         fc = np.ascontiguousarray(facecolors, dtype=float).reshape(-1, 4) \

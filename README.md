@@ -343,6 +343,36 @@ Python 3.10 的最高 RSS 為 594.9（3.8.2）→ 295.5 MiB。
 python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 --output tests/output/boxplot-lazy
 ```
 
+#### 常駐執行緒、圖例與共享頂點（0.0.6 之後，尚未發行）
+
+對照 Polars 的效能作法逐項量測後，實作了有用的部分：平行迴圈改用只建立一次的執行緒；
+path collection（scatter、hexbin、pcolormesh）的混色也分給所有執行緒；路徑頂點放在可共享的 buffer，
+長折線繪製時不再複製；圖例的最佳位置由一次 Rust 呼叫算出，同一次繪製內不重複排版。
+畫布仍與 Matplotlib 3.11.2 逐像素相同。五個全新行程的中位數：
+
+| 工作負載 | Matplotlib | 0.0.6 | 本次 | 對 Matplotlib | 對 0.0.6 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 2 × 2 圖、4 個預設位置的圖例，PNG 存檔 | 176.2 ms | 55.0 ms | **26.1 ms** | 6.8× | 2.1× |
+| 同上，圖例固定在 `upper right` | 152.8 ms | 33.0 ms | **23.6 ms** | 6.5× | 1.4× |
+| scatter，200,000 點（大小、顏色各異），首次繪製 | 2.250 s | 1.078 s | **0.703 s** | 3.2× | 1.5× |
+| plot，1,000,000 點，首次繪製 | 0.079 s | 0.086 s | **0.052 s** | 1.5× | 1.7× |
+| hexbin，1,000,000 點，首次繪製 | 0.137 s | 0.056 s | **0.038 s** | 3.6× | 1.5× |
+| violinplot，300 組 × 2,000 筆，建圖 | 0.902 s | 0.952 s | **0.715 s** | 1.3× | 1.3× |
+
+- 上方〈效能測試〉的四格圖（`phases.py`）：第一次 PNG 存檔 52.8 → **24.8 毫秒**、後續每次 48.6 → **26.0 毫秒**
+  （Matplotlib 為 147.8 與 168.3 毫秒，七個行程的最小值）。
+- 百萬點折線行程的最高 RSS 為 202 → **155 MiB**。bar、hist、boxplot 與 0.0.6 相同。
+- 行程在第一次平行繪製後會保留 `MPLRS_THREADS - 1` 個閒置的執行緒；`fork` 的子行程會建立自己的執行緒。
+- 量測後**沒有採用**的：mimalloc 配置器（頂點不再複製後只剩 0～10%，卻多用 5～36 MiB 記憶體，
+  預設參數下全新行程的首次繪製還會變慢）與整個套件以 AVX2 編譯（0.86～1.04 倍）。
+
+逐項作法、24 個案例的完整數據、驗證與限制見 [報告](docs/benchmarks/threads-legends-lines.md)，
+原始數據為 [`docs/benchmarks/threads-legends-lines.json`](docs/benchmarks/threads-legends-lines.json)。
+
+```bash
+python tests/bench/legends.py --rounds 5 --output tests/output/legends
+```
+
 ## 開發與重跑測試
 
 ```bash

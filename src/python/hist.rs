@@ -75,23 +75,26 @@ fn histogram_counts<'py>(
         c
     };
     let counts = py.detach(|| {
-        let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).min(8);
+        let threads = crate::pool::threads();
         if threads < 2 || a.len() < 1 << 18 {
             return count(a);
         }
-        let size = a.len().div_ceil(threads);
-        std::thread::scope(|s| {
-            let parts: Vec<_> = a.chunks(size).map(|chunk| s.spawn(move || count(chunk))).collect();
-            let mut total = vec![0i64; n];
-            for p in parts {
-                for (t, c) in total.iter_mut().zip(p.join().expect("histogram thread")) {
-                    *t += c;
-                }
-            }
-            total
-        })
+        sum_counts(threads, a.chunks(a.len().div_ceil(threads)).collect(), n, count)
     });
     Ok(PyArray1::from_vec(py, counts))
+}
+
+/// The sum of the counts (*n* bins) `count` gives for each of *pieces*, on
+/// *threads* threads.
+fn sum_counts<P: Send>(threads: usize, pieces: Vec<P>, n: usize, count: impl Fn(P) -> Vec<i64> + Sync) -> Vec<i64> {
+    let total = std::sync::Mutex::new(vec![0i64; n]);
+    crate::pool::for_each(threads, pieces, |piece| {
+        let c = count(piece);
+        for (t, c) in total.lock().unwrap().iter_mut().zip(c) {
+            *t += c;
+        }
+    });
+    total.into_inner().unwrap()
 }
 
 /// The bin numbers of `numpy.histogramdd` along one axis:
@@ -137,34 +140,17 @@ fn histogram2d_counts<'py>(
     }
     let (nx, ny) = (ex.len() - 1, ey.len() - 1);
     let counts = py.detach(|| {
-        let threads = std::thread::available_parallelism().map_or(1, |t| t.get()).min(8);
-        if threads < 2 || x.len() < 1 << 18 {
+        let count = |(xs, ys): (&[f64], &[f64])| {
             let mut c = vec![0i64; nx * ny];
-            count_2d(x, y, &ex, &ey, &mut c);
-            return c;
+            count_2d(xs, ys, &ex, &ey, &mut c);
+            c
+        };
+        let threads = crate::pool::threads();
+        if threads < 2 || x.len() < 1 << 18 {
+            return count((x, y));
         }
         let size = x.len().div_ceil(threads);
-        std::thread::scope(|s| {
-            let parts: Vec<_> = x
-                .chunks(size)
-                .zip(y.chunks(size))
-                .map(|(xs, ys)| {
-                    let (ex, ey) = (&ex, &ey);
-                    s.spawn(move || {
-                        let mut c = vec![0i64; nx * ny];
-                        count_2d(xs, ys, ex, ey, &mut c);
-                        c
-                    })
-                })
-                .collect();
-            let mut total = vec![0i64; nx * ny];
-            for p in parts {
-                for (t, c) in total.iter_mut().zip(p.join().expect("histogram2d thread")) {
-                    *t += c;
-                }
-            }
-            total
-        })
+        sum_counts(threads, x.chunks(size).zip(y.chunks(size)).collect(), nx * ny, count)
     });
     // (histogramdd: hist.astype(float, casting='safe'))
     let h: Vec<f64> = counts.into_iter().map(|c| c as f64).collect();
