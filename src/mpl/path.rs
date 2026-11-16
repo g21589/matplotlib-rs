@@ -4,6 +4,7 @@ use std::f64::consts::PI;
 
 use super::transforms::{Bbox, Transform};
 pub use crate::backend::renderer_agg::MplPath as Path;
+pub use crate::backend::verts::Verts;
 
 pub const STOP: u8 = 0;
 pub const MOVETO: u8 = 1;
@@ -26,7 +27,8 @@ impl Default for SimplifyParams {
 }
 
 /// `Path(vertices, codes)` with `_update_values` semantics.
-pub fn new_path(vertices: Vec<[f64; 2]>, codes: Option<Vec<u8>>, sp: SimplifyParams) -> Path {
+pub fn new_path(vertices: impl Into<Verts>, codes: Option<Vec<u8>>, sp: SimplifyParams) -> Path {
+    let vertices: Verts = vertices.into();
     let should_simplify = sp.threshold > 0.0
         && sp.simplify
         && vertices.len() >= 128
@@ -332,7 +334,7 @@ fn bezier_extrema_points(cp: &[[f64; 2]], out: &mut Vec<[f64; 2]>) {
 pub fn get_extents(path: &Path, transform: Option<&Transform>) -> Bbox {
     let verts: Vec<[f64; 2]> = match transform {
         Some(t) => t.transform_points(&path.vertices),
-        None => path.vertices.clone(),
+        None => path.vertices.to_vec(),
     };
     let xys: Vec<[f64; 2]> = match &path.codes {
         None => verts,
@@ -418,7 +420,7 @@ pub fn get_extents(path: &Path, transform: Option<&Transform>) -> Bbox {
 /// Transform a path's vertices (all codes kept).
 pub fn transform_path(path: &Path, t: &Transform) -> Path {
     Path {
-        vertices: t.transform_points(&path.vertices),
+        vertices: t.transform_points(&path.vertices).into(),
         codes: path.codes.clone(),
         should_simplify: path.should_simplify,
         simplify_threshold: path.simplify_threshold,
@@ -430,7 +432,7 @@ pub fn transform_path_non_affine(path: &Path, t: &Transform) -> Path {
         return path.clone();
     }
     Path {
-        vertices: t.transform_points_non_affine(&path.vertices),
+        vertices: t.transform_points_non_affine(&path.vertices).into(),
         codes: path.codes.clone(),
         should_simplify: path.should_simplify,
         simplify_threshold: path.simplify_threshold,

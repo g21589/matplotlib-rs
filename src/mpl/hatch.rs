@@ -103,7 +103,7 @@ pub fn get_path(h: &str, density: usize) -> Option<Path> {
     let circle = mpath::unit_circle();
     let ccodes = circle.codes.clone().unwrap();
     for (ch, size, filled) in [('o', 0.2, false), ('O', 0.35, false), ('.', 0.1, true)] {
-        Shapes { num_rows: count(h, &[ch]) * density, size, filled, verts: circle.vertices.clone(), codes: ccodes.clone() }
+        Shapes { num_rows: count(h, &[ch]) * density, size, filled, verts: circle.vertices.to_vec(), codes: ccodes.clone() }
             .emit(&mut v, &mut c);
     }
     let star = mpath::unit_regular_star(5, 0.5);
@@ -111,7 +111,7 @@ pub fn get_path(h: &str, density: usize) -> Option<Path> {
     scodes[0] = MOVETO;
     let last = scodes.len() - 1;
     scodes[last] = CLOSEPOLY;
-    Shapes { num_rows: count(h, &['*']) * density, size: 1.0 / 3.0, filled: true, verts: star.vertices.clone(), codes: scodes }
+    Shapes { num_rows: count(h, &['*']) * density, size: 1.0 / 3.0, filled: true, verts: star.vertices.to_vec(), codes: scodes }
         .emit(&mut v, &mut c);
     if v.is_empty() {
         return None;

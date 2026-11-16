@@ -18,9 +18,7 @@ pub fn path_from_py(obj: &Bound<'_, PyAny>) -> PyResult<MplPath> {
         let np = obj.py().import("numpy")?;
         np.call_method1("asarray", (verts.clone(), "float64"))?.extract()
     })?;
-    let a = arr.as_array();
-    let n = if a.ndim() == 2 { a.shape()[0] } else { 0 };
-    let vertices: Vec<[f64; 2]> = (0..n).map(|i| [a[[i, 0]], a[[i, 1]]]).collect();
+    let vertices = super::lowlevel::verts_from(&arr.as_array());
     let codes_obj = obj.getattr("codes")?;
     let codes = if codes_obj.is_none() {
         None
@@ -31,7 +29,7 @@ pub fn path_from_py(obj: &Bound<'_, PyAny>) -> PyResult<MplPath> {
     };
     let should_simplify = obj.getattr("should_simplify").and_then(|v| v.extract()).unwrap_or(false);
     let simplify_threshold = obj.getattr("simplify_threshold").and_then(|v| v.extract()).unwrap_or(1.0 / 9.0);
-    Ok(MplPath { vertices, codes, should_simplify, simplify_threshold })
+    Ok(MplPath { vertices: vertices.into(), codes, should_simplify, simplify_threshold })
 }
 
 pub fn trans_from_py(obj: &Bound<'_, PyAny>) -> PyResult<TransAffine> {
@@ -109,6 +107,65 @@ fn count_bboxes_overlapping_bbox(bbox: &Bound<'_, PyAny>, bboxes: &Bound<'_, PyA
         }
     }
     Ok(count)
+}
+
+/// `Bbox.count_contains` of the box with corners (x0, y0), (x1, y1): the
+/// vertices strictly inside it (none if a corner is NaN, as with numpy's
+/// `min`/`max` of the corners).
+fn count_contains(x0: f64, y0: f64, x1: f64, y1: f64, vertices: &[[f64; 2]]) -> u64 {
+    if x0.is_nan() || y0.is_nan() || x1.is_nan() || y1.is_nan() {
+        return 0;
+    }
+    let (xmin, xmax) = (x0.min(x1), x0.max(x1));
+    let (ymin, ymax) = (y0.min(y1), y0.max(y1));
+    vertices.iter().filter(|v| xmin < v[0] && v[0] < xmax && ymin < v[1] && v[1] < ymax).count() as u64
+}
+
+/// `legend_badness(boxes, paths, offsets, bboxes)`: what
+/// `Legend._find_best_position` adds up for each candidate box, a row
+/// (x0, y0, x1, y1) of *boxes*: the vertices of *paths* and the *offsets* it
+/// contains (`Bbox.count_contains`), the *bboxes* (an (n, 2, 2) array) it
+/// overlaps (`Bbox.count_overlaps`) and the *paths* that cross it
+/// (`Path.intersects_bbox(box, filled=False)`).
+#[pyfunction]
+fn legend_badness(
+    py: Python<'_>,
+    boxes: PyReadonlyArray2<'_, f64>,
+    paths: &Bound<'_, PyList>,
+    offsets: PyReadonlyArray2<'_, f64>,
+    bboxes: PyReadonlyArray3<'_, f64>,
+) -> PyResult<Vec<u64>> {
+    let boxes = boxes.as_array();
+    let bboxes = bboxes.as_array();
+    if boxes.shape()[1] != 4 || bboxes.shape()[1..] != [2, 2] || (offsets.shape()[0] > 0 && offsets.shape()[1] != 2) {
+        return Err(PyValueError::new_err("legend_badness: invalid arguments"));
+    }
+    let paths: Vec<MplPath> = paths.iter().map(|p| path_from_py(&p)).collect::<PyResult<_>>()?;
+    let offsets = super::lowlevel::verts_from(&offsets.as_array());
+    let boxes: Vec<[f64; 4]> = boxes.rows().into_iter().map(|r| [r[0], r[1], r[2], r[3]]).collect();
+    // (corners in increasing order, as count_bboxes_overlapping_bbox)
+    let ordered = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        let (x0, x1) = if x1 < x0 { (x1, x0) } else { (x0, x1) };
+        let (y0, y1) = if y1 < y0 { (y1, y0) } else { (y0, y1) };
+        (x0, y0, x1, y1)
+    };
+    let bboxes: Vec<(f64, f64, f64, f64)> =
+        bboxes.outer_iter().map(|b| ordered(b[[0, 0]], b[[0, 1]], b[[1, 0]], b[[1, 1]])).collect();
+    Ok(py.detach(|| {
+        boxes
+            .iter()
+            .map(|&[x0, y0, x1, y1]| {
+                let mut badness = count_contains(x0, y0, x1, y1, &offsets);
+                for path in &paths {
+                    badness += count_contains(x0, y0, x1, y1, &path.vertices);
+                    badness += geom::path_intersects_rectangle(path, x0, y0, x1, y1, false) as u64;
+                }
+                let (ax0, ay0, ax1, ay1) = ordered(x0, y0, x1, y1);
+                badness += bboxes.iter().filter(|&&(bx0, by0, bx1, by1)| !((bx1 <= ax0) || (by1 <= ay0) || (bx0 >= ax1) || (by0 >= ay1))).count() as u64;
+                badness
+            })
+            .collect()
+    }))
 }
 
 /// The loop of matplotlib's `is_sorted_and_has_non_nan<T>`.
@@ -625,6 +682,7 @@ pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     let sub = PyModule::new(m.py(), "_path")?;
     sub.add_function(wrap_pyfunction!(affine_transform, &sub)?)?;
     sub.add_function(wrap_pyfunction!(count_bboxes_overlapping_bbox, &sub)?)?;
+    sub.add_function(wrap_pyfunction!(legend_badness, &sub)?)?;
     sub.add_function(wrap_pyfunction!(is_sorted_and_has_non_nan, &sub)?)?;
     sub.add_function(wrap_pyfunction!(cleanup_path, &sub)?)?;
     sub.add_function(wrap_pyfunction!(convert_path_to_polygons, &sub)?)?;

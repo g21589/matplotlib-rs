@@ -1273,11 +1273,14 @@ fn render<C: ColorType, G: SpanGen<C::V> + Clone + Send>(
         }
         return;
     }
-    // Contiguous groups of rows (scanlines come in increasing y).
+    // Contiguous groups of rows (scanlines come in increasing y), several
+    // per thread: rows differ in cost, and the threads take the groups one
+    // after the other.
+    const GROUPS_PER_THREAD: usize = 4;
     let mut jobs = Vec::new();
     let mut rest: &mut [C::V] = out;
     let mut first_row = 0usize;
-    for chunk in lines.chunks(lines.len().div_ceil(threads)) {
+    for chunk in lines.chunks(lines.len().div_ceil(threads * GROUPS_PER_THREAD)) {
         let y0 = chunk[0].y as usize;
         let y1 = chunk[chunk.len() - 1].y as usize + 1;
         let tail = std::mem::take(&mut rest).split_at_mut((y0 - first_row) * row_len).1;
@@ -1287,16 +1290,19 @@ fn render<C: ColorType, G: SpanGen<C::V> + Clone + Send>(
         jobs.push((chunk, rows, y0));
     }
     let store = &store;
-    std::thread::scope(|s| {
-        for (chunk, rows, y0) in jobs {
-            let mut gen = gen.clone();
-            s.spawn(move || {
-                let mut colors = Vec::new();
-                for l in chunk {
-                    let r = (l.y as usize - y0) * row_len;
-                    render_line::<C, G>(&mut gen, &mut colors, store, l, &mut rows[r..r + row_len], out_width, alpha);
-                }
-            });
+    // (a generator for each thread)
+    let gens: Vec<std::sync::Mutex<G>> = (0..threads).map(|_| std::sync::Mutex::new(gen.clone())).collect();
+    let jobs = std::sync::Mutex::new(jobs.into_iter());
+    crate::pool::run(threads, |t| {
+        let mut gen = gens[t].lock().unwrap();
+        let mut colors = Vec::new();
+        loop {
+            let job = jobs.lock().unwrap().next();
+            let Some((chunk, rows, y0)) = job else { break };
+            for l in chunk {
+                let r = (l.y as usize - y0) * row_len;
+                render_line::<C, G>(&mut gen, &mut colors, store, l, &mut rows[r..r + row_len], out_width, alpha);
+            }
         }
     });
 }

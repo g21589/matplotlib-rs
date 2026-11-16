@@ -179,12 +179,7 @@ pub fn encode_jpeg(
         let part = encode_jpeg_plain(&rows(r0, r1), width, r1 - r0, gray, o, i == 0);
         parts.lock().unwrap()[i] = Some(part);
     };
-    std::thread::scope(|s| {
-        for _ in 1..threads.min(n) {
-            s.spawn(work);
-        }
-        work();
-    });
+    crate::pool::run(threads.min(n), |_| work());
     let parts: Vec<Vec<u8>> = parts
         .into_inner()
         .unwrap()

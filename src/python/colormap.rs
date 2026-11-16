@@ -116,12 +116,10 @@ fn split<T: Send>(len: usize, per: usize, out: &mut [T], f: impl Fn(std::ops::Ra
         return;
     }
     let size = len.div_ceil(threads);
-    std::thread::scope(|s| {
-        for (k, chunk) in out.chunks_mut(size * per).enumerate() {
-            let f = &f;
-            let start = k * size;
-            s.spawn(move || f(start..(start + size).min(len), chunk));
-        }
+    let pieces: Vec<(usize, &mut [T])> = out.chunks_mut(size * per).enumerate().collect();
+    crate::pool::for_each(threads, pieces, |(k, chunk)| {
+        let start = k * size;
+        f(start..(start + size).min(len), chunk)
     });
 }
 
