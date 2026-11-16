@@ -53,6 +53,11 @@ from .rcsetup import _validators
 
 _log = logging.getLogger(__name__)
 
+# The rcParams `FontManager.findfont` adds to its cache key.
+_RS_FONT_RC_KEYS = tuple(f"font.{key}" for key in [
+    "family", "style", "variant", "weight", "stretch", "size",
+    "serif", "sans-serif", "cursive", "fantasy", "monospace"])
+
 font_scalings = {
     'xx-small': 0.579,
     'x-small':  0.694,
@@ -1510,11 +1515,9 @@ class FontManager:
         # Pass the relevant rcParams (and the font manager, as `self`) to
         # _findfont_cached so to prevent using a stale cache entry after an
         # rcParam was changed.
-        rc_params = [mpl.rcParams[f"font.{key}"] for key in [
-            "family", "style", "variant", "weight", "stretch", "size",
-            "serif", "sans-serif", "cursive", "fantasy", "monospace"]]
-        rc_params = tuple(tuple(e) if isinstance(e, list) else e
-                          for e in rc_params)  # Make this hashable.
+        rc_params = tuple([tuple(e) if isinstance(e, list) else e
+                           for e in map(mpl.rcParams._get, _RS_FONT_RC_KEYS)
+                           ])  # Make this hashable.
         if directory is None and os.getenv('MPL_IGNORE_SYSTEM_FONTS'):
             directory = cbook._get_data_path('fonts')
         ret = self._findfont_cached(

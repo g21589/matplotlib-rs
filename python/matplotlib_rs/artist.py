@@ -342,6 +342,30 @@ class _LazyCallbacks:
         return registry
 
 
+def _rs_axes_patch_transform(rect):
+    """
+    ``rect.get_transform()`` for the rectangle of an Axes: the same transform
+    object while the rectangle is unchanged.
+
+    Every artist added to an Axes is clipped to this rectangle
+    (``set_clip_path(axes.patch)``), and building the transform anew took
+    most of that call.  The transform is a snapshot of the rectangle's
+    bounds, rotation and base transform, so it is reused only while these
+    are the same.
+    """
+    base = Artist.get_transform(rect)
+    key = (*rect._convert_units(), rect.angle, rect.rotation_point,
+           rect._aspect_ratio_correction)
+    if not all(isinstance(v, (int, float)) for v in key[:4]):
+        return rect.get_transform()
+    kept = rect.__dict__.get("_rs_clip_transform")
+    if kept is not None and kept[1] is base and kept[0] == key:
+        return kept[2]
+    trf = rect.get_transform()
+    rect._rs_clip_transform = (key, base, trf)
+    return trf
+
+
 class Artist:
     """
     Abstract base class for objects that render into a FigureCanvas.
@@ -1142,10 +1166,13 @@ Supported properties are
         success = False
         if transform is None:
             if isinstance(path, Rectangle):
-                self.clipbox = TransformedBbox(Bbox.unit(),
-                                               path.get_transform())
                 if getattr(path, "_rs_axes_patch", False):
+                    self.clipbox = TransformedBbox(
+                        Bbox.unit(), _rs_axes_patch_transform(path))
                     self.clipbox._rs_clip_spec = "axes"
+                else:
+                    self.clipbox = TransformedBbox(Bbox.unit(),
+                                                   path.get_transform())
                 self._clippath = None
                 success = True
             elif isinstance(path, Patch):

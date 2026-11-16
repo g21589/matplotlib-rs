@@ -358,7 +358,7 @@ class OffsetBox(martist.Artist):
 
     def get_bbox(self, renderer):
         """Return the bbox of the offsetbox, ignoring parent offsets."""
-        bbox, offsets = self._get_bbox_and_child_offsets(renderer)
+        bbox, offsets = _rs_bbox_and_child_offsets(self, renderer)
         return bbox
 
     def get_window_extent(self, renderer=None):
@@ -377,13 +377,36 @@ class OffsetBox(martist.Artist):
         Update the location of children if necessary and draw them
         to the given *renderer*.
         """
-        bbox, offsets = self._get_bbox_and_child_offsets(renderer)
+        bbox, offsets = _rs_bbox_and_child_offsets(self, renderer)
         px, py = self.get_offset(bbox, renderer)
         for c, (ox, oy) in zip(self.get_visible_children(), offsets):
             c.set_offset((px + ox, py + oy))
             c.draw(renderer)
         _bbox_artist(self, renderer, fill=False, props=dict(pad=0.))
         self.stale = False
+
+
+# matplotlib_rs: the extents of the boxes of the legend that is drawing
+# itself, by (id(box), id(renderer)); None when no legend is drawing.
+#
+# A box computes the extents of all the boxes inside it for its own extent,
+# and again to draw them, and each of these does the same: the text of a
+# legend entry was laid out a dozen times in one draw.  `Legend.draw` changes
+# nothing its boxes' extents depend on (only their offsets), so while it
+# runs an extent is computed once.
+_rs_kept_extents = None
+
+
+def _rs_bbox_and_child_offsets(box, renderer):
+    """``box._get_bbox_and_child_offsets(renderer)`` (see `_rs_kept_extents`)."""
+    kept = _rs_kept_extents
+    if kept is None:
+        return box._get_bbox_and_child_offsets(renderer)
+    key = (id(box), id(renderer))
+    result = kept.get(key)
+    if result is None:
+        result = kept[key] = box._get_bbox_and_child_offsets(renderer)
+    return result
 
 
 class PackerBase(OffsetBox):
@@ -795,6 +818,17 @@ class TextArea(OffsetBox):
         return self._offset
 
     def get_bbox(self, renderer):
+        # matplotlib_rs: once while a legend draws (see _rs_kept_extents).
+        kept = _rs_kept_extents
+        if kept is None:
+            return self._rs_get_bbox(renderer)
+        key = (id(self), id(renderer))
+        bbox = kept.get(key)
+        if bbox is None:
+            bbox = kept[key] = self._rs_get_bbox(renderer)
+        return bbox
+
+    def _rs_get_bbox(self, renderer):
         _, h_, d_ = mtext._get_text_metrics_with_cache(
             renderer, "lp", self._text._fontproperties,
             ismath="TeX" if self._text.get_usetex() else False,

@@ -18,7 +18,8 @@ from . import _mplrs
 from .artist import _rs_base_props
 from . import _api, artist, cbook, _docstring, colors as mcolors
 from .artist import Artist
-from .font_manager import FontProperties, fontManager, get_font
+from .font_manager import (
+    FontProperties, fontManager, get_font, _RS_FONT_RC_KEYS)
 from .patches import FancyArrowPatch, FancyBboxPatch, Rectangle
 
 
@@ -47,6 +48,51 @@ def _rs_fontprops(fp):
             st if isinstance(st, (int, str)) else int(st),
             float(fp.get_size_in_points()), None if f is None else str(f),
             fp.get_math_fontfamily())
+
+
+_rs_height_metrics_cache = {}
+
+
+def _rs_font_height_metrics(prop, dpi):
+    """
+    The ascent, descent and line gap of the font of the properties *prop*
+    at *dpi*, from its OS/2 or hhea table (all None without these tables):
+    what `Text._get_layout` computes for every layout.
+
+    The values are kept for the properties, the dpi, the font rcParams and
+    the font manager's fonts, which together decide the font file; a layout
+    then does not look the font up and read its tables again.
+    """
+    rc = mpl.rcParams
+    key = (hash(prop), dpi, id(fontManager), len(fontManager.ttflist),
+           tuple([tuple(v) if isinstance(v, list) else v
+                  for v in map(rc._get, _RS_FONT_RC_KEYS)]))
+    try:
+        return _rs_height_metrics_cache[key]
+    except KeyError:
+        pass
+    min_ascent = min_descent = line_gap = None
+    font = get_font(fontManager._find_fonts_by_props(prop))
+    possible = [
+        ('OS/2', 'sTypoLineGap', 'sTypoAscender', 'sTypoDescender'),
+        ('hhea', 'lineGap', 'ascent', 'descent')
+    ]
+    for table_name, linegap_key, ascent_key, descent_key in possible:
+        table = font.get_sfnt_table(table_name)
+        if table is None:
+            continue
+        # Rescale to font size/DPI if the metrics were available.
+        fontsize = prop.get_size_in_points()
+        units_per_em = font.get_sfnt_table('head')['unitsPerEm']
+        scale = 1 / units_per_em * fontsize * dpi / 72
+        line_gap = table[linegap_key] * scale
+        min_ascent = table[ascent_key] * scale
+        min_descent = -table[descent_key] * scale
+        break
+    if len(_rs_height_metrics_cache) >= 512:
+        _rs_height_metrics_cache.clear()
+    _rs_height_metrics_cache[key] = (min_ascent, min_descent, line_gap)
+    return min_ascent, min_descent, line_gap
 
 
 def _rotate(theta):
@@ -514,23 +560,9 @@ class Text(Artist):
                 min_ascent, min_descent, line_gap = renderer._get_font_height_metrics(
                     self._fontproperties)
             if min_ascent is None:
-                font = get_font(fontManager._find_fonts_by_props(self._fontproperties))
-                possible = [
-                    ('OS/2', 'sTypoLineGap', 'sTypoAscender', 'sTypoDescender'),
-                    ('hhea', 'lineGap', 'ascent', 'descent')
-                ]
-                for table_name, linegap_key, ascent_key, descent_key in possible:
-                    table = font.get_sfnt_table(table_name)
-                    if table is None:
-                        continue
-                    # Rescale to font size/DPI if the metrics were available.
-                    fontsize = self._fontproperties.get_size_in_points()
-                    units_per_em = font.get_sfnt_table('head')['unitsPerEm']
-                    scale = 1 / units_per_em * fontsize * dpi / 72
-                    line_gap = table[linegap_key] * scale
-                    min_ascent = table[ascent_key] * scale
-                    min_descent = -table[descent_key] * scale
-                    break
+                # matplotlib_rs: kept for the font (see the function).
+                min_ascent, min_descent, line_gap = _rs_font_height_metrics(
+                    self._fontproperties, dpi)
         if None in (min_ascent, min_descent):
             # Fallback to font measurement.
             _, h, min_descent = _get_text_metrics_with_cache(
