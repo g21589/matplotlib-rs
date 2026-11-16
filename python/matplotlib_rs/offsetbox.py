@@ -24,6 +24,7 @@ Container classes for `.Artist`\s.
 """
 
 import functools
+import threading
 
 import numpy as np
 
@@ -386,20 +387,21 @@ class OffsetBox(martist.Artist):
         self.stale = False
 
 
-# matplotlib_rs: the extents of the boxes of the legend that is drawing
-# itself, by (id(box), id(renderer)); None when no legend is drawing.
+# matplotlib_rs: `_rs_kept.extents` holds the extents of the boxes of the
+# legend that is drawing itself in this thread, by (id(box), id(renderer));
+# it is None (or not set) when no legend is drawing.
 #
 # A box computes the extents of all the boxes inside it for its own extent,
 # and again to draw them, and each of these does the same: the text of a
 # legend entry was laid out a dozen times in one draw.  `Legend.draw` changes
 # nothing its boxes' extents depend on (only their offsets), so while it
 # runs an extent is computed once.
-_rs_kept_extents = None
+_rs_kept = threading.local()
 
 
 def _rs_bbox_and_child_offsets(box, renderer):
-    """``box._get_bbox_and_child_offsets(renderer)`` (see `_rs_kept_extents`)."""
-    kept = _rs_kept_extents
+    """``box._get_bbox_and_child_offsets(renderer)`` (see `_rs_kept`)."""
+    kept = getattr(_rs_kept, "extents", None)
     if kept is None:
         return box._get_bbox_and_child_offsets(renderer)
     key = (id(box), id(renderer))
@@ -818,8 +820,8 @@ class TextArea(OffsetBox):
         return self._offset
 
     def get_bbox(self, renderer):
-        # matplotlib_rs: once while a legend draws (see _rs_kept_extents).
-        kept = _rs_kept_extents
+        # matplotlib_rs: once while a legend draws (see _rs_kept).
+        kept = getattr(_rs_kept, "extents", None)
         if kept is None:
             return self._rs_get_bbox(renderer)
         key = (id(self), id(renderer))

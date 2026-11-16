@@ -784,8 +784,8 @@ class Legend(Artist):
         # takes the result of the first (see _find_best_position).  The
         # extents of the boxes are computed once too (see offsetbox).
         self._rs_best_found = {}
-        outer_extents = offsetbox._rs_kept_extents
-        offsetbox._rs_kept_extents = {}
+        outer_extents = getattr(offsetbox._rs_kept, "extents", None)
+        offsetbox._rs_kept.extents = {}
         try:
             # update the location and size of the legend. This needs to
             # be done in any case to clip the figure right.
@@ -804,7 +804,7 @@ class Legend(Artist):
             self._legend_box.draw(renderer)
         finally:
             del self._rs_best_found
-            offsetbox._rs_kept_extents = outer_extents
+            offsetbox._rs_kept.extents = outer_extents
 
         renderer.close_group('legend')
         self.stale = False

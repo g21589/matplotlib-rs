@@ -242,6 +242,21 @@ python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 \
 Matplotlib 3.11.2 一輪為建圖 132.8 秒、首次繪製 25.7 秒、4,123 MiB，畫布相同。
 讀取全部 artists 需 1.25 秒；修改後逐一繪製的重繪為 0.60 秒（0.0.5 為 1.23 秒）。
 
+## 圖例
+
+`legends.py` 使用與 `phases.py` 相同的 2 × 2 圖，比較三種情況的 PNG 存檔時間：
+預設位置（`loc="best"`）的圖例、固定位置的圖例、沒有圖例。每個實作各在全新行程執行、每輪交替順序，
+行程內先存檔一次，再存檔 15 次取中位數；matplotlib-rs 的畫布必須與 Matplotlib 相同，否則以非零狀態結束。
+
+```bash
+python tests/bench/legends.py --rounds 5 --base-source /path/to/matplotlib-rs-0.0.6/python \
+    --output tests/output/legends
+```
+
+五輪中位數（Matplotlib 3.11.2 → 0.0.6 → 之後）：預設位置 176.2 → 55.0 → **26.1 毫秒**，
+固定位置 152.8 → 33.0 → **23.6 毫秒**，沒有圖例 141.9 → 13.7 → 13.2 毫秒。
+作法與其他案例的數據見 [報告](../../docs/benchmarks/threads-legends-lines.md)。
+
 ## 一般四格圖
 
 `phases.py` 與 `best_of.sh` 使用較小的 2 × 2 subplot 工作負載，詳見專案根目錄 README。

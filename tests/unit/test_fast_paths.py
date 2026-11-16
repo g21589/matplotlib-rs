@@ -10,6 +10,7 @@ and against Matplotlib:
 - lines whose data, path and visible part share one buffer;
 - the worker threads after a fork and with drawing threads.
 """
+import gc
 import io
 import multiprocessing
 import os
@@ -218,7 +219,7 @@ class LegendTests(unittest.TestCase):
         per_text = [sum(1 for t in layouts if id(t) == i) for i in legend_texts]
         # (once for the extent of its box and once in Text.draw)
         self.assertTrue(all(n <= 2 for n in per_text), per_text)
-        self.assertIsNone(roffsetbox._rs_kept_extents)
+        self.assertIsNone(roffsetbox._rs_kept.extents)
         self.assertNotIn("_rs_best_found", leg.__dict__)
         rplt.close(fig)
 
@@ -262,7 +263,7 @@ class LegendTests(unittest.TestCase):
                 leg.draw(fig.canvas.get_renderer())
         finally:
             rlegend.Legend._auto_legend_data = original
-        self.assertIsNone(roffsetbox._rs_kept_extents)
+        self.assertIsNone(roffsetbox._rs_kept.extents)
         self.assertNotIn("_rs_best_found", leg.__dict__)
         rplt.close(fig)
 
@@ -578,17 +579,27 @@ class WorkerTests(unittest.TestCase):
         rplt.close(fig)
 
     def test_threads_drawing_at_the_same_time(self):
-        # (a renderer belongs to the thread that created it: every thread
-        # draws figures of its own; PNG compression releases the GIL, so the
-        # threads' parallel loops overlap)
+        # (a renderer belongs to the thread that created it, and must be
+        # freed by it: every thread draws figures of its own and collects
+        # them itself; PNG compression releases the GIL, so the threads'
+        # parallel loops overlap)
         rs.rc_file(RC)
         Figure = rs.figure.Figure
+        freeing = threading.Lock()
+        gc.disable()
+        self.addCleanup(gc.enable)
 
         def save(seed):
             fig = Figure(figsize=(6, 4), dpi=80)
-            many_markers(fig.subplots(), 3000, seed)
+            ax = fig.subplots()
+            many_markers(ax, 3000, seed).set_label("markers")
+            ax.plot([-2, 2], [seed - 2, 2 - seed], label=f"line {seed}")
+            ax.legend()
             out = io.BytesIO()
             fig.savefig(out, format="png")
+            with freeing:
+                fig = ax = None
+                gc.collect()
             return out.getvalue()
 
         expected = [save(seed) for seed in range(4)]
@@ -605,6 +616,8 @@ class WorkerTests(unittest.TestCase):
             t.join(300)
         for seed, r in enumerate(results):
             self.assertEqual(r, [expected[seed]] * 3)
+        # (what a legend keeps while it draws is per thread, and gone)
+        self.assertIsNone(roffsetbox._rs_kept.extents)
 
 
 if __name__ == "__main__":
