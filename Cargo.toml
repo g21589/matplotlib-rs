@@ -22,7 +22,6 @@ gif = { version = "0.14.2", default-features = false, features = ["std"] }
 libwebp-sys = "0.14.4"
 ravif = { version = "0.13.0", default-features = false, features = ["threading"] }
 delaunator = "1"
-mimalloc = { version = "0.1", default-features = false }
 
 [build-dependencies]
 cc = "1"
