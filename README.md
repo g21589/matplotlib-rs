@@ -1,64 +1,71 @@
 # matplotlib-rs
 
-以 Rust 實作繪圖與字型核心，提供與 Matplotlib 相容的 Python／`pyplot` 介面。
-目前發行版本為 `0.0.7`：重用 Rust 執行緒、減少頂點複製，並加速圖例與文字版面配置，
-畫布仍與 Matplotlib 逐像素相同；支援 **Python 3.10** 以上，執行期**只依賴 NumPy**。
-Python 層包含依 Matplotlib 3.11 調整的模組，原生核心經 PyO3 與 NumPy 連接，
-處理 Agg 點陣化、字型、圖形物件、座標軸與影像重採樣。
+**Matplotlib with a Rust rendering core.** Your existing Matplotlib code runs unchanged and produces the same pixels, usually much faster. NumPy is the only dependency.
 
-## 安裝
+[![PyPI](https://img.shields.io/pypi/v/matplotlib-rs?label=PyPI)][pypi]
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)][pypi]
+[![CI](https://github.com/g21589/matplotlib-rs/actions/workflows/ci.yml/badge.svg)][ci]
+[![License: PSF-2.0](https://img.shields.io/badge/license-PSF--2.0-green)][license]
 
-需要 Python 3.10 以上；唯一的執行期依賴是 NumPy 1.25 以上。
-Linux x86_64、glibc 2.28 以上、CPython 3.10～3.13 可直接安裝預編譯 wheel：
+English · [繁體中文][readme-zh]
 
-```bash
-python -m pip install matplotlib-rs==0.0.7
-python -m pip list   # 只會多出 matplotlib-rs 與 numpy
+matplotlib-rs rewrites Matplotlib's rendering pipeline in Rust and keeps the Matplotlib 3.11 Python API on top of it. The Rust code covers Agg rasterization, font loading and text layout, the figure/axes/artist model, image resampling and image file codecs. Scripts written for Matplotlib run as-is, and across the project's test suite their output matches Matplotlib 3.11.2 pixel for pixel.
+
+```python
+import matplotlib_rs
+matplotlib_rs.install()           # from now on, `import matplotlib` loads matplotlib-rs
+
+import matplotlib.pyplot as plt   # your existing code, unchanged
 ```
 
-PyPI 與 [GitHub Release](https://github.com/g21589/matplotlib-rs/releases/tag/v0.0.7) 使用完全相同的已測試套件；
-Release 另附 source distribution、效能原始紀錄與 `SHA256SUMS`。
-發布流程在只有 NumPy 的乾淨環境測試每個 wheel；本機與 CI 實測 Linux x86_64，其他平台尚未驗證。
+[Installation](#installation) · [Quick start](#quick-start) · [Performance](#performance) · [Compatibility](#compatibility) · [Configuration](#configuration) · [Verification](#verification) · [Development](#development)
 
-從 release 原始碼安裝：
+## Highlights
+
+- **Drop-in replacement.** It implements the Matplotlib 3.11 API, both `pyplot` and the object-oriented interface. A single call makes `import matplotlib` and `import mpl_toolkits` load matplotlib-rs. You can also run an unmodified script with `python -m matplotlib_rs script.py`.
+- **Identical output.** In every test case, PNG output is pixel-identical to Matplotlib 3.11.2, and SVG, PDF and EPS output matches the reference content.
+- **Fast.** A bar chart with 20,000 bars is built and drawn 77× faster than with Matplotlib. A typical 2 × 2 figure with legends saves 6–7× faster, and 50,000 boxplots draw over 300× faster. Rasterization, colormapping, resampling, histograms, contours and PNG compression all run on multiple threads.
+- **Only NumPy.** You don't need Pillow, kiwisolver or ContourPy. Image files are read and written in Rust. The Rust ports of kiwi and of ContourPy's default algorithm, and the bundled qhull, reproduce the original results bit for bit.
+- **Checked before every release.** A release goes out only after the full CI suite passes, every wheel works in a clean environment that has only NumPy, and a performance check passes.
+
+## Installation
+
+```bash
+pip install matplotlib-rs
+```
+
+| Platform | Support |
+| --- | --- |
+| Linux x86_64 (glibc ≥ 2.28), CPython 3.10–3.13 | Prebuilt wheels, tested in CI and in every release |
+| Other platforms and Python versions | Builds from the source distribution, but hasn't been tested yet |
+
+The only runtime dependency is **NumPy ≥ 1.25**. In a fresh environment, installing adds only `matplotlib-rs` and `numpy`.
+
+Two features need optional packages, which you can add with `pip install "matplotlib-rs[full]"`:
+
+| Feature | Package |
+| --- | --- |
+| Type 42 font embedding (`pdf.fonttype` or `ps.fonttype` set to `42`) | fontTools |
+| The `serial`, `threaded` and `mpl2005` contour algorithms (`mpl2014`, the default, is built in) | ContourPy |
+
+If one of these packages is missing, the feature raises an `ImportError` that explains what to install. Features that rely on external programs, such as usetex, GUI backends and movie writers, still need those programs.
+
+**Building from source** needs a stable Rust toolchain and a C compiler (gcc or clang on Linux, MSVC on Windows). pip uses maturin to compile the Rust extension and the bundled qhull:
 
 ```bash
 git clone --branch v0.0.7 https://github.com/g21589/matplotlib-rs.git
 cd matplotlib-rs
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
 python -m pip install .
 ```
 
-需要 Rust stable 工具鏈與本機 C 編譯器（Linux 上的 `cc`／gcc；Windows 為 MSVC），
-pip 會透過 maturin 編譯 Rust extension 與內建的 qhull。
-發布流程、驗證方式與首次授權設定見 [CI／CD 說明](docs/CI.md#pypi-發布)。
+PyPI and [GitHub Releases][releases] carry the same tested files. Each GitHub release also includes the source distribution, the raw benchmark records and a `SHA256SUMS` file.
 
-Matplotlib 原本依賴的套件改由本專案提供，不需另外安裝：
-
-| Matplotlib 依賴 | matplotlib-rs 0.0.7 的作法 |
-| --- | --- |
-| cycler、pyparsing、python-dateutil（含 six） | 純 Python，原樣內建於 `matplotlib_rs._vendor`（`tools/vendor_deps.py` 可重現）；已安裝的 cycler 會優先使用 |
-| kiwisolver（constrained layout） | Rust 移植 kiwi 1.5 求解器，運算順序與 kiwi 相同 |
-| ContourPy（等高線） | Rust 移植預設的 `mpl2014` 演算法，頂點逐位元相同 |
-| qhull（Delaunay 三角網格） | 內建並編譯 Matplotlib 使用的 qhull 8.0.2，三角形順序相同 |
-| Pillow（影像檔讀寫、PDF／SVG 內嵌影像、`PillowWriter`） | **完全不使用 Pillow**：PNG、JPEG、TIFF、GIF、WebP、AVIF（只寫）由 Rust 讀寫，預設值與 `pil_kwargs` 同 Pillow，見下方〈影像檔〉 |
-| fontTools、packaging | 只有 Type 42 字型嵌入需要 fontTools；packaging 改為內建版本解析 |
-
-即使已安裝 Pillow，本套件也不會匯入它；傳入的 PIL 影像物件仍可用於 `imshow` 等。
-下列功能仍需選用套件（`pip install "matplotlib-rs[full]"`），缺少時會丟出說明用途的 `ImportError`：
-`pdf.fonttype`／`ps.fonttype` 設為 42 需要 fontTools；`contour.algorithm` 為
-`serial`／`threaded`／`mpl2005` 需要 ContourPy。usetex、GUI 後端與影片輸出需要的外部程式不變。
-
-先前的 0.0.2 需要 Python 3.11 以上，並會安裝 ContourPy、Pillow、kiwisolver 等 Matplotlib 依賴。
-
-## 基本使用
+## Quick start
 
 ```python
 import matplotlib_rs
 
-# 必須在任何 matplotlib / mpl_toolkits 匯入之前呼叫。
+# Call this before anything imports matplotlib or mpl_toolkits.
 matplotlib_rs.install()
 
 import matplotlib
@@ -73,165 +80,115 @@ fig.savefig("example.png", dpi=150)
 plt.close(fig)
 ```
 
-也可以直接使用 `import matplotlib_rs.pyplot as plt`。
-`install()` 會將 `matplotlib` 與 `mpl_toolkits` 匯入導向本套件；
-若未安裝 cycler 或 python-dateutil，為 Matplotlib 撰寫的腳本中 `from cycler import cycler`、
-`import dateutil` 也會取得內建版本。請在獨立的 Python 行程內選擇實作。
-套件發行版本可透過 `importlib.metadata.version("matplotlib-rs")` 查詢；
-`matplotlib_rs.__version__` 保留 `3.11.2`，供沿用的 Matplotlib 相容程式判斷 API 版本。
+There are three ways to use matplotlib-rs:
 
-## 功能與相容性
-
-| 類別 | 專案內的測試案例 |
+| Approach | When to use it |
 | --- | --- |
-| 基本圖表 | line、scatter、bar／barh、hist／hist2d、hexbin、pie、boxplot、violin、stem、step、stackplot |
-| 場與影像 | imshow、pcolormesh、contour、tri、quiver、streamplot、影像重採樣 |
-| 座標與版面 | log、logit、日期、polar、3D、subplots、subfigures、mosaic、tight／constrained layout、inset、secondary axes、twin axes |
-| 文字與外觀 | annotation、箭頭、字型、mathtext、文字 bbox、legend、table、style、hatch、spines、ticks |
-| 繪製與輸出 | clip paths、blitting、animated artists、rasterization、PNG、SVG、PDF、EPS、透明背景與 tight bbox |
+| `matplotlib_rs.install()` and then `import matplotlib` | Existing code and third-party libraries that import `matplotlib` |
+| `python -m matplotlib_rs script.py [args]` or `python -m matplotlib_rs -m package.module` | Running unmodified scripts or modules |
+| `import matplotlib_rs.pyplot as plt` | New code that names matplotlib-rs directly |
 
-這是測試案例覆蓋的功能清單，並不代表完整 Matplotlib API、所有參數或 GUI 後端均已相容。
-本次以 Agg 離線繪圖為驗證範圍；GUI 互動、外部 TeX／影片工具及跨平台行為未完成驗證。
-逐像素與向量格式比對結果、官方 gallery 的差異及略過項目會列於
-[0.0.1 完整驗證報告](docs/releases/0.0.1.md)；之後新增的測試見
-[0.0.2](docs/releases/0.0.2.md)、[0.0.3](docs/releases/0.0.3.md) 與 [0.0.4](docs/releases/0.0.4.md) 發行紀錄。
+- Use only one implementation in each Python process. `install()` raises `RuntimeError` if `matplotlib` has already been imported.
+- After `install()`, `from cycler import cycler` and `import dateutil` load the bundled copies if those packages aren't installed.
+- `importlib.metadata.version("matplotlib-rs")` returns the package version. `matplotlib_rs.__version__` returns `3.11.2`, the Matplotlib API version that matplotlib-rs implements, so version checks in existing code keep working.
 
-## 測試與功能覆蓋率
+## Performance
 
-本次測試以 Matplotlib **3.11.2** 為參考實作，固定使用
-[`tests/mplrc/matplotlibrc`](tests/mplrc/matplotlibrc) 與 Agg 後端。
-PNG 以 RGBA 像素完全一致為通過條件；SVG／PDF／EPS 比對固定時間與 SVG hash salt 後的內容，
-僅忽略 PostScript 的輸出檔名行。
+These timings compare matplotlib-rs 0.0.7 with Matplotlib 3.11.2. Every run checks that the two canvases are pixel-identical. Chart timings include creating the figure and drawing it for the first time.
 
-| 測試範圍 | 0.0.1 實測結果 |
-| --- | --- |
-| Rust 單元測試 | 1／1 通過；另無 doctest 案例 |
-| 三角網格／影像重採樣 | 1,015／1,015、6,800／6,800 完全一致 |
-| 文件快取 | 124 個類別，無過期項目 |
-| 底層 renderer／字型 | 4 支差異測試全通過；300 次 renderer 迭代、2,016 次 TTF 字形繪製、85,827 個 CFF 字形、480 個字型 API 比較 |
-| 原生模型 | 與參考圖像完全一致 |
-| 自有繪圖案例 | 57／57 案例的 PNG 完全一致，共 69／69 張（100%） |
-| SVG／PDF | 各 66／66 份內容完全一致（100%） |
-| EPS | 65／66 份內容完全一致（98.48%）；`polar_more.eps` 有差異 |
-| 同時符合四種格式 | 56／57 案例（98.25%） |
-| 官方 gallery PNG | 508／544 支出圖腳本完全一致（93.38%），另有 36 支像素差異 |
-| 官方 gallery 執行範圍 | 共 581 支；8 支未留下 figure、29 支參考端略過、Rust 執行錯誤 0 支 |
-| 乾淨環境安裝 | 未安裝原版 Matplotlib，wheel 可安裝並輸出 PNG／SVG／PDF／EPS |
+| Workload | Matplotlib 3.11.2 | matplotlib-rs 0.0.7 | Speedup |
+| --- | ---: | ---: | ---: |
+| 2 × 2 figure, four legends at `loc="best"`, `tight_layout`, save as PNG | 176.2 ms | **26.1 ms** | 6.8× |
+| Bar chart, 20,000 bars | 9.355 s | **0.121 s** | 77× |
+| Histogram, 2,000,000 values in 10,000 bins | 4.454 s | **0.082 s** | 54× |
+| Boxplot, 1,000 boxes × 200 values | 3.519 s | **0.077 s** | 46× |
+| `imshow`, 4000 × 4000 image | 1.550 s | **0.232 s** | 6.7× |
+| Histogram, 10,000,000 values | 0.265 s | **0.053 s** | 5.0× |
+| `hist2d`, 2,000,000 points | 0.519 s | **0.124 s** | 4.2× |
+| Scatter, 200,000 points with per-point size and color | 2.286 s | **0.736 s** | 3.1× |
+| `contourf`, 1000 × 1000 grid | 1.113 s | **0.422 s** | 2.6× |
+| Line, 1,000,000 points | 0.127 s | 0.118 s | 1.1× |
+| Pie, 500 wedges | 0.281 s | 0.285 s | 1.0× |
 
-0.0.2 另加入箱形圖統計與可變物件的回歸測試，以及 1 個包含 5 張 PNG 的繪圖案例。
-本機重跑後，58／58 案例、74／74 張 PNG、SVG 71／71、PDF 71／71 完全一致；
-EPS 修正裁切快取生命週期、穩定參考端後為 71／71 內容一致。
-另重跑 6 個官方 boxplot gallery，全部逐像素一致。
-上表 581 支完整 gallery 的數字屬於 0.0.1，0.0.2 未重新執行全部官方 gallery。
+Each value is the median of five fresh processes on a 4-vCPU Intel Xeon VM at 2.10 GHz, running Linux x86_64, CPython 3.13 and NumPy 2.5.3. Your results will depend on your hardware and workload.
 
-0.0.1 的 `polar_more.eps` 裁切路徑快取定義有差異，當時的 Ghostscript 轉圖像素一致，原始內容比較仍記為失敗。
-0.0.2 發現此快取也可能因臨時 transform 的位址重用而裁切錯誤，已修正；
-CI 比對時亦明確保留參考端 transform 的生命週期，詳見 [CI 說明](docs/CI.md)。
-官方 gallery 的全量結果與未通過案例另外列於驗證報告。
+The biggest gains come where Matplotlib creates one Python object per element, such as bars, histogram bins and boxes, and from multi-threaded image, colormap, contour and path-collection work. Where Matplotlib already does the work in C++, for example simplifying long lines, the two are about even.
 
-完整結果與可重現命令見 [驗證報告](docs/releases/0.0.1.md)。
-功能案例通過率與原始碼行／分支覆蓋率是不同指標；本版未量測原始碼覆蓋率。
+**Large boxplots.** A single `boxplot` call with 50,000 boxes takes 158.5 s to build and draw in Matplotlib and 0.53 s in matplotlib-rs, 301× faster. Peak memory falls from 4,123 MiB to 211 MiB. matplotlib-rs creates the `Line2D` and `PathPatch` artists only when your code reads them, and they behave like ordinary artists. These figures come from 0.0.6, as the median of five runs; Matplotlib was run once.
 
-### 0.0.3 實測：Python 3.10 與只有 NumPy 的環境
+**PNG encoding.** matplotlib-rs encodes every PNG in Rust on multiple threads, using the same zlib level 6 that Matplotlib gets from Pillow. The resulting file doesn't depend on the number of threads. For nine typical figures, from 640 × 480 to 2400 × 1800:
 
-| 測試範圍 | 結果 |
-| --- | --- |
-| CPython 3.11／3.12／3.13（安裝參考套件） | Rust 5／5；全部單元、底層差異與模型測試通過；58／58 案例的 PNG／SVG／PDF／EPS 全部一致 |
-| **CPython 3.10、只裝 NumPy** 對 Matplotlib 3.11.2（Python 3.12） | **58／58 案例一致**：PNG 逐像素、EPS 逐位元組；9 個含內嵌點陣影像的案例 SVG／PDF 解碼後像素相同，其餘內容逐位元組相同 |
-| 內建 kiwi | 6 種 constrained layout（含 subfigures、colorbar、mosaic、`outside` legend）座標與 kiwisolver 逐位元相同；400 組隨機系統誤差 < 1e-9 |
-| 內建 mpl2014 等高線 | 200 個隨機場（遮罩、NaN、chunk、corner mask）共 3,600 組線與填色結果與 ContourPy 逐位元相同 |
-| 內建 qhull | 150 組點集（含共圓格點、重複點、極端長寬比）三角形與鄰接陣列和 Matplotlib `_qhull` 完全相同 |
-| PNG 讀寫 | 12 種 Pillow 產生的 PNG（1／2／4／8／16 bit、調色盤與透明、interlace）讀出與 Matplotlib 的 `imread` 數值相同 |
-| NumPy 1.25.2／1.26.4（Python 3.10） | 與 NumPy 2.x 輸出相同；僅 SVG clip-path id 不同（Matplotlib 以 `str()` 雜湊 NumPy 數值，NumPy 2 改變了顯示格式，官方版亦同） |
-| 安裝 | cp310 wheel 與 sdist（含 Rust 與 qhull 編譯）在乾淨 Python 3.10 venv 安裝後只有 `matplotlib-rs` 與 `numpy`，煙霧測試通過 |
+| Encoder | Total time | Total size |
+| --- | ---: | ---: |
+| Matplotlib (Pillow, zlib level 6) | 724.7 ms | 3,150 kB |
+| matplotlib-rs, default (zlib level 6) | **75.2 ms (9.6×)** | **3,061 kB** |
+| matplotlib-rs, `pil_kwargs={"compress_level": 1}` | 23.1 ms (31×) | 4,931 kB |
 
-constrained layout 的 kiwisolver 會依變數記憶體位址排序，同一份腳本只要輸出路徑長度不同，
-SVG 座標末位就可能改變；內建 kiwi 以建立順序排序，結果固定，實測常見版面與 kiwisolver 相同。
+The reports below give the methodology, per-round data, raw JSON and limitations. They are currently written in Traditional Chinese.
 
-## 效能測試
+- [24 chart types with large data][bench-basic]
+- [Worker threads, shared vertices and legend layout (0.0.7)][bench-threads]
+- [Lazy boxplots and parallel drawing (0.0.6)][bench-lazy]
+- [PNG encoding][bench-png]
 
-使用 [`tests/bench/phases.py`](tests/bench/phases.py) 的 2 × 2 subplot 工作負載：
-每個 panel 繪製兩條各 1,000 點的曲線、scatter、標題、圖例與 grid，並執行 tight layout。
-分開量測 import、建立圖表、第一次 PNG 存檔及之後十次更新標題與存檔的平均時間。
-以下為各階段五輪最小值；完整逐輪資料、中位數與量測環境列於 [驗證報告](docs/releases/0.0.1.md)。
-
-| 階段 | Matplotlib 最小值（ms） | matplotlib-rs 最小值（ms） | 倍率 |
-| --- | --- | --- | --- |
-| import | 588.7 | 329.0 | 1.79× |
-| 建立圖表與 tight layout | 188.8 | 199.9 | 0.94× |
-| 第一次 PNG 存檔 | 294.0 | 103.0 | 2.85× |
-| 後續 PNG 存檔（每次） | 299.6 | 86.3 | 3.47× |
-
-倍率為 Matplotlib／matplotlib-rs 耗時。建立圖表階段略慢，首存與後續存檔在此工作負載較快；五輪數值有明顯波動。
+To reproduce the benchmarks, install the reference Matplotlib from `requirements-ci.txt` and build the extension (see [Development](#development)), then run:
 
 ```bash
-sh tests/bench/best_of.sh mpl 5
-sh tests/bench/best_of.sh rs 5
+python tests/bench/basic_charts.py --rounds 3
+python tests/bench/legends.py --rounds 5
+python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 --mpl
+python tests/bench/png_save.py
 ```
 
-`best_of.sh` 報告五個全新 Python 行程中各階段的最小值；
-import 包含 NumPy／pyplot，第一次存檔包含首次繪製成本，後續存檔仍包含 PNG 壓縮與磁碟寫入。
-效能會隨工作負載、字型、CPU、NumPy／BLAS 與快取狀態改變。
+## Compatibility
 
-### 大量資料的基本圖表
+### What's covered
 
-[`tests/bench/basic_charts.py`](tests/bench/basic_charts.py) 對 24 種常見圖表各放入大量資料
-（百萬點折線、20 萬點散佈圖、2 萬根長條、千萬筆直方圖、4000 × 4000 影像等），
-在全新行程中量測建立與繪製，並逐像素比對 Matplotlib 3.11.2 的畫布。
-找到並修正的效能問題以長條／直方圖最嚴重：每根長條約 0.8 毫秒的 Python 物件流程。
-建立＋首次繪製的三輪中位數（秒）：
+The project's test suite checks the following features against Matplotlib:
 
-| 圖表與資料量 | Matplotlib | 0.0.3 | 0.0.4 | 對 Matplotlib | 對 0.0.3 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| bar，20,000 根 | 11.228 | 14.550 | 0.165 | 68× | 88× |
-| barh，20,000 根（黑色邊框） | 11.805 | 14.248 | 0.143 | 83× | 100× |
-| hist，2,000,000 筆、10,000 bins | 5.279 | 6.667 | 0.076 | 69× | 87× |
-| hist，10,000,000 筆、200 bins | 0.271 | 0.307 | 0.060 | 4.6× | 5.2× |
-| imshow，4000 × 4000 | 1.929 | 1.792 | 0.252 | 7.7× | 7.1× |
-| hist2d，2,000,000 點、500 × 500 | 0.654 | 0.509 | 0.138 | 4.7× | 3.7× |
-| contourf，1000 × 1000、20 levels | 1.060 | 1.255 | 0.546 | 1.9× | 2.3× |
-| pcolormesh，1000 × 1000 | 0.524 | 0.684 | 0.414 | 1.3× | 1.7× |
-| hist step，3 組 × 2,000,000 筆、2,000 bins | 0.274 | 0.250 | 0.084 | 3.3× | 3.0× |
-| scatter，200,000 點（大小、顏色各異，alpha） | 2.854 | 2.408 | 1.628 | 1.8× | 1.5× |
-| errorbar，20,000 點 | 0.318 | 0.957 | 0.268 | 1.2× | 3.6× |
-| stem，20,000 點 | 0.369 | 0.932 | 0.344 | 1.1× | 2.7× |
-| boxplot，1,000 箱 × 200 筆 | 4.458 | 0.149 | 0.135 | 33× | 1.1× |
-| pie，500 片 | 0.338 | 0.415 | 0.431 | 0.8× | 1.0× |
+| Area | Features |
+| --- | --- |
+| Basic charts | line, scatter, bar/barh, hist/hist2d, hexbin, pie, boxplot, violin, stem, step, stackplot |
+| Fields and images | imshow, pcolormesh, contour, triangulations, quiver, streamplot, image resampling |
+| Coordinates and layout | log, logit, dates, polar, 3D, subplots, subfigures, mosaic, tight and constrained layout, insets, secondary axes, twin axes |
+| Text and styling | annotations, arrows, fonts, mathtext, text bounding boxes, legends, tables, styles, hatching, spines, ticks |
+| Rendering and output | clip paths, blitting, animated artists, rasterization, PNG, SVG, PDF and EPS, transparent backgrounds, tight bounding boxes |
 
-24 個案例全部與 Matplotlib 逐像素一致。只看建圖階段，bar、barh、hist（1 萬 bins）比 0.0.3 快
-117、162、109 倍；`imshow` 的繪製比官方快 11.5 倍（色彩對應改為 lut 列號，重採樣直接讀 lut、多執行緒）。
-官方以 C++ Agg 處理的工作（折線簡化、逐點點陣化的散佈圖）兩者成本相近，倍率約 1～2 倍；
-pie 每片的 Python 物件流程仍比官方慢。0.5 秒以下的案例各輪波動大（同一實作可相差 50% 以上），
-只能看出量級。全部結果、修正內容、驗證與限制見 [基本圖表效能報告](docs/benchmarks/basic-charts.md)。
+This table shows what the tests cover. It doesn't mean that every Matplotlib API, parameter or backend is supported.
 
-```bash
-python tests/bench/basic_charts.py --rounds 3 --output tests/output/basic-charts
-```
+### Replaced dependencies
 
-`MPLRS_THREADS` 可指定平行處理（path collection 與大量線段／patch 的點陣化、影像重採樣、色彩對應、直方圖、等高線、PNG 壓縮）的執行緒數，`1` 為單執行緒。
+matplotlib-rs provides everything Matplotlib normally installs alongside it:
 
-### 影像檔
+| Matplotlib dependency | How matplotlib-rs replaces it |
+| --- | --- |
+| cycler, pyparsing, python-dateutil (with six) | Bundled unmodified in `matplotlib_rs._vendor`. An installed cycler takes precedence. |
+| kiwisolver (constrained layout) | Rust port of the kiwi 1.5 solver, with the same order of operations. Layouts are deterministic. |
+| ContourPy (contours) | Rust port of the default `mpl2014` algorithm, with bit-identical vertices |
+| qhull (Delaunay triangulation) | Compiles in qhull 8.0.2, the version Matplotlib uses, so triangles come out in the same order |
+| Pillow (image files, images embedded in PDF and SVG, `PillowWriter`) | Image reading and writing is done in Rust (see [Image file formats](#image-file-formats)) |
+| fontTools, packaging | fontTools is needed only for Type 42 fonts. Version parsing is built in. |
 
-本套件**不使用 Pillow**（已安裝也不會匯入）：`savefig`、`imsave`、`imread`、`PillowWriter`、
-SVG／PDF／PGF 的內嵌影像都由 Rust 核心處理，預設值與 Matplotlib 經 Pillow 寫出的相同。
+matplotlib-rs never imports Pillow, even if it's installed. You can still pass PIL images to functions such as `imshow`.
 
-| 格式 | 寫入（預設） | 讀取（`imread`） |
+### Image file formats
+
+`savefig`, `imsave`, `imread`, `PillowWriter` and the images embedded in SVG, PDF and PGF files all go through the Rust core. The defaults match what Matplotlib produces through Pillow.
+
+| Format | Writing | Reading (`imread`) |
 | --- | --- | --- |
-| PNG | 平行壓縮，zlib 等級 6；`compress_level`、`optimize`、`compress_type`、`pnginfo`、`icc_profile`、`exif` | 與 Matplotlib 相同的 0～1 float32（逐位元相同） |
-| JPEG | jpeg-encoder：品質 75、4:2:0、JFIF dpi，大圖分段平行編碼（restart marker）；`quality`、`subsampling`、`optimize`、`progressive`、`icc_profile`、`exif` | zune-jpeg；與 libjpeg-turbo 差 ±8 以內（多數相同），CMYK 轉 RGBA 同 Pillow |
-| TIFF | 未壓縮（同 Pillow）、`compression` 可選 LZW／Deflate／PackBits | 灰階、16 位元灰階、RGB(A)、灰階＋alpha、1 位元、CMYK 與 Pillow 的 `pil_to_array` 相同；調色盤 TIFF 不支援 |
-| WebP | 內建 libwebp 1.6.0（與 Pillow 13 相同版本），lossy 品質 80、method 4；**檔案與 Pillow 逐位元組相同** | libwebp，與 Pillow 相同 |
-| GIF | 每格獨立調色盤：256 色以內完全相同，否則 median cut（誤差低於 Pillow）；alpha < 128 為透明 | 第一格轉 RGBA，與 Pillow 相同 |
-| AVIF | ravif（rav1e）：品質 75、speed 6（檔案大小與速度與 Pillow 的 libavif 不同） | 不支援（純 Rust 解碼器需要更新的 Rust 版本） |
+| PNG | Parallel compression at zlib level 6. Options: `compress_level`, `optimize`, `compress_type`, `pnginfo`, `icc_profile`, `exif` | Bit-identical to Matplotlib (float32 values from 0 to 1) |
+| JPEG | Quality 75, 4:2:0 subsampling and JFIF dpi; large images are encoded in parallel segments. Options: `quality`, `subsampling`, `optimize`, `progressive`, `icc_profile`, `exif` | Values within ±8 of libjpeg-turbo, and usually identical. CMYK is converted as Pillow does. |
+| TIFF | Uncompressed, like Pillow. `compression` can be LZW, Deflate or PackBits | Grayscale (8- and 16-bit), RGB(A), grayscale with alpha, 1-bit and CMYK images, read as Pillow reads them |
+| WebP | Bundled libwebp 1.6.0, lossy quality 80, method 4. **Files are byte-identical to Pillow's.** | libwebp, same as Pillow |
+| GIF | A separate palette for each frame. Exact for up to 256 colors, otherwise median cut | First frame as RGBA, same as Pillow |
+| AVIF | rav1e, quality 75, speed 6 | Not supported |
 
-`PillowWriter`（`writer="pillow"`）寫 GIF、APNG（`.png`）與動態 WebP。
-其他 `pil_kwargs` 會丟出列出支援選項的 `ValueError`。
-SVG／PDF 的內嵌影像不再經過 Pillow 的 zlib，與 Matplotlib 檔案中的壓縮位元組不同，
-解碼後像素相同；PDF 的 256 色以內影像同樣改用索引色。
+`PillowWriter` (`writer="pillow"`) writes GIF, APNG (`.png`) and animated WebP. If you pass a `pil_kwargs` option that isn't supported, you get a `ValueError` that lists the options that are.
 
-與 Pillow 13.0.0 的編碼／解碼時間（毫秒，4 vCPU，7 次中位數；JPEG 含 alpha 合成）：
+Encode and decode times compared with Pillow 13.0.0, in milliseconds (median of 7 runs on 4 vCPUs):
 
-| 畫布 | 格式 | Pillow 寫 | Rust 寫 | Pillow 讀 | Rust 讀 |
+| Image | Format | Pillow write | matplotlib-rs write | Pillow read | matplotlib-rs read |
 | --- | --- | ---: | ---: | ---: | ---: |
 | 800 × 600 | JPEG | 2.8 | 3.1 | 2.0 | 1.4 |
 | 800 × 600 | TIFF | 1.4 | 0.5 | 0.8 | 0.2 |
@@ -242,194 +199,164 @@ SVG／PDF 的內嵌影像不再經過 Pillow 的 zlib，與 Matplotlib 檔案中
 | 2400 × 1800 | WebP | 213.2 | 235.3 | 46.7 | 24.3 |
 | 2400 × 1800 | GIF | 66.6 | 85.5 | 11.4 | 17.8 |
 
-檔案大小：JPEG、TIFF、WebP 與 Pillow 相同（WebP 逐位元組相同）；GIF 的調色盤不同，大小相差 1%～25%。
-WebP 的 libwebp 為了可攜只編譯 SSE2 版本，比 Pillow 慢約 5%～10%。
+### Known limitations
 
-### PNG 存檔
+- **Validated scope.** Testing covers non-interactive rendering with Agg and the vector backends on Linux x86_64. GUI backends, interactive use, external TeX and movie tools, and other platforms haven't been tested yet.
+- **Official gallery.** In the last full run (0.0.1), the PNG output of 508 of 544 image-producing gallery scripts (93.4%) was identical to Matplotlib's. The other 36 had pixel differences, and no script failed with an error. The details are in the [0.0.1 validation report][release-001].
+- **Embedded images.** Images embedded in SVG and PDF files are compressed by matplotlib-rs rather than Pillow. Their bytes differ from Matplotlib's files, but they decode to the same pixels.
+- **Image codecs.** AVIF and palette TIFF files can't be read. JPEG and AVIF use different codecs from Pillow, so their output isn't guaranteed to be identical. For images with more than 256 colors, GIF palettes differ from Pillow's, and file sizes differ by 1–25%.
+- **Pie charts and violin plots** run at about Matplotlib's speed. Pie charts still create one Python object per wedge, and violin plots spend most of their time in the NumPy density estimate.
+- **Idle worker threads.** After the first parallel draw, a process keeps `MPLRS_THREADS - 1` idle worker threads. Forked child processes start their own.
 
-所有 PNG 檔（`savefig`、`imsave`、`AxesImage.write_png`、色彩對應表預覽）都由 Rust 編碼，
-不論是否安裝 Pillow。每列以 libpng／Pillow 的準則選擇濾波（AVX2／SSE2 向量化），
-以 zlib-rs 壓縮，預設與 Pillow 相同的 zlib 等級 6；資料切成 256 KiB 區段在多個執行緒上壓縮，
-接成單一 zlib 串流，檔案與執行緒數無關。`savefig` 直接從 renderer 緩衝區編碼，不再複製畫布。
-`pil_kwargs` 的 `compress_level`、`optimize`、`compress_type`、`dpi` 由 Rust 處理，不需要 Pillow。
+## Configuration
 
-9 張常見圖（640 × 480～2400 × 1800）只量編碼、4 vCPU：
-
-| 編碼器 | 合計時間 | 合計大小 |
-| --- | ---: | ---: |
-| Pillow（Matplotlib，zlib 等級 6） | 724.7 ms | 3,150 kB |
-| 0.0.4 的 `savefig`（`png` crate 最快模式） | 25.8 ms | 6,301 kB |
-| **本版預設（等級 6）** | **75.2 ms（9.6×）** | **3,061 kB** |
-| 本版，`pil_kwargs={"compress_level": 1}` | 23.1 ms（31×） | 4,931 kB |
-
-`savefig` 全程：2400 × 1800 的圖 69.3 → 47.2 ms、檔案 1,020 → 602 kB；
-800 × 600 的圖 13.2 → 14.7 ms、檔案小 20%。逐張數據、方法與驗證見
-[PNG 存檔效能報告](docs/benchmarks/png-save.md)。
-
-```bash
-python tests/bench/png_save.py --output tests/output/png-save
-```
-
-### 5,400 個箱形圖壓測
-
-新增 [`tests/bench/boxplots.py`](tests/bench/boxplots.py)：單一 Axes 放入 30 組、
-每組 180 個箱形圖，每箱 100 個隨機樣本，每組不同顏色。
-0.0.1 初版與 Matplotlib 的五輪比較中，首次繪製為 4.299 → 0.312 秒（13.76×）；
-建立圖形加首次繪製為 33.074 → 33.175 秒（約相同）。兩套 PNG 逐像素一致。
-後續物件建立優化與原始 0.0.1 wheel 同批交錯重測：建圖中位數
-**36.601 → 1.458 秒（25.10×）**，五輪各自加速 **12.47～26.21×**；
-建立＋首次繪製為 **37.047 → 1.779 秒（20.83×）**。
-保留全部 5,400 個箱體與 32,400 條線，PNG 仍逐像素一致，最高 RSS 中位數減少約 55%。
-完整條件、範圍與重跑命令見 [壓測說明](tests/bench/README.md)。
-五輪數據另存為 [可檢查的 JSON](docs/benchmarks/boxplots-0.0.2.json)。
-
-另在官方 Matplotlib 3.11.2 上套用 Python／NumPy 實驗補丁，以相同負載量測五輪：
-建圖中位數 **17.063 → 2.225 秒（7.67×）**，保留全部 37,800 個物件。
-官方行程未載入本專案 Rust extension；全部版本改用相同 Pillow PNG 壓縮設定，
-30 次執行的 PNG 位元組亦完全一致。分項優化與繪製對照見
-[官方版優化實驗報告](docs/benchmarks/official-boxplot-optimization.md)。
-
-同一實驗補丁另支援 **Python 3.10／Matplotlib 3.8.2**，沿用該版原始 API。
-五輪建圖中位數 **23.240 → 3.033 秒（7.66×）**，建圖＋首次繪製加速 **3.38×**，
-24 次執行的 PNG 位元組全部一致。安裝、使用與完整數據見
-[3.8.2 相容版本報告](docs/benchmarks/official-boxplot-optimization-3.8.2.md)。
-
-#### 0.0.3：批次建立箱形圖、Python 3.10 只有 NumPy
-
-0.0.3 一次建立每個 `bxp` 呼叫的全部 artists（NumPy 計算座標、Rust 批次複製 handle 與 Python 物件），
-並在建立期間暫停循環垃圾回收；每個箱體與線段仍是可獨立修改的物件。五輪中位數：
-
-| 比較 | 建圖 | 建圖＋首次繪製 |
+| Environment variable | Default | Effect |
 | --- | --- | --- |
-| matplotlib-rs 0.0.2 → 0.0.3（Python 3.12，交錯量測） | 1.119 → **0.470 秒（2.38×）** | 1.374 → 0.705 秒（1.95×） |
-| 官方 Matplotlib 3.8.2 → 0.0.3 只有 NumPy（**Python 3.10**） | 17.664 → **0.492 秒（35.9×）** | 21.986 → **0.712 秒（30.9×）** |
-| 官方 Matplotlib 3.11.2 → 0.0.3（Python 3.12） | 15.006 → **0.451 秒（33.3×）** | 18.837 → 0.672 秒（28.0×） |
+| `MPLRS_THREADS` | Number of available cores, up to 8 | Sets the number of threads for parallel work: path collections, large batches of lines and patches, image resampling, colormapping, histograms, contours and PNG compression. `1` turns threading off. Output is the same for any thread count. |
+| `MPLRS_LAZY` | `1` | `0` creates all boxplot artists immediately in `boxplot` and `bxp`. |
+| `MPLRS_KIWI` | unset | `kiwisolver` uses the installed kiwisolver instead of the built-in solver. |
+| `MPLRS_CONTOUR` | unset | `contourpy` uses the installed ContourPy for the `mpl2014` algorithm. |
+| `MPLRS_QHULL` | unset | `rust` uses the Rust Delaunay triangulation. It produces the same triangles, possibly in a different order. |
 
-0.0.3 在 Python 3.10 只有 NumPy 時的畫布與 Matplotlib 3.11.2 逐像素相同；
-與 3.8.2 的差異只在文字（3.8 與 3.11 的文字繪製不同），繪圖區內沒有差異像素。
-Python 3.10 的最高 RSS 為 594.9（3.8.2）→ 295.5 MiB。
-主機為 4 vCPU Intel Xeon 2.80GHz；數據見 [`docs/benchmarks/boxplots-0.0.3.json`](docs/benchmarks/boxplots-0.0.3.json)，
-重跑方式見 [壓測說明](tests/bench/README.md#003批次建立與-python-310)。
+Matplotlib's own settings, such as `MPLBACKEND`, `MPLCONFIGDIR`, `matplotlibrc` and style sheets, work as usual.
 
-#### 延後建立的箱形圖（lazy plot）與平行繪製（0.0.5 之後，尚未發行）
+## How it works
 
-`boxplot`／`bxp` 不再為每個元件建立物件：一次呼叫的座標以陣列交給 Rust 核心直接繪製，
-`Line2D`／`PathPatch` 在第一次被讀取時才建立；Axes 內連續的大量線段與 patch 則以多個執行緒點陣化與混色。
-同一張 5,400 箱的圖與一次呼叫 50,000 箱（各五輪中位數，秒；Matplotlib 的 50,000 箱為一輪）：
-
-| 工作負載 | Matplotlib 3.11.2 | 0.0.5 | 延後建立 | 對 Matplotlib | 對 0.0.5 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 5,400 箱（30 次呼叫）建圖 | 14.222 | 0.348 | **0.111** | 128× | 3.1× |
-| 5,400 箱（30 次呼叫）建圖＋首次繪製 | 17.538 | 0.506 | **0.165** | 106× | 3.1× |
-| 5,400 箱（30 次呼叫）重繪 | 1.557 | 0.134 | **0.041** | 38× | 3.2× |
-| 50,000 箱（1 次呼叫）建圖 | 132.849 | 2.250 | **0.345** | 385× | 6.5× |
-| 50,000 箱（1 次呼叫）建圖＋首次繪製 | 158.527 | 3.335 | **0.527** | 301× | 6.3× |
-| 50,000 箱（1 次呼叫）重繪 | 11.613 | 0.948 | **0.175** | 67× | 5.4× |
-
-繪製完成時的最高 RSS：5,400 箱 538 → 265 → **126 MiB**，50,000 箱 4,123 → 1,504 → **211 MiB**。
-畫布在 artists 尚未建立、已建立、修改後各階段都與 Matplotlib 逐像素相同。
-
-- `result["boxes"]` 等回傳的 list 在讀取時建立該元件的 artists，`ax.get_children()`、`ax.lines[i]` 等讀取時建立全部；
-  建立出來的是一般的、可獨立修改的物件。`len()`、繪製、`savefig`、autoscale、`relim`、tight／constrained layout
-  與圖例不會建立它們。
-- 成本是延後而非消失：50,000 箱讀取全部 artists 需 1.25 秒（只讀箱體 0.18 秒）。未修改時仍由陣列繪製；
-  修改或移除其中一個 artist 後，該次呼叫的 artists 改為逐一繪製（50,000 箱重繪 0.60 秒，0.0.5 為 1.23 秒）。
-- `MPLRS_LAZY=0` 在 `boxplot` 內建立全部 artists；`MPLRS_THREADS=1` 時 50,000 箱重繪為 0.31 秒。
-
-作法、各階段的完整數據、驗證與限制見 [延後建立的箱形圖報告](docs/benchmarks/boxplots-lazy.md)，
-原始數據為 [`docs/benchmarks/boxplots-lazy.json`](docs/benchmarks/boxplots-lazy.json)。
-
-```bash
-python tests/bench/boxplot_lazy.py --boxes 5400 50000 --rounds 5 --output tests/output/boxplot-lazy
+```
+your code
+   │   import matplotlib  ──►  matplotlib_rs  (Python layer: the Matplotlib 3.11 API)
+   ▼
+_mplrs  (Rust core, connected to Python with PyO3 and rust-numpy)
+   ├── mpl/       figure, axes and artist model, legends, mathtext, kiwi solver, mpl2014 contours
+   ├── agg/       port of Anti-Grain Geometry 2.4 (rasterizer, scanlines, strokes)
+   ├── font/      TrueType/OpenType/CFF loading and glyph rasterization, text layout
+   ├── backend/   Agg renderer, path converters, image resampling, image codecs, PNG encoder
+   └── pool.rs    worker threads that start once and are reused for parallel loops
+extern/qhull      qhull 8.0.2, compiled into the extension
 ```
 
-#### 常駐執行緒、圖例與共享頂點（0.0.6 之後，尚未發行）
+The Python package is adapted from Matplotlib 3.11, so public classes, signatures, rcParams and behavior follow Matplotlib. Drawing, layout and file output run in the Rust core.
 
-對照 Polars 的效能作法逐項量測後，實作了有用的部分：平行迴圈改用只建立一次的執行緒；
-path collection（scatter、hexbin、pcolormesh）的混色也分給所有執行緒；路徑頂點放在可共享的 buffer，
-長折線繪製時不再複製；圖例的最佳位置由一次 Rust 呼叫算出，同一次繪製內不重複排版。
-畫布仍與 Matplotlib 3.11.2 逐像素相同。五個全新行程的中位數：
+## Verification
 
-| 工作負載 | Matplotlib | 0.0.6 | 本次 | 對 Matplotlib | 對 0.0.6 |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| 2 × 2 圖、4 個預設位置的圖例，PNG 存檔 | 176.2 ms | 55.0 ms | **26.1 ms** | 6.8× | 2.1× |
-| 同上，圖例固定在 `upper right` | 152.8 ms | 33.0 ms | **23.6 ms** | 6.5× | 1.4× |
-| scatter，200,000 點（大小、顏色各異），首次繪製 | 2.250 s | 1.078 s | **0.703 s** | 3.2× | 1.5× |
-| plot，1,000,000 點，首次繪製 | 0.079 s | 0.086 s | **0.052 s** | 1.5× | 1.7× |
-| hexbin，1,000,000 點，首次繪製 | 0.137 s | 0.056 s | **0.038 s** | 3.6× | 1.5× |
-| violinplot，300 組 × 2,000 筆，建圖 | 0.902 s | 0.952 s | **0.715 s** | 1.3× | 1.3× |
+Every comparison uses **Matplotlib 3.11.2** as the reference, with the Agg backend and a fixed [`matplotlibrc`][mplrc]. A PNG passes only if every RGBA pixel is identical. SVG, PDF and EPS files are compared by content, with timestamps and the SVG hash salt fixed. The only line ignored is the output filename line in PostScript files. Raster images embedded in SVG and PDF files are compared after decoding.
 
-- 上方〈效能測試〉的四格圖（`phases.py`）：第一次 PNG 存檔 52.8 → **24.8 毫秒**、後續每次 48.6 → **26.0 毫秒**
-  （Matplotlib 為 147.8 與 168.3 毫秒，七個行程的最小值）。
-- 百萬點折線行程的最高 RSS 為 202 → **155 MiB**。bar、hist、boxplot 與 0.0.6 相同。
-- 行程在第一次平行繪製後會保留 `MPLRS_THREADS - 1` 個閒置的執行緒；`fork` 的子行程會建立自己的執行緒。
-- 量測後**沒有採用**的：mimalloc 配置器（頂點不再複製後只剩 0～10%，卻多用 5～36 MiB 記憶體，
-  預設參數下全新行程的首次繪製還會變慢）與整個套件以 AVX2 編譯（0.86～1.04 倍）。
+| Check | Result |
+| --- | --- |
+| Plotting cases ([`tests/compare`][compare]), on every CI run | 59/59 identical in PNG, SVG, PDF and EPS |
+| Large-data chart benchmark | 24/24 chart types pixel-identical |
+| Python 3.10 with only NumPy installed, compared with Matplotlib on Python 3.12 | All 59 plotting cases identical. The minimum supported NumPy, 1.25.2, is tested too. |
+| Low-level renderer and font tests against Matplotlib's C++ Agg and FreeType | Renderer, path collections, TrueType and CFF glyphs and the `ft2font` API are identical |
+| kiwi port compared with kiwisolver | 6 constrained layouts are bit-identical, and 400 random systems agree within 1e-9 |
+| `mpl2014` port compared with ContourPy | 3,600 line and fill results from 200 random fields are bit-identical |
+| Bundled qhull compared with Matplotlib's `_qhull` | 150 point sets give identical triangles and neighbor arrays |
+| Image resampling compared with Matplotlib's `_image.resample` | All 7,880 cases are bit-identical |
+| Official Matplotlib gallery (0.0.1) | 508/544 scripts pixel-identical, with no runtime errors |
 
-逐項作法、24 個案例的完整數據、驗證與限制見 [報告](docs/benchmarks/threads-legends-lines.md)，
-原始數據為 [`docs/benchmarks/threads-legends-lines.json`](docs/benchmarks/threads-legends-lines.json)。
+The [CI/CD documentation][ci-doc] describes how these checks run. The [0.0.1 validation report][release-001] covers the original full validation, including the gallery run and the remaining differences.
+
+## Development
+
+You need a stable Rust toolchain, a C compiler and Python 3.11–3.13. matplotlib-rs itself supports Python 3.10, but the reference Matplotlib 3.11.2 used by the tests needs 3.11 or later. `requirements-ci.txt` pins the reference packages and build tools:
 
 ```bash
-python tests/bench/legends.py --rounds 5 --output tests/output/legends
+git clone https://github.com/g21589/matplotlib-rs.git
+cd matplotlib-rs
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -r requirements-ci.txt
+
+sh scripts/dev_build.sh --locked   # build the extension into python/matplotlib_rs (Linux)
+sh scripts/test_rust.sh            # Rust unit tests
+bash scripts/ci_test.sh            # the full CI suite: unit, low-level and image comparisons
 ```
 
-## 開發與重跑測試
+To use the development build directly, set `PYTHONPATH="$PWD/python"`. Test logs and images are written to `tests/output/`. To build distributions:
 
 ```bash
-python -m pip install 'maturin>=1.5,<2' 'matplotlib==3.11.2'
-python -m pip install -e .
-
-# Linux：編譯並把 extension 放入 Python 原始碼目錄。
-sh scripts/dev_build.sh --locked
-export PYTHONPATH="$PWD/python"
-export MPLBACKEND=Agg
-
-sh scripts/test_rust.sh
-
-# 這些測試檔是可直接執行的比較程式，請逐一執行並檢查退出碼。
-for test in tests/unit/test_*.py tests/lowlevel/diff_*.py tests/model/first_plot.py; do
-    python "$test" || exit 1
-done
-COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
-
-# Python 3.10、只有 NumPy 的環境（參考端使用上面的 Python 與套件）：
-python3.10 -m venv /tmp/numpy-only && /tmp/numpy-only/bin/pip install numpy
-PYTHON=/tmp/numpy-only/bin/python sh scripts/dev_build.sh --locked
-NUMPY_ONLY_PYTHON=/tmp/numpy-only/bin/python python tests/unit/test_numpy_only.py
-COMPARE_RS_PYTHON=/tmp/numpy-only/bin/python COMPARE_DECODE_IMAGES=1 \
-    COMPARE_VECTOR=svg,pdf,eps COMPARE_STABLE_EPS=1 python tests/compare/compare.py
+maturin build --release --locked --out dist   # wheel
+maturin sdist --out dist                      # source distribution
 ```
 
-Rust 單元測試的 PyO3／libpython 連結方式、官方 gallery 的取得與執行方式，
-以及測試限制見 [驗證報告](docs/releases/0.0.1.md)。
-測試結果請使用新的輸出目錄，並依實際像素差異及退出碼判斷。
+| Path | Contents |
+| --- | --- |
+| `python/matplotlib_rs/` | Python package with the Matplotlib-compatible API |
+| `src/` | Rust core |
+| `extern/qhull/` | Bundled qhull sources |
+| `tests/compare/` | Cases rendered by both implementations and compared in four formats |
+| `tests/unit/`, `tests/lowlevel/`, `tests/model/` | Unit tests and low-level comparison tests |
+| `tests/bench/` | Benchmarks |
+| `tests/gallery/` | Runner for the official Matplotlib gallery |
+| `scripts/`, `tools/` | Build, test, release and vendoring helpers |
+| `docs/` | Release notes, benchmark reports, CI/CD documentation |
 
-建置 wheel 與 source distribution：
+## Releases
 
-```bash
-maturin build --release --locked --out dist
-maturin sdist --out dist
-```
+Pushing a `vX.Y.Z` tag starts the release workflow:
 
-## CI 與版本發布
+1. It checks that the tag and the versions in `pyproject.toml`, `Cargo.toml` and `Cargo.lock` match, and that release notes exist for that version.
+2. It runs the full CI suite and builds manylinux_2_28 x86_64 wheels for CPython 3.10–3.13, plus a source distribution.
+3. It installs each wheel in a clean environment that has only NumPy and renders sample figures in PNG, SVG, PDF and EPS.
+4. It benchmarks 5,400 boxplots against `v0.0.1` on the same runner. The release requires identical pixels and a median build time at least 10× faster.
+5. It publishes the GitHub release with `SHA256SUMS`. PyPI then receives the same verified files through Trusted Publishing.
 
-GitHub Actions 在 push／PR 執行 Python 3.11～3.13 的 Rust、單元、底層與四格式圖形比較，
-並另以 **Python 3.10 只安裝 NumPy** 的環境對 Matplotlib 3.11.2 跑同一套比較（含 NumPy 1.25.2 最低版本）。
-推送 `vX.Y.Z` 標籤後，發布流程會檢查版本一致性、執行測試、建置 CPython 3.10～3.13 的 wheel 與 sdist、
-在只有 NumPy 的乾淨環境驗證 wheel，並與 0.0.1 基準版交錯量測 5,400 個箱形圖。
-必須像素一致且建圖中位數至少加速 10 倍，才能發布 GitHub Release。
-GitHub Release 成功後，PyPI 流程會沿用同一組已驗證的套件，以 Trusted Publishing 發布。
-完整流程、首次授權設定與本機入口見 [CI／CD 說明](docs/CI.md)。
+See the [CI/CD documentation][ci-doc] for details.
 
-## 授權
+| Version | Highlights |
+| --- | --- |
+| [0.0.7][rn-007] | Reusable worker threads, shared vertex buffers, faster legend placement and text layout |
+| [0.0.6][rn-006] | Boxplot artists created only when read; parallel drawing of large artist batches |
+| [0.0.5][rn-005] | All image file reading and writing moved to Rust, with no Pillow; parallel PNG encoder |
+| [0.0.4][rn-004] | Large-data speedups for bar, hist, imshow, hist2d, contour, pcolormesh and more |
+| [0.0.3][rn-003] | Python 3.10 support; NumPy as the only runtime dependency |
+| [0.0.2][rn-002] | Faster creation of many boxplots; GitHub Actions CI/CD |
+| [0.0.1][release-001] | First release, with a full validation report |
 
-依 [`PSF-2.0`](licenses/LICENSE_MATPLOTLIB) 授權；
-本專案包含由 Matplotlib 衍生的 Python 程式碼與資料，保留其授權及版權聲明。
-內建的第三方程式碼各依其授權：cycler（[BSD](licenses/LICENSE_CYCLER)）、
-pyparsing（[MIT](licenses/LICENSE_PYPARSING)）、python-dateutil（[Apache-2.0／BSD](licenses/LICENSE_DATEUTIL)）、
-six（[MIT](licenses/LICENSE_SIX)）、qhull（[Qhull](licenses/LICENSE_QHULL)）、
-經 libwebp-sys 編譯的 libwebp（[BSD-3-Clause 與專利授權](licenses/LICENSE_LIBWEBP)）；
-JPEG 編碼器 jpeg-encoder 部分源自 Independent JPEG Group 的程式（IJG 授權），
-AVIF 編碼使用 rav1e（BSD-2-Clause 與 AOMedia 專利授權）；
-Rust 移植的 kiwi 與 ContourPy mpl2014 演算法分別依 [BSD](licenses/LICENSE_KIWISOLVER) 與
-[BSD-3-Clause](licenses/LICENSE_CONTOURPY)。
+matplotlib-rs is in early development, and version numbers follow `0.0.x`. The public API follows Matplotlib 3.11.2.
+
+## License
+
+matplotlib-rs is released under the [PSF-2.0 license][license]. It contains Python code and data derived from Matplotlib and keeps Matplotlib's license and copyright notices. Bundled third-party code keeps its own license:
+
+| Component | License |
+| --- | --- |
+| cycler | [BSD][lic-cycler] |
+| pyparsing | [MIT][lic-pyparsing] |
+| python-dateutil | [Apache-2.0 / BSD][lic-dateutil] |
+| six | [MIT][lic-six] |
+| qhull | [Qhull][lic-qhull] |
+| libwebp (through libwebp-sys) | [BSD-3-Clause with patent grant][lic-libwebp] |
+| Rust port of the kiwi solver | [BSD][lic-kiwi] |
+| Rust port of ContourPy's `mpl2014` algorithm | [BSD-3-Clause][lic-contourpy] |
+| Rust port of Anti-Grain Geometry 2.4 | AGG license; the notice is kept in `src/agg` |
+| jpeg-encoder (JPEG encoding) | Partly derived from Independent JPEG Group code (IJG license) |
+| rav1e (AVIF encoding) | BSD-2-Clause with the AOMedia patent license |
+
+matplotlib-rs is an independent project. It isn't affiliated with or endorsed by the Matplotlib development team.
+
+[pypi]: https://pypi.org/project/matplotlib-rs/
+[ci]: https://github.com/g21589/matplotlib-rs/actions/workflows/ci.yml
+[releases]: https://github.com/g21589/matplotlib-rs/releases
+[readme-zh]: https://github.com/g21589/matplotlib-rs/blob/HEAD/README.zh-TW.md
+[license]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_MATPLOTLIB
+[mplrc]: https://github.com/g21589/matplotlib-rs/blob/HEAD/tests/mplrc/matplotlibrc
+[compare]: https://github.com/g21589/matplotlib-rs/tree/HEAD/tests/compare
+[ci-doc]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/CI.md
+[bench-basic]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/benchmarks/basic-charts.md
+[bench-threads]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/benchmarks/threads-legends-lines.md
+[bench-lazy]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/benchmarks/boxplots-lazy.md
+[bench-png]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/benchmarks/png-save.md
+[release-001]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.1.md
+[rn-002]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.2.md
+[rn-003]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.3.md
+[rn-004]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.4.md
+[rn-005]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.5.md
+[rn-006]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.6.md
+[rn-007]: https://github.com/g21589/matplotlib-rs/blob/HEAD/docs/releases/0.0.7.md
+[lic-cycler]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_CYCLER
+[lic-pyparsing]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_PYPARSING
+[lic-dateutil]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_DATEUTIL
+[lic-six]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_SIX
+[lic-qhull]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_QHULL
+[lic-libwebp]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_LIBWEBP
+[lic-kiwi]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_KIWISOLVER
+[lic-contourpy]: https://github.com/g21589/matplotlib-rs/blob/HEAD/licenses/LICENSE_CONTOURPY
